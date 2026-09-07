@@ -45,6 +45,23 @@ export async function runInit(opts: InitOptions): Promise<void> {
 
   console.log(pc.green(`\n✓ Motor instalado em ${targetDir}`));
   console.log(pc.dim(`  ${applied.length} arquivos · projeto "${config.project.name}"`));
+
+  // O workflow gerado (scripts SpecKit .sh + comandos POSIX dos agentes) espera um shell
+  // tipo-Unix. No Windows nativo, oriente o uso do WSL2 (Linux real).
+  if (process.platform === "win32") {
+    console.log(
+      pc.yellow(
+        "\n⚠ Windows detectado. O workflow gerado usa scripts bash e comandos POSIX (grep/git).",
+      ),
+    );
+    console.log(
+      pc.yellow(
+        "  Rode o motor dentro do WSL2 (Ubuntu) para o comportamento idêntico ao Linux —",
+      ),
+    );
+    console.log(pc.yellow("  veja a seção 'Windows' no README do maker."));
+  }
+
   console.log("\nPróximos passos:");
   console.log(
     `  1. Preencha ${pc.cyan(".specify/memory/project-rules.md")} (bases técnicas + regras de negócio)`,
