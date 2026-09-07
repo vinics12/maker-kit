@@ -230,4 +230,15 @@ pnpm extract          # re-extrai a camada custom do ../sgmi-platform (authoring
 - **Fase 2 (feito):** framework de add-ons (idempotente/reversível) + add-on `saas` (multi-tenant,
   whitelabel, service-roles) via `maker add saas` / `maker remove saas`; o wrapper cresce para
   `add`/`remove`.
-- **Próximo:** outros add-ons (observabilidade, i18n) sobre o mesmo framework; publicação no npm.
+
+### Backlog (próximos passos)
+
+- [ ] **Novos add-ons sobre o mesmo framework:**
+  - [ ] `observability` — princípios de logging/erros/eventos com contexto, neutros quanto a sink.
+  - [ ] `i18n` — princípios de internacionalização (label maps, sem string hard-coded).
+- [ ] **`maker list`** — listar add-ons disponíveis e quais estão aplicados no projeto (via `.maker/addons/`).
+- [ ] **`maker update` com merge inteligente** — hoje só reescreve arquivos intocados por hash; evoluir
+  para um 3-way merge que preserve edições locais em arquivos também atualizados pelo motor.
+- [ ] **`maker doctor` ciente de add-ons** — reportar add-ons aplicados e reconciliar as injeções.
+- [ ] **Publicação no npm** (`@arruda-eng/maker`) — hoje roda via `npx .` local / `npm link`.
+- [ ] **Perfis de backend/stack opcionais** — abstrair o gancho já documentado para além do "clone fiel".
