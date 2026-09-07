@@ -1,0 +1,11 @@
+### SaaS-3. Service Role só no Backend (NON-NEGOTIABLE)
+
+A credencial privilegiada (service role / chave que ignora o isolamento de tenant) existe
+**exclusivamente** no backend/BFF, em variável de ambiente, e **nunca** é versionada nem exposta ao
+frontend. O frontend usa apenas a credencial pública/anon e fala com os dados através do backend —
+nunca acessa o banco privilegiado diretamente. Os papéis do sistema (`{{addon.roles}}`) definem o que
+cada usuário autenticado pode fazer, sempre dentro do seu tenant.
+
+**Como verificar**: grep por padrões de service role no código de frontend retorna zero; o secret
+scanning do CI bloqueia commit de chave privilegiada; o frontend não importa o client privilegiado do
+banco para operações de dados.

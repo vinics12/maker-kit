@@ -1,6 +1,6 @@
 {
   "name": "@arruda-eng/maker",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Encapsulador do workflow de criação de produtos (SpecKit + orquestração multi-agente) — instala o motor agnóstico de negócio em qualquer projeto.",
   "type": "module",
   "bin": {
@@ -39,6 +39,8 @@
     "vitest": "^2.1.8"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["esbuild"]
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
   }
 }

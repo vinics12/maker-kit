@@ -1,0 +1,11 @@
+## Checklist SaaS (add-on)
+
+Além da constitution do projeto, verifique os princípios da base SaaS quando o diff os tocar:
+
+- **SaaS-1 Multi-Tenant**: toda tabela/coleção de domínio nova tem `{{addon.tenantColumn}}` e um
+  filtro/política de isolamento. Se a US introduz dado isolado por tenant, o teste de isolamento E2E
+  existe e passa (sem `/* TODO */`). Sobra de stub de isolamento = CRITICAL.
+- **SaaS-2 Whitelabel**: sem cor hex/rgb hard-coded nem nome do produto embutido em componentes —
+  tudo via `{{addon.brandVarPrefix}}*` / configuração.
+- **SaaS-3 Service Role**: nenhuma credencial privilegiada aparece no frontend; frontend não acessa o
+  banco privilegiado diretamente para dados.

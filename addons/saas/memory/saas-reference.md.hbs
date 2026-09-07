@@ -1,0 +1,34 @@
+# {{project.name}} — Base SaaS (referência de implementação)
+
+> Escrito pelo add-on `maker:saas`. Documenta os princípios SaaS-1/2/3 (injetados na constitution) e
+> dá uma **implementação de referência**. A referência é um exemplo — o projeto pode implementar o
+> isolamento de outra forma; o que é não-negociável são os princípios, não a stack.
+
+## Discriminador de tenant
+
+- Coluna/campo: `{{addon.tenantColumn}}`
+- Papéis do sistema: `{{addon.roles}}`
+- Prefixo de whitelabel (CSS vars): `{{addon.brandVarPrefix}}`
+
+## Referência: isolamento com Postgres + RLS (ex.: Supabase)
+
+Um caminho comum e testado para o SaaS-1:
+
+- Toda tabela de domínio tem `{{addon.tenantColumn}} NOT NULL` com FK para `tenants(id)`.
+- **Row-Level Security habilitada** com política que filtra por `{{addon.tenantColumn}}` do usuário
+  autenticado (ex.: função `current_tenant_id()` derivada do JWT).
+- Operações cross-tenant só via credencial privilegiada no backend, com log obrigatório (SaaS-3).
+
+Se o seu projeto **não** usa Postgres/RLS, implemente o isolamento na sua camada de dados (filtros
+obrigatórios por tenant, schema-per-tenant, etc.) e descreva o mecanismo nas **Bases Técnicas** da
+constitution. O teste E2E de isolamento é o que prova que funciona, independentemente da stack.
+
+## Whitelabel (SaaS-2)
+
+Tema injetado no boot a partir da config do tenant; componentes consomem `{{addon.brandVarPrefix}}*`.
+Zero cor/nome hard-coded.
+
+## Service role (SaaS-3)
+
+Credencial privilegiada só no backend/BFF (env, não versionada). Frontend usa credencial pública e
+acessa dados via backend.

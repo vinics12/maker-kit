@@ -1,0 +1,23 @@
+{
+  "id": "saas",
+  "name": "Base SaaS",
+  "description": "Adiciona multi-tenant, whitelabel e service-roles como princípios do projeto — expressos de forma neutra quanto a banco. A implementação Supabase/RLS entra apenas como referência.",
+  "version": "0.1.0",
+  "knobs": [
+    { "name": "tenantColumn", "prompt": "Nome do discriminador de tenant (coluna/campo)", "default": "tenant_id" },
+    { "name": "brandVarPrefix", "prompt": "Prefixo das CSS vars de whitelabel", "default": "--brand-" },
+    { "name": "roles", "prompt": "Papéis do sistema (separados por vírgula)", "default": "admin,member" }
+  ],
+  "principles": [
+    "principles/multitenant.md.hbs",
+    "principles/whitelabel.md.hbs",
+    "principles/service-role.md.hbs"
+  ],
+  "agentFragments": [
+    { "agent": "code-reviewer", "file": "agents/code-reviewer.fragment.md.hbs" },
+    { "agent": "architect", "file": "agents/architect.fragment.md.hbs" }
+  ],
+  "files": [
+    { "from": "memory/saas-reference.md.hbs", "to": ".specify/memory/saas-reference.md" }
+  ]
+}

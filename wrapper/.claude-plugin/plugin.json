@@ -1,9 +1,17 @@
 {
   "name": "maker",
-  "version": "0.1.0",
-  "description": "Wrapper de skill do Claude Code para a CLI maker — instala e mantém o motor de criação de produtos (SpecKit + orquestração multi-agente). Fase 1: init | doctor | update.",
-  "author": { "name": "arruda-eng" },
+  "version": "0.2.0",
+  "description": "Wrapper de skill do Claude Code para a CLI maker — instala e mantém o motor de criação de produtos e gerencia add-ons. Expõe init | doctor | update | add | remove.",
+  "author": {
+    "name": "arruda-eng"
+  },
   "homepage": "https://github.com/vinics12/maker-kit",
   "repository": "https://github.com/vinics12/maker-kit",
-  "keywords": ["speckit", "workflow", "scaffolding", "multi-agent", "maker"]
+  "keywords": [
+    "speckit",
+    "workflow",
+    "scaffolding",
+    "multi-agent",
+    "maker"
+  ]
 }

@@ -3,6 +3,8 @@ import pc from "picocolors";
 import { runInit } from "./commands/init.js";
 import { runDoctor } from "./commands/doctor.js";
 import { runUpdate } from "./commands/update.js";
+import { runAdd } from "./commands/add.js";
+import { runRemove } from "./commands/remove.js";
 import { makerVersion } from "./util/version.js";
 
 const program = new Command();
@@ -38,6 +40,26 @@ program
   .option("-t, --target <dir>", "diretório do projeto (default: cwd)")
   .action(async (opts) => {
     await runUpdate(opts);
+  });
+
+program
+  .command("add")
+  .argument("<addon>", "id do add-on (ex.: saas)")
+  .description("Aplica um add-on sobre um install existente (injeta princípios/agentes/arquivos).")
+  .option("-t, --target <dir>", "diretório do projeto (default: cwd)")
+  .option("-s, --set <pair...>", "knob do add-on como nome=valor (repetível)")
+  .option("-y, --yes", "não interativo; usa defaults dos knobs")
+  .action(async (addon, opts) => {
+    await runAdd(addon, opts);
+  });
+
+program
+  .command("remove")
+  .argument("<addon>", "id do add-on (ex.: saas)")
+  .description("Remove um add-on aplicado, revertendo injeções e arquivos criados.")
+  .option("-t, --target <dir>", "diretório do projeto (default: cwd)")
+  .action(async (addon, opts) => {
+    await runRemove(addon, opts);
   });
 
 program.parseAsync(process.argv).catch((err: unknown) => {

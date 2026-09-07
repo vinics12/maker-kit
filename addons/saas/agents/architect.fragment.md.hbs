@@ -1,0 +1,12 @@
+## Nota SaaS (add-on)
+
+Este projeto tem a base SaaS habilitada. Ao planejar uma feature que introduz ou toca dados isolados
+por tenant:
+
+- Garanta `{{addon.tenantColumn}}` em toda entidade de domínio nova e declare o mecanismo de
+  isolamento nas Bases Técnicas (RLS, filtro de query, etc.) — veja `.specify/memory/saas-reference.md`.
+- **Crie o esqueleto do teste de isolamento** em `tests/e2e/<feature>/isolation.spec.*` com um cenário
+  por caso (criar no tenant A → acessar como tenant B → falha), stub `/* TODO: implementar em US-X */`,
+  e atribua o preenchimento à US correspondente. Isso satisfaz o SaaS-1.
+- Para telas, respeite o whitelabel via `{{addon.brandVarPrefix}}*` (SaaS-2) e mantenha credenciais
+  privilegiadas fora do frontend (SaaS-3).

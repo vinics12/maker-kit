@@ -1,0 +1,12 @@
+### SaaS-1. Multi-Tenant First (NON-NEGOTIABLE)
+
+Toda entidade de domínio carrega um discriminador de tenant (`{{addon.tenantColumn}}`) e o acesso a
+dados é **isolado por tenant no nível de dados** — nenhum caminho de leitura/escrita retorna dados de
+outro tenant. Operações cross-tenant só são possíveis por uma camada de serviço privilegiada e
+**sempre com log**. Este princípio é neutro quanto a banco: como o isolamento é imposto (RLS,
+filtros de query, namespace por schema, etc.) é decisão declarada nas **Bases Técnicas** do projeto —
+veja `.specify/memory/saas-reference.md` para uma implementação de referência (Supabase/RLS).
+
+**Como verificar**: existe um teste E2E que prova o isolamento — criar dado no tenant A, autenticar
+como tenant B, tentar acessá-lo → deve falhar (403/404). Toda tabela/coleção nova de domínio tem
+`{{addon.tenantColumn}}` e uma política/filtro de isolamento associada.

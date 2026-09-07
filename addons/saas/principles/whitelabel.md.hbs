@@ -1,0 +1,10 @@
+### SaaS-2. Whitelabel via Tokens (NON-NEGOTIABLE)
+
+Identidade visual (cores, logo, favicon, nome do produto, raio) é consumida via tokens/CSS custom
+properties com o prefixo `{{addon.brandVarPrefix}}`. **Zero hard-code** de cor hex/rgb ou de nome do
+produto em componentes. Um único build serve todos os tenants; o tema é injetado no boot a partir da
+configuração do tenant.
+
+**Como verificar**: greps por cor literal em componentes retornam apenas tokens/refs em comentários;
+o nome do produto vem de configuração/token, não de string embutida. Toda tela nova respeita o
+theming via `{{addon.brandVarPrefix}}*`.

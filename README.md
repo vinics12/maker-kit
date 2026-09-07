@@ -180,6 +180,29 @@ a Fase 2 adiciona `/maker add saas` e `/maker remove`.
 
 ---
 
+## Add-ons
+
+Add-ons sobrepõem **pacotes de regras opcionais** a um projeto que já tem o motor — injetando
+princípios na constitution, fragmentos nos agentes e arquivos de referência, de forma **idempotente e
+reversível** (rastreada por marcadores e por um estado em `.maker/addons/<id>.json`).
+
+```bash
+maker add saas --set tenantColumn=tenant_id --set brandVarPrefix=--brand- --set roles=admin,member
+maker remove saas
+```
+
+### `saas` — base multi-tenant / whitelabel / service-roles
+
+O primeiro add-on injeta três princípios (SaaS-1 multi-tenant, SaaS-2 whitelabel, SaaS-3 service-role)
+na seção **Princípios do Projeto** da constitution, mais fragmentos no `code-reviewer` e no `architect`,
+e um `.specify/memory/saas-reference.md`. Os princípios são **neutros quanto a banco** — a implementação
+Supabase/RLS entra só como referência; se seu projeto usa outra stack, o princípio continua valendo e o
+teste E2E de isolamento é o que o prova.
+
+Knobs: `tenantColumn` (discriminador de tenant), `brandVarPrefix` (prefixo das CSS vars) e `roles`.
+`maker remove saas` reverte tudo e deixa o `doctor` verde; arquivos que você editou localmente são
+preservados.
+
 ## Desenvolvimento
 
 ```bash
@@ -204,5 +227,7 @@ pnpm extract          # re-extrai a camada custom do ../sgmi-platform (authoring
 ## Roadmap
 
 - **Fase 1 (feito):** o motor agnóstico + wrapper `init/doctor/update`. Cross-platform (Windows via WSL2).
-- **Fase 2:** framework de add-ons + add-on `saas` (multi-tenant, whitelabel, service-roles) via
-  `maker add saas` / `maker remove saas`; o wrapper cresce para `add`/`remove`.
+- **Fase 2 (feito):** framework de add-ons (idempotente/reversível) + add-on `saas` (multi-tenant,
+  whitelabel, service-roles) via `maker add saas` / `maker remove saas`; o wrapper cresce para
+  `add`/`remove`.
+- **Próximo:** outros add-ons (observabilidade, i18n) sobre o mesmo framework; publicação no npm.

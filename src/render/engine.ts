@@ -29,6 +29,11 @@ hb.registerHelper("join", (arr: unknown, sep: unknown) =>
 );
 
 export function render(source: string, ctx: RenderContext): string {
+  return renderRaw(source, ctx);
+}
+
+/** Render com contexto arbitrário (usado por add-ons, cujo contexto é project + knobs próprios). */
+export function renderRaw(source: string, ctx: object): string {
   const template = hb.compile(source, { noEscape: true, strict: false });
   return template(ctx);
 }
