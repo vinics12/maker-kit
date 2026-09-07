@@ -1,0 +1,5 @@
+# O workflow do maker usa scripts bash/POSIX. No Windows, o Git pode converter
+# esses arquivos para CRLF e quebrá-los no bash/WSL. Force LF nos arquivos executáveis
+# do pipeline (não impõe EOL ao resto do seu código).
+*.sh text eol=lf
+.specify/scripts/** text eol=lf

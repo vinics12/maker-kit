@@ -41,12 +41,21 @@ os scripts `.sh` e o `grep` não existem).
    filesystem nativo do WSL é muito mais rápido e evita problemas de fim-de-linha/permissão.
 4. Use o Claude Code / a CLI `maker` normalmente **de dentro do Ubuntu**. Tudo se comporta como Linux.
 
-> Alternativa sem WSL: **Git Bash** roda os `.sh` e o `grep`, mas o suporte é parcial (algumas
-> ferramentas POSIX faltam). Prefira o WSL2. O PowerShell/CMD nativo **não** é suportado para o
-> workflow gerado.
+5. Abra o Claude Code **apontando para o WSL** (ou rode o `claude` de dentro do Ubuntu) e trabalhe
+   normalmente. `maker init` e o pipeline (`/run-spec`) se comportam exatamente como no Linux.
+
+> **O que muda na instalação no Windows?** Nada no *comando* — a CLI `maker` é Node puro e roda igual
+> em qualquer SO; `maker init` escreve os mesmos arquivos. O que muda é **onde você roda**: faça tudo
+> dentro do WSL2, porque o workflow gerado (scripts `.sh` do SpecKit + `grep`/`git` dos agentes) é
+> POSIX. Se você rodar `maker init` no Windows nativo, os arquivos são instalados e a CLI **avisa** para
+> usar o WSL antes de rodar `/run-spec`.
 >
-> Se você rodar `maker init` no Windows nativo, a CLI instala os arquivos normalmente e **avisa** para
-> usar o WSL antes de rodar o pipeline.
+> **Fim-de-linha (CRLF):** o motor já instala um `.gitattributes` que força **LF** nos scripts do
+> pipeline, então o Git do Windows não os quebra. Mesmo assim, prefira manter o projeto no filesystem
+> do WSL (`~/dev/...`), não em `/mnt/c/...`.
+>
+> Alternativa sem WSL: **Git Bash** roda os `.sh` e o `grep`, mas o suporte é parcial. Prefira o WSL2;
+> o PowerShell/CMD nativo **não** é suportado para o workflow gerado.
 
 ---
 
