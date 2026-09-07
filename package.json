@@ -17,7 +17,7 @@
   },
   "scripts": {
     "build": "tsup",
-    "prepare": "tsup",
+    "prepublishOnly": "tsup",
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
