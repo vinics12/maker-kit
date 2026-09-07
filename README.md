@@ -61,20 +61,23 @@ os scripts `.sh` e o `grep` não existem).
 
 ## Instalação
 
-Ainda **não é preciso publicar no npm** — instale direto do GitHub. Formas confiáveis:
-
-### 1. Release tarball (recomendado — 1 comando, sem clonar)
+### 1. npm (recomendado)
 
 ```bash
-npm i -g https://github.com/vinics12/maker-kit/releases/latest/download/maker.tgz
+npm i -g @vinicius.cerqueira/maker
 maker --version
 ```
 
-A URL é **estável** (`releases/latest/download/maker.tgz`) — sempre aponta para a última
-[release](https://github.com/vinics12/maker-kit/releases), sem versão no caminho. O npm instala o
-pacote já buildado (`dist` versionado), sem clonar nem compilar.
+### 2. Release tarball (GitHub-only, sem registry)
 
-### 2. Clonar + link
+```bash
+npm i -g https://github.com/vinics12/maker-kit/releases/latest/download/maker.tgz
+```
+
+URL **estável** — sempre aponta para a última [release](https://github.com/vinics12/maker-kit/releases),
+sem versão no caminho. Instala o pacote já buildado, sem clonar nem compilar.
+
+### 3. Clonar + link
 
 ```bash
 git clone https://github.com/vinics12/maker-kit
@@ -83,17 +86,14 @@ pnpm install && pnpm build   # dist já vem versionado; o build só garante fres
 npm link                     # deixa `maker` no PATH; ou use `node dist/cli.js` direto
 ```
 
-### 3. Plugin do Claude Code (o comando `/maker`)
+### 4. Plugin do Claude Code (o comando `/maker`)
 
 Instalável do GitHub (ver *Wrapper de skill* abaixo) — porém o plugin **delega para a CLI**, então a
-CLI ainda precisa estar no PATH (instale por 1 ou 2 antes).
+CLI ainda precisa estar no PATH (instale por 1, 2 ou 3 antes).
 
-> **Quer ainda mais curto?** Publicar no npm (`npm publish`) libera `npm i -g @vinicius.cerqueira/maker` — o
-> comando mais simples possível. Fica como opção; o repo já está pronto para isso.
->
 > ⚠️ **Evite `npm i -g github:vinics12/maker-kit`.** Em algumas versões do npm, o install global de
 > uma dependência git cria um symlink quebrado para o cache (falha com `code 127` ou some depois). Use
-> a **release tarball** (1) ou **clone + link** (2). No Windows, rode qualquer uma dentro do WSL/Ubuntu.
+> o **npm** (1) ou a **release tarball** (2). No Windows, rode qualquer uma dentro do WSL/Ubuntu.
 
 ---
 
@@ -183,7 +183,7 @@ sem sair do Claude Code.
 A CLI `maker` precisa estar no `PATH` (o plugin só a orquestra, não a substitui):
 
 ```bash
-npm i -g https://github.com/vinics12/maker-kit/releases/latest/download/maker.tgz
+npm i -g @vinicius.cerqueira/maker
 maker --version   # confirmar  ·  ver seção Instalação para outras formas
 ```
 
@@ -290,5 +290,5 @@ O nome fixo `maker.tgz` é o que faz `releases/latest/download/maker.tgz` contin
 - [ ] **`maker update` com merge inteligente** — hoje só reescreve arquivos intocados por hash; evoluir
   para um 3-way merge que preserve edições locais em arquivos também atualizados pelo motor.
 - [ ] **`maker doctor` ciente de add-ons** — reportar add-ons aplicados e reconciliar as injeções.
-- [ ] **Publicação no npm** (`@vinicius.cerqueira/maker`) — hoje roda via `npx .` local / `npm link`.
+- [x] **Publicação no npm** — `npm i -g @vinicius.cerqueira/maker` (v0.2.0 publicada).
 - [ ] **Perfis de backend/stack opcionais** — abstrair o gancho já documentado para além do "clone fiel".
