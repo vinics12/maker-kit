@@ -3,9 +3,29 @@
   "version": "0.2.0",
   "description": "Encapsulador do workflow de criação de produtos (SpecKit + orquestração multi-agente) — instala o motor agnóstico de negócio em qualquer projeto.",
   "license": "MIT",
+  "author": "vinics12",
+  "homepage": "https://github.com/vinics12/maker-kit#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vinics12/maker-kit.git"
+  },
+  "bugs": {
+    "url": "https://github.com/vinics12/maker-kit/issues"
+  },
+  "keywords": [
+    "speckit",
+    "scaffolding",
+    "multi-agent",
+    "claude-code",
+    "workflow",
+    "cli"
+  ],
   "type": "module",
   "bin": {
     "maker": "dist/cli.js"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "files": [
     "dist",
