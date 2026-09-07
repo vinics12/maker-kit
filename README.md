@@ -66,12 +66,13 @@ Ainda **não é preciso publicar no npm** — instale direto do GitHub. Formas c
 ### 1. Release tarball (recomendado — 1 comando, sem clonar)
 
 ```bash
-npm i -g https://github.com/vinics12/maker-kit/releases/download/v0.2.0/vinics12-maker-0.2.0.tgz
+npm i -g https://github.com/vinics12/maker-kit/releases/latest/download/maker.tgz
 maker --version
 ```
 
-A cada versão sai uma [release](https://github.com/vinics12/maker-kit/releases) com o `.tgz` pronto —
-o npm instala o pacote já buildado (`dist` versionado), sem clonar nem compilar.
+A URL é **estável** (`releases/latest/download/maker.tgz`) — sempre aponta para a última
+[release](https://github.com/vinics12/maker-kit/releases), sem versão no caminho. O npm instala o
+pacote já buildado (`dist` versionado), sem clonar nem compilar.
 
 ### 2. Clonar + link
 
@@ -87,10 +88,12 @@ npm link                     # deixa `maker` no PATH; ou use `node dist/cli.js` 
 Instalável do GitHub (ver *Wrapper de skill* abaixo) — porém o plugin **delega para a CLI**, então a
 CLI ainda precisa estar no PATH (instale por 1 ou 2 antes).
 
+> **Quer ainda mais curto?** Publicar no npm (`npm publish`) libera `npm i -g @vinics12/maker` — o
+> comando mais simples possível. Fica como opção; o repo já está pronto para isso.
+>
 > ⚠️ **Evite `npm i -g github:vinics12/maker-kit`.** Em algumas versões do npm, o install global de
 > uma dependência git cria um symlink quebrado para o cache (falha com `code 127` ou some depois). Use
-> a **release tarball** (1) ou **clone + link** (2). Publicar no npm depois vira
-> `npm i -g @vinics12/maker`. No Windows, rode qualquer uma dentro do WSL/Ubuntu — ver acima.
+> a **release tarball** (1) ou **clone + link** (2). No Windows, rode qualquer uma dentro do WSL/Ubuntu.
 
 ---
 
@@ -180,7 +183,7 @@ sem sair do Claude Code.
 A CLI `maker` precisa estar no `PATH` (o plugin só a orquestra, não a substitui):
 
 ```bash
-npm i -g https://github.com/vinics12/maker-kit/releases/download/v0.2.0/vinics12-maker-0.2.0.tgz
+npm i -g https://github.com/vinics12/maker-kit/releases/latest/download/maker.tgz
 maker --version   # confirmar  ·  ver seção Instalação para outras formas
 ```
 
@@ -255,6 +258,21 @@ pnpm extract -- --from <projeto>   # re-extrai a camada custom de um projeto de 
 - `scripts/extract-templates.mjs` — helper de authoring: copia + sanitiza a camada genérica de um projeto de origem.
 
 ---
+
+### Cortar uma release
+
+Para manter a URL estável (`releases/latest/download/maker.tgz`) funcionando:
+
+```bash
+# 1. bump da versão em package.json / plugin.json / marketplace.json
+pnpm build && pnpm test                 # dist versionado + suíte verde
+git commit -am "release vX.Y.Z" && git push
+TGZ=$(npm pack); cp "$TGZ" maker.tgz    # tarball já inclui dist
+gh release create vX.Y.Z maker.tgz --title "maker X.Y.Z"   # asset SEMPRE nomeado maker.tgz
+rm -f "$TGZ" maker.tgz
+```
+
+O nome fixo `maker.tgz` é o que faz `releases/latest/download/maker.tgz` continuar válido a cada versão.
 
 ## Roadmap
 
