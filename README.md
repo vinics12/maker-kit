@@ -19,19 +19,21 @@ bash + comandos POSIX como `grep`/`git` usados pelos agentes) espera um shell ti
 |---|---|
 | **macOS** | Nativo. Precisa de Node ≥ 18 e Git. (Ferramentas de linha já são POSIX.) |
 | **Linux** | Nativo. Node ≥ 18 e Git. |
-| **Windows** | **Use o WSL2** (Ubuntu) — Linux real dentro do Windows. É o caminho mais próximo do Linux e o recomendado. Veja abaixo. |
+| **Windows** | **Use o WSL2** — Linux real dentro do Windows. Ubuntu é a distro padrão (e a dos exemplos abaixo), mas **qualquer distro serve** (Debian, Fedora, Alpine…); o que importa é ter bash + git + Node. |
 
 ### Windows — passo a passo (WSL2)
 
 O objetivo é ter o motor rodando **dentro de uma distro Linux**, não no PowerShell/CMD nativo (onde
 os scripts `.sh` e o `grep` não existem).
 
-1. Instale o WSL2 com Ubuntu (PowerShell como admin, uma vez só):
+1. Instale o WSL2 (PowerShell como admin, uma vez só). Ubuntu é a padrão; troque com `-d <distro>`
+   (veja as opções com `wsl -l -o`):
    ```powershell
-   wsl --install -d Ubuntu
+   wsl --install            # Ubuntu (padrão) — ou: wsl --install -d Debian
    ```
-   Reinicie se pedir e abra o **Ubuntu** pelo menu Iniciar.
-2. Dentro do Ubuntu, instale Node (via [nvm](https://github.com/nvm-sh/nvm)) e Git:
+   Reinicie se pedir e abra a distro pelo menu Iniciar.
+2. Dentro da distro, instale Node (via [nvm](https://github.com/nvm-sh/nvm)) e Git. No
+   Ubuntu/Debian é `apt`; em outras troque pelo gerenciador da distro (`dnf`, `apk`…):
    ```bash
    sudo apt update && sudo apt install -y git curl
    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
@@ -39,9 +41,9 @@ os scripts `.sh` e o `grep` não existem).
    ```
 3. **Trabalhe com os arquivos dentro do Linux** (ex.: `~/dev/meu-projeto`), não em `/mnt/c/...` — o
    filesystem nativo do WSL é muito mais rápido e evita problemas de fim-de-linha/permissão.
-4. Use o Claude Code / a CLI `maker` normalmente **de dentro do Ubuntu**. Tudo se comporta como Linux.
+4. Use o Claude Code / a CLI `maker` normalmente **de dentro da distro**. Tudo se comporta como Linux.
 
-5. Abra o Claude Code **apontando para o WSL** (ou rode o `claude` de dentro do Ubuntu) e trabalhe
+5. Abra o Claude Code **apontando para o WSL** (ou rode o `claude` de dentro da distro) e trabalhe
    normalmente. `maker init` e o pipeline (`/run-spec`) se comportam exatamente como no Linux.
 
 > **O que muda na instalação no Windows?** Nada no *comando* — a CLI `maker` é Node puro e roda igual
@@ -93,7 +95,7 @@ CLI ainda precisa estar no PATH (instale por 1, 2 ou 3 antes).
 
 > ⚠️ **Evite `npm i -g github:vinics12/maker-kit`.** Em algumas versões do npm, o install global de
 > uma dependência git cria um symlink quebrado para o cache (falha com `code 127` ou some depois). Use
-> o **npm** (1) ou a **release tarball** (2). No Windows, rode qualquer uma dentro do WSL/Ubuntu.
+> o **npm** (1) ou a **release tarball** (2). No Windows, rode qualquer uma dentro do WSL.
 
 ---
 
@@ -211,7 +213,7 @@ Dentro do Claude Code, no diretório do projeto-alvo:
 O plugin nasce junto com o motor e **cresce por fase**: expõe `init | doctor | update` (motor) e
 `add | remove` (add-ons).
 
-> No Windows, faça tudo isso dentro do WSL/Ubuntu (ver a seção de requisitos por SO).
+> No Windows, faça tudo isso dentro do WSL (ver a seção de requisitos por SO).
 
 ---
 
