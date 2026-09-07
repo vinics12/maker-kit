@@ -1,0 +1,294 @@
+---
+name: "run-spec"
+description: "Orchestrate the full multi-agent pipeline to develop a feature spec end-to-end: spec-author → [ux-designer if HAS_UI] → spec-reviewer → [Gate 1] → architect → plan-reviewer → [Gate 2] → dev (parallel pairs) → code-reviewer → [Gate 3] → pm-validator → e2e-planner → e2e-runner (auto-validação, loop /fix-on-validation) → [Gate 4]. Always honors the constitution at .specify/memory/constitution.md."
+argument-hint: "Describe the feature, pass brainstorm:<path> (handoff from /run-brainstorm), OR pass an existing spec folder to resume (e.g. 'specs/000-<slug>'). For fuzzy features, run /run-brainstorm first."
+user-invocable: true
+disable-model-invocation: false
+---
+
+## User Input
+
+```text
+$ARGUMENTS
+```
+
+## Purpose
+
+This skill is the **single entry point** for developing a new feature in `{{project.name}}`. It orchestrates the specialist agents through the SpecKit flow with 4 mandatory human gates. The pipeline is **agnostic to your stack**: it derives what's frontend vs backend from the project's layout globs and runs the project's own commands — it imposes no database, test harness, or observability tooling. Those are declared by the project in `.specify/memory/constitution.md` and `.specify/memory/project-rules.md`.
+
+## Constitution
+
+**Before doing anything**, read `.specify/memory/constitution.md`. Its principles govern every phase — the process principles shipped by the engine **plus** any project principles the team authored. Any violation flagged by any agent at any stage is **CRITICAL** and blocks the gate.
+
+## Pipeline
+
+```
+┌─ PHASE 0 (optional, fuzzy) ─────────────────────────┐
+│  /run-brainstorm (separate convo) → design doc      │
+│  → /run-spec "..." brainstorm:<path> (path only)    │
+└─────────────────────────────────────────────────────┘
+                       ▼
+┌─ PHASE 1: SPEC ─────────────────────────────────────┐
+│  spec-author   → spec.md                            │
+│  [HAS_UI=true] ux-designer → design-brief.md        │
+│  spec-reviewer → VERDICT: APPROVED | CRITICAL       │
+│  heurística MINI? → adia Gate 1 (funde com Gate 2)  │
+│  🚧 GATE 1: human approves spec  (STANDARD/FULL)    │
+└─────────────────────────────────────────────────────┘
+                       ▼
+┌─ PHASE 2: PLAN + TASKS ─────────────────────────────┐
+│  architect → classifica DEPTH:                      │
+│    MINI     → tasks.md + briefs/US-N.md             │
+│    STD/FULL → plan, data-model, contracts, tasks,   │
+│               briefs/US-N.md [+ testes de segurança │
+│               quando a constitution exigir]         │
+│  plan-reviewer (pulado em MINI) → APPROVED|CRITICAL │
+│  🚧 GATE 2 (STD/FULL) | GATE 1/2 fundido (MINI)     │
+└─────────────────────────────────────────────────────┘
+                       ▼
+┌─ PHASE 3: IMPLEMENTATION (parallel ×2) ─────────────┐
+│  preflight (branch/git/deps/serviço) + boundary     │
+│    check (Tocar SOMENTE dos briefs → serializa?)    │
+│  dev ‖ dev ← recebem path do BRIEF + camada         │
+│    → VERDICT: READY_FOR_REVIEW | DRIFT | BLOCKED    │
+│    DRIFT/BLOCKED → não vai ao review; roteia ao     │
+│      humano/architect                               │
+│  code-reviewer (determinístico): constitution +     │
+│    verify + build + testes  (sem browser)           │
+│    → APPROVED | NEEDS_REVISION:[US-N: ids]          │
+│    NEEDS_REVISION → briefs/US-N-feedback.md → retry │
+│  [HAS_UI] visual-reviewer (tiered: texto→screenshot │
+│    com cap) → DESIGN_APPROVED | DESIGN_NEEDS_REVISION│
+│    NEEDS_REVISION → dev (frontend) (max 1 retry)    │
+│  🚧 GATE 3 (leve em MINI: verify + diff)            │
+│  (repeat for additional US pairs until done)        │
+└─────────────────────────────────────────────────────┘
+                       ▼
+┌─ PHASE 4: ACCEPTANCE ───────────────────────────────┐
+│  pm-validator → guia manual → VERDICT: GUIDE_READY  │
+│  abre PR                                            │
+│  [HAS_UI] e2e-planner → e2e-plan.md (E2E_PLAN_READY)│
+│  [HAS_UI] e2e-runner → e2e-findings.md (pw-mcp→…)   │
+│    E2E_BUGS → /fix-on-validation --from-findings →  │
+│      re-run runner (só jornadas afetadas) → loop    │
+│      até E2E_PASS (teto 3 rodadas)                  │
+│  🚧 GATE 4 (humano): checklist residual (HAS_UI) ou │
+│     guia manual API/curl → "gate 4 completo"        │
+│  [optional] Auto Memory for cross-spec insights     │
+└─────────────────────────────────────────────────────┘
+```
+
+## Execution Steps
+
+### Step 0 — Detect mode
+
+Parse `$ARGUMENTS`:
+- If it's a **path** like `specs/NNN-*/` → **resume mode**. Read existing artifacts, determine which phase to enter. **Não crie novo branch** — o branch já existe.
+- If it's a **description** (optionally + `brainstorm:<path>`) → **new feature mode**. Start at Phase 1.
+  - **`brainstorm:<path>`** é produzido pelo skill **`/run-brainstorm`** (a porta de entrada para features difusas). **Não leia o arquivo.** Passe o **path** ao `spec-author` como `brainstorm-input: <path>`; o subagente frio o lê no próprio contexto. O orquestrador nunca ingere o conteúdo do brainstorm.
+
+> **Feature difusa?** Rode **`/run-brainstorm "descrição"`** numa conversa separada: ele conduz o design, salva o doc em `brainstorm-designs/` e te devolve o comando `/run-spec … brainstorm:<path>` pronto para colar (após `/clear`). Features já bem definidas vão direto ao `/run-spec "descrição"`.
+
+Read `.specify/memory/constitution.md` and `.specify/memory/product-overview.md` into context regardless of mode.
+
+**New feature mode only**: após ler a constitution, crie o branch da feature com `speckit-git-feature` (Skill tool) passando a descrição. O script gera automaticamente o número sequencial (`NNN`) e o slug (`NNN-<slug>`). Guarde `BRANCH_NAME` e `FEATURE_NUM` para uso nas etapas seguintes.
+
+> **Convenção de commits**: todos os commits da feature vão direto na branch `NNN-<slug>`. Nenhum agente usa `isolation: "worktree"`. O histórico da branch narra a feature completa: spec → plan → US por US → fixes.
+>
+> Formato: `feat(NNN/fase): descrição`
+> Exemplos: `feat(007/spec): spec.md`, `feat(007/plan): plan + tasks`, `feat(007/us1): T001-T003`
+
+### Step 1 — Phase 1: Spec
+
+1. Invoke the **`spec-author`** agent (`subagent_type: spec-author`) with the feature description and constitution context. If a `brainstorm:` path was provided in Step 0, pass the **path** as `brainstorm-input: <path>` — do **not** read or paste the file content.
+2. **HAS_UI detection**: after spec-author returns, run:
+   ```bash
+   grep -qiE 'tela|página|componente|dashboard|lista|formulário|modal|kanban|gráfico|chart|tsx|screen|widget|view' specs/NNN-<slug>/spec.md && echo "HAS_UI=true" || echo "HAS_UI=false"
+   ```
+   If `HAS_UI=true`, invoke the **`ux-designer`** agent with the spec path. It produces `specs/NNN-<slug>/design-brief.md`. If `HAS_UI=false`, skip ux-designer entirely.
+3. Invoke the **`spec-reviewer`** agent with the spec path (and design-brief.md path if it exists).
+4. If spec-reviewer returns CRITICAL issues → return to spec-author (and re-run ux-designer if HAS_UI) with the report; **max 2 retries**. If still CRITICAL after 2 retries, pause and present blockers to the human.
+5. **Heurística MINI**: após spec-reviewer passar, avalie se a feature é MINI-escala — spec sem novas tabelas/migrations, sem novos endpoints, ≤ 2 arquivos afetados, sem nova UI complexa. Se **MINI-provável**, **adie o Gate 1** e vá direto à Phase 2 (o architect confirma o depth). O Gate 1 e o Gate 2 serão apresentados **fundidos** (ver Step 2). Caso contrário siga ao Gate 1 normal.
+6. **🚧 GATE 1** (STANDARD/FULL): present a **summary** (5–8 bullets: goal, user stories, key ACs, out-of-scope) + reviewer report + paths for user to open. If HAS_UI, include path to `design-brief.md`. Ask:
+   > "Spec ready at `specs/NNN-<slug>/spec.md`. Approve and advance to plan? (yes/revise/abort)"
+7. On "yes":
+   ```bash
+   git add specs/NNN-<slug>/spec.md specs/NNN-<slug>/design-brief.md   # design-brief.md only if HAS_UI
+   git commit -m "feat(NNN/spec): spec.md aprovado"
+   ```
+   Então avance para Phase 2.
+
+### Step 2 — Phase 2: Plan + Tasks
+
+1. Invoke **`architect`** with the approved spec.
+   - O architect **classifica o depth** (MINI/STANDARD/FULL — comentário `<!-- plan-depth -->` no tasks.md) e produz:
+     - **STANDARD/FULL**: plan.md, data-model.md, contracts/, tasks.md, **US Briefs** (`briefs/US-N.md`) e, quando a constitution do projeto exigir prova de isolamento/segurança, o esqueleto de teste correspondente.
+     - **MINI**: só tasks.md + US Briefs (sem plan.md/data-model.md/contracts/).
+   - Verdict do architect: `VERDICT: READY_FOR_PLAN_REVIEW`.
+2. **plan-reviewer (condicional ao depth)**:
+   - **STANDARD/FULL**: invoke **`plan-reviewer`** (roda speckit-analyze + AC matrix). Roteie pelo verdict: `VERDICT: APPROVED` → segue; `VERDICT: CRITICAL` → loop.
+   - **MINI**: **pule o plan-reviewer**. Faça você mesmo uma checagem rápida: cada AC da spec tem task no tasks.md e cada US tem Brief com `Tocar SOMENTE:`.
+3. Loop on CRITICAL; **max 2 retries**. If still CRITICAL after 2 retries, pause and present blockers to the human. Artifacts already written are preserved on disk; tell the human the path.
+4. **🚧 GATE (adaptativo)**:
+   - **STANDARD/FULL → GATE 2 separado**: present a **summary** (AC coverage matrix, parallelization plan, list of files to be created/modified) + paths `plan.md` e `tasks.md`. Ask:
+     > "Plan + tasks ready. Approve and start implementation? (yes/revise/abort)"
+   - **MINI → GATE 1/2 FUNDIDO**: como o Gate 1 foi adiado, apresente **spec + tasks + Briefs juntos** numa única aprovação. Ask:
+     > "Feature MINI: spec + tasks prontos numa revisão só. Approve and start implementation? (yes/revise/abort)"
+   - O princípio de gates é preservado: MINI tem 3 checkpoints humanos (Gate 1/2 fundido + Gate 3 leve + Gate 4); a fusão elimina redundância, não responsabilidade de revisão.
+5. On "yes":
+   ```bash
+   git add specs/NNN-<slug>/
+   git commit -m "feat(NNN/plan): plan + tasks + briefs"   # MINI: "feat(NNN/plan): tasks + briefs (MINI)"
+   ```
+   Então avance para Phase 3.
+
+### Step 3 — Phase 3: Implementation
+
+Read `tasks.md` and identify user story groups. Pair user stories that don't share files.
+
+**Dev routing** — for each US, determine the layer:
+- Read the `[US-N — <layer>]` tag on the US section header in tasks.md (set by architect).
+- If `[frontend]` → invoke `dev` com foco frontend (design-brief).
+- If `[backend]` → invoke `dev` com foco backend/dados.
+- If `[mixed]` → invoke `dev` (handles both) ou split the US se o architect marcou sub-tasks por camada.
+- Fallback (no tag): conte tasks que casam com os **globs de frontend** (`{{join layout.frontendGlobs}}`) vs os **globs de backend/dados** (`{{join layout.backendGlobs}}`); atribua a camada dominante.
+
+**Scoped context injection** — o architect já gerou um **US Brief** autocontido por US (`specs/NNN-<slug>/briefs/US-N.md`). Passe ao dev apenas:
+- **Path do US Brief**: `specs/NNN-<slug>/briefs/US-N.md`
+- **Path do `US-N-feedback.md`** (somente em retry)
+- **Camada**: `frontend` | `backend` | `mixed` (para o dev carregar a checklist certa)
+- **For frontend**: path to `design-brief.md`
+- **For backend**: paths dos contratos citados no runbook do Brief (se houver)
+- **Branch name**: `NNN-<slug>`
+- **Isolation note**: se a constitution do projeto exige prova de isolamento/segurança para esta US (check plan.md / project-rules)
+
+**Mini-preflight — antes de cada par, execute diretamente (sem subagente):**
+```bash
+git branch --show-current                                   # deve retornar NNN-<slug>
+git status --short                                          # sem arquivos sujos inesperados
+[ -d node_modules ] || echo "MISSING_DEPS"
+```
+- `MISSING_DEPS` → instale as dependências antes de seguir.
+- **Serviço de backend no ar?** Se algum US do par é backend e o projeto declara um serviço local necessário (ver `.specify/memory/project-rules.md` → Bases Técnicas), verifique que ele está de pé; se não, tente subir com `{{commands.dev}}` e, em falha, pergunte ao humano: `subir o serviço` vs `pular validação desta US`.
+- branch errado / sujeira inesperada → pare e apresente ao humano. Não gaste tokens nos devs com ambiente quebrado.
+
+**Boundary check — antes de spawnar o par:**
+Compare os blocos `Tocar SOMENTE:` dos dois US Briefs. Se houver **qualquer arquivo em comum**, os US não são realmente paralelos → **serialize** (rode US-1 → code-reviewer → US-2). Só rode em paralelo se a interseção for vazia.
+
+**For each pair (up to 2 at a time)**:
+1. Invoke **2 dev agents in parallel** (single message, two `Agent` tool calls, no `isolation: "worktree"`), cada um com o path do US Brief e a camada. Devs commit directly to `NNN-<slug>`.
+2. Wait for both to return. **Roteie pelo verdict token** — case no token, não interprete prosa:
+   - `VERDICT: READY_FOR_REVIEW` (ambos) → siga ao code-reviewer.
+   - `VERDICT: DRIFT:<tipo>` → **não avance**. Apresente o `Drift discovered:` ao humano e ofereça: `architect resolve` vs `dev segue com workaround documentado`.
+   - `VERDICT: BLOCKED:ENV` → tente auto-remediar; se falhar, apresente ao humano.
+   - `VERDICT: BLOCKED:SPEC` → retorne ao architect (ou spec-author).
+   - `VERDICT: BLOCKED:AMBIGUITY` → faça a pergunta específica ao humano antes de qualquer retry.
+3. Invoke **`code-reviewer`** with the combined diff (`git diff main...NNN-<slug>`). O reviewer é **determinístico** (sem browser/MCP):
+   - Static analysis contra a constitution (processo + projeto)
+   - `{{commands.verify}}` e `{{commands.build}}` (conditional on diff)
+   - Valida testes de isolamento/segurança se a constitution os exige
+   - Lista as páginas alteradas para review visual no Gate 4 (não captura screenshots)
+4. **Retry com feedback estruturado** — roteie pelo verdict do code-reviewer:
+   - `VERDICT: APPROVED` → siga ao passo 4b (design) se HAS_UI, senão ao Gate 3.
+   - `VERDICT: NEEDS_REVISION:[US-N: ids]` → o code-reviewer escreveu `specs/NNN-<slug>/briefs/US-N-feedback.md` (só itens CRITICAL). Reinvoque **apenas o dev daquela US**, passando o path do feedback. O dev retorna `Fixed: [...]`. **Max 2 retries por dev.**
+4b. **Design review (só se HAS_UI=true e o par alterou UI)** — após code-reviewer `APPROVED`, invoque **`visual-reviewer`** com: path do `design-brief.md`, lista de páginas alteradas e o branch. Análise **tiered** (texto primeiro; screenshot só quando inconclusivo, cap de 1/página). Roteie pelo verdict:
+   - `VERDICT: DESIGN_APPROVED` → siga ao Gate 3.
+   - `VERDICT: DESIGN_NEEDS_REVISION:[US-N: ids]` → reinvoque **apenas o dev frontend daquela US**. **Max 1 retry.** Itens não resolvidos viram checklist humano no Gate 4.
+   - Em **MINI** sem tela nova, ou `HAS_UI=false` → **pule** o visual-reviewer.
+5. **🚧 GATE 3**: present **diff + constitution report + test results + edge case coverage advisory + design verdict (se HAS_UI) + páginas a revisar no Gate 4**. Em MINI, Gate 3 é leve: só `{{commands.verify}}` + diff. Ask:
+   > "Code for US-X + US-Y: tests passing, constitution clean, design APPROVED (se HAS_UI). Continue to next pair / advance to Gate 4? (yes/revise/abort)"
+
+If only 1 US remains or all tasks share files, run a single dev sequentially.
+
+When all tasks marked `[X]` in tasks.md → proceed to Phase 4.
+
+### Step 4 — Phase 4: Acceptance
+
+1. Invoke **`pm-validator`**. Parte da premissa de que **Gate 3 já passou** e produz um **Acceptance Test Guide** com **apenas validação manual** — jornadas de negócio end-to-end + edge cases que automação não cobre. Verdict: `VERDICT: GUIDE_READY`.
+2. **Abra a PR imediatamente** após o pm-validator retornar (antes do Gate 4 humano):
+   ```bash
+   gh pr create --base main --head <BRANCH_NAME> \
+     --title "feat(NNN): <slug em linguagem natural>" \
+     --body "$(cat <<'EOF'
+   ## O que esta PR entrega
+   <resumo da feature em 2-3 frases>
+
+   ## ACs cobertos
+   <lista de user stories e número de ACs por US>
+
+   ## Tasks concluídas
+   <N tasks — listar slugs>
+
+   ## Guia de aceite
+   `specs/NNN-<slug>/acceptance-guide.md` — cenários manuais por AC.
+
+   🤖 Generated with [Claude Code](https://claude.com/claude-code)
+   EOF
+   )"
+   ```
+   Apresente a **URL da PR** ao usuário junto com o guia de aceite.
+3. **Auto-validação e2e (montar → executar → corrigir)** — **só se `HAS_UI=true`**. Para spec **backend-only** (`HAS_UI=false`) **pule** este passo e vá direto ao Gate 4 manual. Quando `HAS_UI=true`:
+   1. **`e2e-planner`** recebe `acceptance-guide.md` + `spec.md` + `plan.md`/`tasks.md` (+ `design-brief.md`) e escreve `e2e-plan.md`, separando **jornadas automatizáveis** do **checklist de julgamento humano**. Verdict: `E2E_PLAN_READY`.
+   2. **`e2e-runner`** recebe o `e2e-plan.md`, sobe o app (`{{commands.dev}}` se necessário), dirige o browser (preferência **Playwright MCP → Claude Preview → Chrome MCP**) e escreve `e2e-findings.md`. Verdict: `E2E_PASS` | `E2E_BUGS:[Jx, ...]`.
+   3. **Loop de correção (teto de 3 rodadas)** — enquanto o runner retornar `E2E_BUGS`:
+      - rode `/fix-on-validation --from-findings specs/NNN-<slug>/e2e-findings.md` (modo batch);
+      - re-invoke o **`e2e-runner`** passando **só as jornadas afetadas**;
+      - repita até `E2E_PASS` **ou** 3 rodadas. Acima do teto, **pare** e escale ao humano.
+   - Se o `e2e-runner` reportar `⚠️ NO_DRIVER` / `⚠️ STACK_BOOT_FAILED`, caia para o **Gate 4 100% manual** — a auto-validação é acelerador, não bloqueador.
+4. **🚧 GATE 4 (humano) — aceite final**:
+
+   **(a) `HAS_UI=true` (auto-validação rodou) — aceite sobre o resíduo.** Apresente:
+   > "PR aberta em `<URL>`. Auto-validação e2e: **<E2E_PASS / N bugs corrigidos em M rodadas>**.
+   > Resta o **checklist de julgamento humano** em `e2e-plan.md`.
+   > 1. Suba o app com `{{commands.dev}}` e percorra só esse checklist residual.
+   > 2. Se algo estiver errado, rode `/fix-on-validation` e descreva.
+   > 3. Quando o resíduo estiver ok, responda **gate 4 completo**."
+
+   **(b) `HAS_UI=false` — Gate 4 100% manual.** Apresente:
+   > "PR aberta em `<URL>`. Feature backend-only. Siga o **guia de aceite** em `acceptance-guide.md`.
+   > 1. Se uma jornada falhar, rode `/fix-on-validation` e descreva.
+   > 2. Quando todas passarem, responda **gate 4 completo**."
+
+   - Quando o humano responde **gate 4 completo** → a feature está aceita; siga ao passo 5.
+5. **Catalogar a feature (as-built)** — após o aceite, invoke o **`feature-cataloguer`**, passando: path da spec, o diff da feature (`git diff main...NNN-<slug>`) e a URL da PR. Ele cria/atualiza `docs/features/<área>.md` e `docs/features/INDEX.md`, e retorna `VERDICT: CATALOGUED`. Commite o catálogo na PR:
+   ```bash
+   git add docs/features/
+   git commit -m "docs(NNN/features): cataloga <slug> em docs/features"
+   ```
+6. **Optional cross-spec memory**: se a feature produziu uma lição cross-spec reusável, registre-a via memória nativa (`CLAUDE.md`/Auto Memory) ou num quick-reference em `.specify/memory/`. Só quando o insight for genuinamente reusável.
+
+## Rules of Engagement
+
+- **Never skip a gate**. Em MINI, Gate 1 e Gate 2 são **fundidos** (uma aprovação para spec+tasks), não removidos — restam 3 checkpoints humanos.
+- **Route by verdict token, not prose**. Cada agente termina com um `VERDICT: <TOKEN>` canônico (`APPROVED`, `CRITICAL`, `READY_FOR_REVIEW`, `DRIFT:<tipo>`, `BLOCKED:<tipo>`, `NEEDS_REVISION:[...]`, `DESIGN_APPROVED`, `DESIGN_NEEDS_REVISION:[...]`, `GUIDE_READY`, `E2E_PLAN_READY`, `E2E_PASS`, `E2E_BUGS:[...]`). Se o token faltar, peça ao agente para reemitir.
+- **Depth-adaptive**: o architect classifica MINI/STANDARD/FULL. MINI pula plan.md e plan-reviewer, funde Gate 1/2 e tem Gate 3 leve.
+- **DRIFT/BLOCKED param o avanço**: um dev que retorna `DRIFT:` ou `BLOCKED:` **não** segue para o code-reviewer.
+- **Todos os agentes carregam a constitution do projeto** — os agentes lêem `.specify/memory/constitution.md` (processo + regras do projeto) antes de agir; nenhuma regra de negócio fica codificada no motor.
+- **Brainstorm fica fora do orquestrador** — investigação de escopo difuso roda em **conversa separada** via `/run-brainstorm`, que salva o design em `brainstorm-designs/` e devolve o handoff `/run-spec … brainstorm:<path>`. O orquestrador só recebe o **path**, lido pelo `spec-author`.
+- **Dev recebe US Brief, não fragmentos** — o orquestrador passa o path de `briefs/US-N.md`.
+- **Parallelism cap = 2 devs** + **boundary check**: se os `Tocar SOMENTE:` dos Briefs colidem, serialize.
+- **Sequential review**. `code-reviewer` sempre revisa os dois diffs paralelos juntos.
+- **Retry via feedback.md**: NEEDS_REVISION → code-reviewer escreve `briefs/US-N-feedback.md` (só CRITICAL); o dev corrige e reporta `Fixed:`.
+- **Loop on CRITICAL**. Qualquer CRITICAL volta à fase anterior. Nunca sobreponha um CRITICAL para avançar.
+- **Surface artifacts**. Em cada gate, o usuário vê conteúdo real (spec.md, plan.md, diff, test output), não só resumos.
+- **Preflight antes dos devs**: branch, git status, deps, serviço de backend (se aplicável).
+- **Gate 4 é aumentado (só HAS_UI): auto-validação primeiro, aceite humano depois**. Com `HAS_UI=false`, o Gate 4 é 100% manual. A aceitação é sempre declarada pelo humano, nunca por um agente.
+- **Catalogar a feature após o aceite**: invoke o `feature-cataloguer` para registrar a feature em `docs/features/` e commitá-la na PR.
+
+## Recovery / Resume
+
+If the pipeline is interrupted, resume by invoking `/run-spec specs/NNN-<slug>/`. The skill checks which artifacts exist, checks task completion (`[X]` markers), and re-enters at the appropriate phase.
+
+## Output
+
+At completion (Gate 4 approved), report:
+```
+✅ Feature NNN-<slug> done
+- Branch: NNN-<slug>
+- PR: <URL>
+- Spec: specs/NNN-<slug>/spec.md
+- Tasks completed: <N>
+- Tests: <N> passed
+- Constitution: upheld
+- Files changed: <count>
+```

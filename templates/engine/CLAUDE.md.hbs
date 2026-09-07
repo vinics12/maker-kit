@@ -1,0 +1,35 @@
+# {{project.name}}
+
+Índice de contexto para o Claude Code. O sistema de criação de produtos e desenvolvimento deste
+projeto foi instalado pelo **maker** (motor SpecKit + orquestração multi-agente).
+
+## Como começar uma feature
+
+- **Feature bem definida** → `/run-spec "descrição da feature"`
+- **Feature difusa / exploratória** → `/run-brainstorm "descrição"` (conversa separada) → cola o
+  handoff `/run-spec … brainstorm:<path>` que ele devolve.
+
+O `/run-spec` conduz o fluxo completo com 4 gates humanos: spec → plan → dev → aceite.
+
+## Fontes de verdade
+
+- **Constitution**: `.specify/memory/constitution.md` — princípios de processo (do motor) + os
+  princípios do seu projeto. Vence qualquer outra instrução em conflito.
+- **Bases técnicas & regras**: `.specify/memory/project-rules.md` — banco, testes, observabilidade e
+  regras de negócio que **você** declara (o motor é agnóstico).
+- **Visão de produto**: `.specify/memory/product-overview.md`
+- **Features prontas (as-built)**: `docs/features/INDEX.md` — mantido pelo `feature-cataloguer`.
+
+## Agentes
+
+Instalados em `.claude/agents/`. Todos lêem a constitution do projeto antes de agir — nenhuma regra
+de negócio é codificada no motor. Os papéis: `spec-author`, `spec-reviewer`, `architect`,
+`plan-reviewer`, `dev`, `code-reviewer`, `pm-validator`, `ux-designer`, `visual-reviewer`,
+`e2e-planner`, `e2e-runner`, `feature-cataloguer`.
+
+## Manutenção do motor
+
+- `maker doctor` — verifica a integridade da instalação.
+- `maker update` — atualiza arquivos do motor que você não editou localmente.
+
+<!-- Preencha abaixo com convenções específicas do projeto conforme elas surgirem. -->

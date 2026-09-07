@@ -1,0 +1,143 @@
+---
+name: "run-brainstorm"
+description: "Entrada para features difusas/grandes do {{project.slug}}. Conduz o design via a skill brainstorming (diálogo, alternativas, design doc), PARA no documento de design (não implementa, não chama writing-plans) e entrega o comando /run-spec ... brainstorm:<path> pronto para colar numa conversa nova. Use quando o escopo é incerto, há várias opções a comparar, ou é preciso decidir MVP antes de especificar."
+argument-hint: "Descreva a ideia/feature difusa em linguagem natural (ex: 'um módulo de relatórios que o cliente possa customizar')."
+user-invocable: true
+disable-model-invocation: false
+---
+
+## User Input
+
+```text
+$ARGUMENTS
+```
+
+## Propósito
+
+Este skill é a **porta de entrada para features difusas** no `{{project.slug}}`. Ele isola
+toda a investigação de escopo (perguntas, comparação de alternativas, decisão de MVP)
+**fora do contexto do orquestrador do `/run-spec`** — que é o que mais inflava o custo
+de token. O trabalho pesado acontece aqui; o `/run-spec` recebe depois só o **path** do
+documento de design consolidado.
+
+Substitui a antiga flag `--brainstorm` do `/run-spec` (que não existe mais).
+
+> **Quando NÃO usar**: se a feature já está bem definida (escopo claro, sem alternativas a
+> pesar), pule este skill e vá direto ao `/run-spec "descrição"`.
+
+**Objetivo central**: montar a **base conceitual** que o `spec-author` (dentro do `/run-spec`)
+transforma em spec. Não é montar um plano de implementação. Pare no nível do "o quê" e do
+"porquê" — o "como" (arquivos, migrations, tasks) é trabalho do `architect` no `/run-spec`.
+Ver a seção **"O que o design doc DEVE e NÃO DEVE conter"**.
+
+## O que este skill faz (e o que NÃO faz)
+
+- **Faz**: conduz o design por diálogo, salva o documento de design em `brainstorm-designs/`,
+  commita, e imprime o comando de handoff para o `/run-spec`.
+- **NÃO faz**: não escreve código, não cria branch de feature, não gera plan/tasks, **não desce
+  a nível de arquivo/migration/função**, e **não invoca o `/run-spec` sozinho**. O handoff é
+  manual de propósito (ver "Por que o handoff é manual").
+
+## Execução
+
+### Passo 1 — Conduzir o brainstorming
+
+Siga o processo da skill **`brainstorming`** (instalada em `.claude/skills/brainstorming/SKILL.md`),
+usando `$ARGUMENTS` como a ideia inicial. Em resumo, o que ela faz:
+1. Explora o contexto do projeto (arquivos, docs, commits recentes). **Override de contexto**:
+   ao explorar features **já desenvolvidas**, leia **primeiro** o catálogo `docs/features/`
+   (o `INDEX.md` + o arquivo da área relevante) — ele descreve, em nível conceitual, como cada
+   feature pronta funciona. **Só mergulhe no código** para lacunas que o catálogo não cobre. Isso
+   evita queimar tokens lendo implementação para entender comportamento já documentado.
+2. Faz perguntas de clarificação **uma de cada vez** (purpose, constraints, success criteria).
+3. Propõe 2-3 abordagens com trade-offs e uma recomendação.
+4. Apresenta o design em seções, com aprovação incremental.
+5. Escreve o **documento de design** — **override do local de save**: salve em
+   `brainstorm-designs/YYYY-MM-DD-<topic>-design.md` (na raiz do repo), **não** em
+   `docs/superpowers/specs/`. (A `brainstorming` sanciona override de local: _"User preferences
+   for spec location override this default"_.) Faça o self-review
+   (placeholders/contradições/escopo/ambiguidade) e **commita**. Respeite a seção
+   **"O que o design doc DEVE e NÃO DEVE conter"** abaixo: o doc fica no nível conceitual.
+6. Pede para você revisar o spec escrito antes de seguir.
+
+Respeite o HARD-GATE da `brainstorming`: nada de implementação até o design ser aprovado.
+
+### O que o design doc DEVE e NÃO DEVE conter
+
+O design doc é a **base conceitual** para o `spec-author`, não um plano de implementação.
+Mantenha-o no nível do "o quê" e do "porquê".
+
+**DEVE conter (conceitual):**
+- **Problema / contexto** — qual dor, para quem, por que agora.
+- **Objetivo + critérios de sucesso** — o que muda quando estiver pronto.
+- **Não-objetivos (YAGNI)** — o que fica de fora de propósito.
+- **Decisões de arquitetura conceituais + alternativas rejeitadas** — estilo ADR: a decisão e o
+  **porquê**, com as 2-3 abordagens consideradas e por que as outras caíram.
+- **Modelo de domínio** — entidades e suas relações em linguagem de negócio (**não** schema SQL,
+  **não** nomes de coluna/tabela).
+- **Telas / fluxos** — em nível de **jornada** do usuário (**não** componentes, **não** `.tsx`).
+- **Critérios de aceitação preliminares** — o que o `spec-author` vai refinar.
+- **Riscos** e **glossário de domínio**.
+
+**NÃO DEVE conter (é trabalho do `architect`/`/run-spec`):**
+- Caminhos de arquivo, nomes de migration, nomes de função/seeder/componente.
+- Schema SQL detalhado, assinaturas de API, contratos.
+- Mapa task-by-task / quebra em tarefas de implementação.
+
+> **Regra-frase**: _Se você está escrevendo o nome de um arquivo a criar/editar, parou de fazer
+> brainstorm e começou a fazer plan — recue._
+
+### Passo 2 — PARAR no documento de design (override)
+
+A skill `brainstorming` normalmente termina invocando o `writing-plans`. **Não faça isso.**
+Quem gera plan/tasks no pipeline do {{project.slug}} é o **`architect`** (dentro do `/run-spec`).
+O `writing-plans` do superpowers **não está instalado** e **não** deve rodar aqui.
+
+Portanto, assim que o documento de design estiver **escrito, revisado por você e committado**,
+**encerre o brainstorming** — não invoque nenhuma skill de implementação ou de plano.
+
+### Passo 3 — Entregar o handoff para o `/run-spec`
+
+Capture o path real do design doc gerado no Passo 1 (`brainstorm-designs/YYYY-MM-DD-<topic>-design.md`).
+Then present this handoff block to the user **as the final message** and stop:
+
+> ✅ **Brainstorm concluído.** Documento de design salvo e committado em:
+> `brainstorm-designs/<arquivo>-design.md`
+>
+> **Próximo passo (manual, de propósito):**
+> 1. Rode `/clear` (ou abra uma conversa nova) — isso mantém toda a investigação fora do
+>    contexto do `/run-spec`, que é a economia de token que estamos buscando.
+> 2. Cole este comando:
+> ```
+> /run-spec "<descrição curta da feature>" brainstorm:brainstorm-designs/<arquivo>-design.md
+> ```
+> O `/run-spec` vai entregar esse path ao `spec-author`, que lê o design no contexto dele
+> (frio, descartável) e segue a pipeline normal (spec → gates → implementação).
+
+Substitua `<descrição curta>` e `<arquivo>` pelos valores reais. **Não** execute o `/run-spec`
+você mesmo nesta conversa.
+
+## Por que o handoff é manual
+
+Um skill roda **dentro da conversa atual** — ele não consegue dar `/clear` em si mesmo e
+continuar (depois do clear não sobra contexto para retomar), e `/clear` é uma ação do
+usuário, não do assistente. Se este skill chamasse o `/run-spec` na mesma conversa, todo o
+brainstorm continuaria no contexto durante a pipeline inteira — exatamente o custo de token
+que estamos eliminando. Por isso o passo de `/clear` + colar o comando fica com você: é o
+preço de manter o contexto limpo. O skill faz todo o resto (conduzir o design, parar no
+ponto certo, montar o comando pronto).
+
+## Regras
+
+- **Pare no design doc.** Nunca invoque `writing-plans` nem qualquer skill de implementação.
+- **Fique no nível conceitual.** Sem caminhos de arquivo, migrations, funções ou quebra em tasks
+  no design doc (ver "O que o design doc DEVE e NÃO DEVE conter"). Regra-frase: _se está escrevendo
+  o nome de um arquivo a criar/editar, recuou pro plan — volte ao brainstorm._
+- **Salve em `brainstorm-designs/`** (raiz), não em `docs/superpowers/specs/`.
+- **Leia `docs/features/` antes do código** ao investigar features já desenvolvidas.
+- **Não crie branch nem spec folder.** Isso é trabalho do `/run-spec` (ele cria o branch
+  `NNN-<slug>` no modo new-feature).
+- **Não chame o `/run-spec`.** Entregue o comando de handoff e encerre.
+- **Decompose se for grande demais.** Se a ideia descreve vários subsistemas independentes,
+  ajude a decompor (como manda a `brainstorming`) e brainstorme o primeiro subprojeto; cada
+  subprojeto vira seu próprio ciclo `/run-brainstorm` → `/run-spec`.

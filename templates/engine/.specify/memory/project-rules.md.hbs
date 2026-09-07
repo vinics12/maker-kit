@@ -1,0 +1,46 @@
+# {{project.name}} — Bases Técnicas & Regras do Projeto
+
+> STUB gerado pelo `maker`. Este é o lugar onde o **sistema consumidor** declara suas escolhas
+> técnicas e regras de negócio. O motor é agnóstico: nada aqui vem pré-decidido. O que você escrever
+> guia os agentes (architect, dev, code-reviewer) e complementa `constitution.md`.
+
+## Bases Técnicas (escolha do projeto)
+
+Preencha — o motor não impõe nenhuma destas. Depois, promova as que forem não-negociáveis para a
+seção **Bases Técnicas** de `constitution.md`.
+
+### Banco / persistência
+_(qual banco, como rodam migrations, convenções de nomes, forward-only?, etc.)_
+
+### Montagem de testes
+_(runner de unit, framework de e2e, comando de layout de testes — casa com PR3 da constitution.)_
+
+### Observabilidade
+_(para onde vão erros, eventos de produto e logs estruturados; formato mínimo de log.)_
+
+### Serviço local de dev
+_(como o `/run-spec` sobe o backend localmente: comando, portas, seed, pré-condições. O preflight
+do pipeline consulta esta seção antes de rodar devs de backend.)_
+
+## Comandos do projeto
+
+| Papel | Comando |
+|---|---|
+| verify (lint+types+test) | `{{commands.verify}}` |
+| build | `{{commands.build}}` |
+| test | `{{commands.test}}` |
+| dev | `{{commands.dev}}` |
+
+## Layout (roteamento de dev)
+
+- **Frontend globs**: `{{join layout.frontendGlobs}}`
+- **Backend/dados globs**: `{{join layout.backendGlobs}}`
+
+O `/run-spec` usa esses globs para rotear cada US ao dev da camada certa quando o architect não marca
+a camada explicitamente.
+
+## Regras de negócio / arquitetura
+
+_(as regras específicas do seu produto. Numere P1, P2, … com "Como verificar" testável e promova as
+não-negociáveis para a seção "Princípios do Projeto" de `constitution.md`. Add-ons do `maker`
+injetam princípios aqui — ex.: `maker add saas` adiciona multi-tenant, whitelabel e service-roles.)_
