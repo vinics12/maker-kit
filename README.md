@@ -61,36 +61,36 @@ os scripts `.sh` e o `grep` não existem).
 
 ## Instalação
 
-Ainda **não é preciso publicar no npm** — dá para instalar direto do GitHub. Três formas:
+Ainda **não é preciso publicar no npm** — instale direto do GitHub. Formas confiáveis:
 
-### 1. Direto do GitHub (recomendado — sem clonar, sem npm registry)
-
-O `npm` clona o repo, instala as deps e builda sozinho (via o script `prepare`):
+### 1. Release tarball (recomendado — 1 comando, sem clonar)
 
 ```bash
-# global (deixa o comando `maker` no PATH):
-npm i -g github:vinics12/maker-kit
-
-# ou sem instalar nada, rodando na hora:
-npx github:vinics12/maker-kit init
+npm i -g https://github.com/vinics12/maker-kit/releases/download/v0.2.0/vinics12-maker-0.2.0.tgz
+maker --version
 ```
 
-### 2. Clonar + build + link
+A cada versão sai uma [release](https://github.com/vinics12/maker-kit/releases) com o `.tgz` pronto —
+o npm instala o pacote já buildado (`dist` versionado), sem clonar nem compilar.
+
+### 2. Clonar + link
 
 ```bash
 git clone https://github.com/vinics12/maker-kit
 cd maker-kit
-pnpm install && pnpm build
-npm link          # deixa `maker` global; ou use `node dist/cli.js` direto
+pnpm install && pnpm build   # dist já vem versionado; o build só garante freshness
+npm link                     # deixa `maker` no PATH; ou use `node dist/cli.js` direto
 ```
 
 ### 3. Plugin do Claude Code (o comando `/maker`)
 
-Puro GitHub, sem npm — porém o plugin **delega para a CLI**, então a CLI ainda precisa estar no PATH
-(instale por 1 ou 2 antes). Veja a seção *Wrapper de skill* abaixo.
+Instalável do GitHub (ver *Wrapper de skill* abaixo) — porém o plugin **delega para a CLI**, então a
+CLI ainda precisa estar no PATH (instale por 1 ou 2 antes).
 
-> Publicar no npm (`@vinics12/maker`) fica como conveniência futura (`npm i -g @vinics12/maker`), não
-> como requisito. No Windows, rode qualquer uma dessas dentro do WSL/Ubuntu — ver acima.
+> ⚠️ **Evite `npm i -g github:vinics12/maker-kit`.** Em algumas versões do npm, o install global de
+> uma dependência git cria um symlink quebrado para o cache (falha com `code 127` ou some depois). Use
+> a **release tarball** (1) ou **clone + link** (2). Publicar no npm depois vira
+> `npm i -g @vinics12/maker`. No Windows, rode qualquer uma dentro do WSL/Ubuntu — ver acima.
 
 ---
 
@@ -180,8 +180,8 @@ sem sair do Claude Code.
 A CLI `maker` precisa estar no `PATH` (o plugin só a orquestra, não a substitui):
 
 ```bash
-npm i -g github:vinics12/maker-kit   # ver seção Instalação para outras formas
-maker --version                      # confirmar
+npm i -g https://github.com/vinics12/maker-kit/releases/download/v0.2.0/vinics12-maker-0.2.0.tgz
+maker --version   # confirmar  ·  ver seção Instalação para outras formas
 ```
 
 ### Instalar o plugin
