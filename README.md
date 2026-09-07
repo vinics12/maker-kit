@@ -61,13 +61,36 @@ os scripts `.sh` e o `grep` não existem).
 
 ## Instalação
 
+Ainda **não é preciso publicar no npm** — dá para instalar direto do GitHub. Três formas:
+
+### 1. Direto do GitHub (recomendado — sem clonar, sem npm registry)
+
+O `npm` clona o repo, instala as deps e builda sozinho (via o script `prepare`):
+
 ```bash
-npm i -g @vinics12/maker
-# ou sem instalar:
-npx @vinics12/maker init
+# global (deixa o comando `maker` no PATH):
+npm i -g github:vinics12/maker-kit
+
+# ou sem instalar nada, rodando na hora:
+npx github:vinics12/maker-kit init
 ```
 
-(No Windows, rode isso dentro do WSL/Ubuntu — ver acima.)
+### 2. Clonar + build + link
+
+```bash
+git clone https://github.com/vinics12/maker-kit
+cd maker-kit
+pnpm install && pnpm build
+npm link          # deixa `maker` global; ou use `node dist/cli.js` direto
+```
+
+### 3. Plugin do Claude Code (o comando `/maker`)
+
+Puro GitHub, sem npm — porém o plugin **delega para a CLI**, então a CLI ainda precisa estar no PATH
+(instale por 1 ou 2 antes). Veja a seção *Wrapper de skill* abaixo.
+
+> Publicar no npm (`@vinics12/maker`) fica como conveniência futura (`npm i -g @vinics12/maker`), não
+> como requisito. No Windows, rode qualquer uma dessas dentro do WSL/Ubuntu — ver acima.
 
 ---
 
@@ -157,8 +180,8 @@ sem sair do Claude Code.
 A CLI `maker` precisa estar no `PATH` (o plugin só a orquestra, não a substitui):
 
 ```bash
-npm i -g @vinics12/maker
-maker --version   # confirmar
+npm i -g github:vinics12/maker-kit   # ver seção Instalação para outras formas
+maker --version                      # confirmar
 ```
 
 ### Instalar o plugin
