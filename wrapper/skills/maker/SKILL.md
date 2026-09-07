@@ -19,7 +19,7 @@ CLI `maker` (a fonte única de verdade) e conduz, pela conversa, a coleta dos kn
 Ele cobre **`init`**, **`doctor`**, **`update`** (o motor) e **`add`**/**`remove`** (add-ons).
 
 > Pré-requisito: a CLI precisa estar disponível. Verifique com `maker --version`. Se não estiver,
-> oriente o usuário a instalar (`npm i -g @arruda-eng/maker` ou rodar via `npx @arruda-eng/maker`) —
+> oriente o usuário a instalar (`npm i -g @vinics12/maker` ou rodar via `npx @vinics12/maker`) —
 > **não** tente instalar globalmente sem o ok do usuário.
 
 ## Roteamento

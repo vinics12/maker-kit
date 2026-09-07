@@ -1,8 +1,8 @@
 # maker
 
 Encapsulador do **sistema de criação de produtos e desenvolvimento** — SpecKit + orquestração
-multi-agente (brainstorm → spec → arquitetura → dev → review, com 4 gates humanos) — extraído do
-`sgmi-platform` para ser **reinstalável em qualquer projeto**.
+multi-agente (brainstorm → spec → arquitetura → dev → review, com 4 gates humanos) —
+**reinstalável em qualquer projeto**.
 
 O `maker` instala o **motor** (o processo), agnóstico de negócio. Banco, montagem de testes e
 observabilidade **não vêm impostos** — são escolha do sistema consumidor, declarada em stubs. Regras
@@ -53,9 +53,9 @@ os scripts `.sh` e o `grep` não existem).
 ## Instalação
 
 ```bash
-npm i -g @arruda-eng/maker
+npm i -g @vinics12/maker
 # ou sem instalar:
-npx @arruda-eng/maker init
+npx @vinics12/maker init
 ```
 
 (No Windows, rode isso dentro do WSL/Ubuntu — ver acima.)
@@ -148,7 +148,7 @@ sem sair do Claude Code.
 A CLI `maker` precisa estar no `PATH` (o plugin só a orquestra, não a substitui):
 
 ```bash
-npm i -g @arruda-eng/maker
+npm i -g @vinics12/maker
 maker --version   # confirmar
 ```
 
@@ -173,8 +173,8 @@ Dentro do Claude Code, no diretório do projeto-alvo:
 /maker update    # atualiza arquivos do motor não editados localmente
 ```
 
-O plugin nasce junto com o motor e **cresce por fase**: nesta Fase 1 expõe `init | doctor | update`;
-a Fase 2 adiciona `/maker add saas` e `/maker remove`.
+O plugin nasce junto com o motor e **cresce por fase**: expõe `init | doctor | update` (motor) e
+`add | remove` (add-ons).
 
 > No Windows, faça tudo isso dentro do WSL/Ubuntu (ver a seção de requisitos por SO).
 
@@ -210,7 +210,7 @@ pnpm install
 pnpm build            # tsup → dist/cli.js
 pnpm test             # vitest (unit + integração: install em tmp, anti-acoplamento, doctor)
 pnpm audit:coupling   # garante que templates/engine não tem regra de negócio
-pnpm extract          # re-extrai a camada custom do ../sgmi-platform (authoring)
+pnpm extract -- --from <projeto>   # re-extrai a camada custom de um projeto de origem (authoring)
 ```
 
 ### Arquitetura
@@ -220,7 +220,7 @@ pnpm extract          # re-extrai a camada custom do ../sgmi-platform (authoring
   shell-out — só `node:path`/fs, então a CLI é cross-platform por construção.
 - `templates/engine/` — **espelha o layout-alvo**. Arquivos `.hbs` são renderizados (e perdem a
   extensão); o resto é copiado verbatim (a base stock do SpecKit nunca passa pelo engine).
-- `scripts/extract-from-sgmi.mjs` — helper de authoring: copia + sanitiza a camada genérica.
+- `scripts/extract-templates.mjs` — helper de authoring: copia + sanitiza a camada genérica de um projeto de origem.
 
 ---
 
@@ -240,5 +240,5 @@ pnpm extract          # re-extrai a camada custom do ../sgmi-platform (authoring
 - [ ] **`maker update` com merge inteligente** — hoje só reescreve arquivos intocados por hash; evoluir
   para um 3-way merge que preserve edições locais em arquivos também atualizados pelo motor.
 - [ ] **`maker doctor` ciente de add-ons** — reportar add-ons aplicados e reconciliar as injeções.
-- [ ] **Publicação no npm** (`@arruda-eng/maker`) — hoje roda via `npx .` local / `npm link`.
+- [ ] **Publicação no npm** (`@vinics12/maker`) — hoje roda via `npx .` local / `npm link`.
 - [ ] **Perfis de backend/stack opcionais** — abstrair o gancho já documentado para além do "clone fiel".
