@@ -2,6 +2,7 @@
   "name": "@arruda-eng/maker",
   "version": "0.2.0",
   "description": "Encapsulador do workflow de criação de produtos (SpecKit + orquestração multi-agente) — instala o motor agnóstico de negócio em qualquer projeto.",
+  "license": "MIT",
   "type": "module",
   "bin": {
     "maker": "dist/cli.js"
