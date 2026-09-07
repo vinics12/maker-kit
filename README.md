@@ -139,8 +139,44 @@ maker update    # atualiza arquivos do motor que você NÃO editou (edições lo
 
 ## Wrapper de skill (Claude Code)
 
-Em `wrapper/` há um plugin do Claude Code que expõe `/maker init | doctor | update`, delegando para
-a CLI. Ele nasce junto com o motor e cresce por fase (a Fase 2 adiciona `add`/`remove`).
+Além da CLI, o `maker` inclui um **plugin do Claude Code** (em `wrapper/`) que expõe o comando
+`/maker`, conduzindo a instalação pela conversa e delegando 100% para a CLI. Assim você opera o motor
+sem sair do Claude Code.
+
+### Pré-requisito
+
+A CLI `maker` precisa estar no `PATH` (o plugin só a orquestra, não a substitui):
+
+```bash
+npm i -g @arruda-eng/maker
+maker --version   # confirmar
+```
+
+### Instalar o plugin
+
+O repositório é também um **marketplace** de plugin. Num terminal `claude` interativo:
+
+```
+/plugin marketplace add vinics12/maker-kit
+/plugin install maker@maker-kit
+```
+
+(ou aponte para um clone local: `/plugin marketplace add /caminho/para/maker-kit`.)
+
+### Usar
+
+Dentro do Claude Code, no diretório do projeto-alvo:
+
+```
+/maker init      # coleta os knobs na conversa e roda `maker init`
+/maker doctor    # verifica a integridade da instalação
+/maker update    # atualiza arquivos do motor não editados localmente
+```
+
+O plugin nasce junto com o motor e **cresce por fase**: nesta Fase 1 expõe `init | doctor | update`;
+a Fase 2 adiciona `/maker add saas` e `/maker remove`.
+
+> No Windows, faça tudo isso dentro do WSL/Ubuntu (ver a seção de requisitos por SO).
 
 ---
 

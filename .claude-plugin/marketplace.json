@@ -1,0 +1,13 @@
+{
+  "name": "maker-kit",
+  "owner": { "name": "arruda-eng", "url": "https://github.com/vinics12/maker-kit" },
+  "plugins": [
+    {
+      "name": "maker",
+      "source": "./wrapper",
+      "description": "Wrapper de skill do Claude Code para a CLI maker: /maker init | doctor | update. Instala e mantém o motor de criação de produtos num projeto.",
+      "version": "0.1.0",
+      "category": "workflow"
+    }
+  ]
+}

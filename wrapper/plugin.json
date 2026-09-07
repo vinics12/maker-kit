@@ -1,7 +1,0 @@
-{
-  "name": "maker",
-  "version": "0.1.0",
-  "description": "Wrapper de skill do Claude Code para a CLI maker — instala e mantém o motor de criação de produtos. Fase 1: init | doctor | update.",
-  "author": "arruda-eng",
-  "skills": [".claude/skills/maker"]
-}
