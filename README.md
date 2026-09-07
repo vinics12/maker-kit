@@ -88,7 +88,7 @@ npm link                     # deixa `maker` no PATH; ou use `node dist/cli.js` 
 Instalável do GitHub (ver *Wrapper de skill* abaixo) — porém o plugin **delega para a CLI**, então a
 CLI ainda precisa estar no PATH (instale por 1 ou 2 antes).
 
-> **Quer ainda mais curto?** Publicar no npm (`npm publish`) libera `npm i -g @vinics12/maker` — o
+> **Quer ainda mais curto?** Publicar no npm (`npm publish`) libera `npm i -g @vinicius.cerqueira/maker` — o
 > comando mais simples possível. Fica como opção; o repo já está pronto para isso.
 >
 > ⚠️ **Evite `npm i -g github:vinics12/maker-kit`.** Em algumas versões do npm, o install global de
@@ -290,5 +290,5 @@ O nome fixo `maker.tgz` é o que faz `releases/latest/download/maker.tgz` contin
 - [ ] **`maker update` com merge inteligente** — hoje só reescreve arquivos intocados por hash; evoluir
   para um 3-way merge que preserve edições locais em arquivos também atualizados pelo motor.
 - [ ] **`maker doctor` ciente de add-ons** — reportar add-ons aplicados e reconciliar as injeções.
-- [ ] **Publicação no npm** (`@vinics12/maker`) — hoje roda via `npx .` local / `npm link`.
+- [ ] **Publicação no npm** (`@vinicius.cerqueira/maker`) — hoje roda via `npx .` local / `npm link`.
 - [ ] **Perfis de backend/stack opcionais** — abstrair o gancho já documentado para além do "clone fiel".
