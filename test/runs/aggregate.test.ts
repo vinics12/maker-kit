@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 
-import { costByGate, runTotals } from "../../src/runs/aggregate.js";
+import { costByGate, rejectionsByGate, runTotals } from "../../src/runs/aggregate.js";
 import type { Event, Phase } from "../../src/runs/schema.js";
 
 const RUN_ID = "2026-09-08T09-00-00_aggregate";
@@ -77,5 +77,53 @@ describe("runTotals", () => {
       { type: "run.end", run_id: RUN_ID, ts: "2026-09-08T09:10:00Z", cost: { tokens: 18000, duration_ms: 40000 } },
     ];
     expect(runTotals(events)).toEqual({ tokens: 18100, duration_ms: 40015 });
+  });
+});
+
+function rejection(gate: Phase): Event {
+  return {
+    type: "gate.decision",
+    run_id: RUN_ID,
+    ts: "2026-09-08T09:05:00Z",
+    gate,
+    actor: "human",
+    decision: "reject",
+    reason_inferred: "faltou cobertura",
+    cost: { tokens: 0, duration_ms: 0 },
+  };
+}
+
+describe("rejectionsByGate — FR-021/022", () => {
+  it("US4 AC1: 5 runs, plan reprovado em 2 deles ⇒ plan = 2 de 5", () => {
+    const runs: Event[][] = [
+      [decision("plan", 0, 0), rejection("plan")], // aprova e depois reprova plan no mesmo run
+      [decision("plan", 0, 0)], // só aprova
+      [rejection("plan")], // reprova
+      [decision("dev", 0, 0)], // outro gate, não conta pra plan
+      [], // run sem gate.decision nenhum
+    ];
+    const result = rejectionsByGate(runs);
+    expect(result.plan).toEqual({ n: 2, m: 5 });
+  });
+
+  it("US4 AC2: sem supressão por limiar — gate sem nenhuma rejeição ainda aparece com n=0", () => {
+    const runs: Event[][] = [[decision("spec", 0, 0)], [decision("spec", 0, 0)]];
+    const result = rejectionsByGate(runs);
+    expect(result.dev).toEqual({ n: 0, m: 2 });
+    expect(result.review).toEqual({ n: 0, m: 2 });
+  });
+
+  it("um run que reprova o mesmo gate mais de uma vez conta só 1 vez para aquele gate", () => {
+    const runs: Event[][] = [[rejection("review"), rejection("review")]];
+    const result = rejectionsByGate(runs);
+    expect(result.review).toEqual({ n: 1, m: 1 });
+  });
+
+  it("nenhum run ⇒ m=0 para todos os gates", () => {
+    const result = rejectionsByGate([]);
+    expect(result.spec).toEqual({ n: 0, m: 0 });
+    expect(result.plan).toEqual({ n: 0, m: 0 });
+    expect(result.dev).toEqual({ n: 0, m: 0 });
+    expect(result.review).toEqual({ n: 0, m: 0 });
   });
 });

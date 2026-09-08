@@ -1,4 +1,4 @@
-import type { Event, Phase } from "./schema.js";
+import { phaseSchema, type Event, type Phase } from "./schema.js";
 
 export interface GateCost {
   tokens: number;
@@ -39,4 +39,29 @@ function faseDe(event: Event): Phase | undefined {
   if (event.type === "agent.handoff") return event.phase;
   if (event.type === "gate.decision") return event.gate;
   return undefined;
+}
+
+export type RejectionsByGate = Record<Phase, { n: number; m: number }>;
+
+/**
+ * Todo gate entra no resultado com `m` = total de runs, mesmo sem nenhuma rejeição —
+ * é o leitor humano quem decide se N/M é significativo, não a agregação (sem limiar aqui).
+ * Um run conta no máximo uma vez por gate, ainda que tenha rejeitado o mesmo gate mais de uma vez.
+ */
+export function rejectionsByGate(runs: Event[][]): RejectionsByGate {
+  const m = runs.length;
+  const result = {} as RejectionsByGate;
+  for (const gate of phaseSchema.options) result[gate] = { n: 0, m };
+
+  for (const events of runs) {
+    const rejectedGates = new Set<Phase>();
+    for (const event of events) {
+      if (event.type === "gate.decision" && event.decision === "reject") {
+        rejectedGates.add(event.gate);
+      }
+    }
+    for (const gate of rejectedGates) result[gate].n += 1;
+  }
+
+  return result;
 }

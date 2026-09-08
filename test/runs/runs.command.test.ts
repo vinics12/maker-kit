@@ -92,3 +92,37 @@ describe("runRuns — caso feliz", () => {
     expect(output).toMatch(/dev: tokens=50 duration_ms=5/);
   });
 });
+
+describe("runRuns — seção L1 de rejeição por gate (US4 AC1/AC2)", () => {
+  it("3 runs com decisões variadas ⇒ contagem N de M exata por gate, sem supressão", async () => {
+    const target = await mkdtemp(join(tmpdir(), "maker-runs-cmd-l1-"));
+
+    const RUN_C = "2026-09-08T11-00-00_c";
+    const runA: Event[] = [
+      { type: "run.start", run_id: RUN_A, ts: "2026-09-08T09:00:00Z", cost: { tokens: 0, duration_ms: 0 } },
+      { type: "gate.decision", run_id: RUN_A, ts: "2026-09-08T09:04:00Z", gate: "plan", actor: "human", decision: "reject", reason_inferred: "faltou caso", cost: { tokens: 0, duration_ms: 5 } },
+      { type: "run.end", run_id: RUN_A, ts: "2026-09-08T09:05:00Z", cost: { tokens: 0, duration_ms: 0 } },
+    ];
+    const runB: Event[] = [
+      { type: "run.start", run_id: RUN_B, ts: "2026-09-08T10:00:00Z", cost: { tokens: 0, duration_ms: 0 } },
+      { type: "gate.decision", run_id: RUN_B, ts: "2026-09-08T10:01:00Z", gate: "plan", actor: "human", decision: "approve", reason_inferred: "ok", cost: { tokens: 0, duration_ms: 5 } },
+      { type: "run.end", run_id: RUN_B, ts: "2026-09-08T10:02:00Z", cost: { tokens: 0, duration_ms: 0 } },
+    ];
+    const runC: Event[] = [
+      { type: "run.start", run_id: RUN_C, ts: "2026-09-08T11:00:00Z", cost: { tokens: 0, duration_ms: 0 } },
+      { type: "gate.decision", run_id: RUN_C, ts: "2026-09-08T11:01:00Z", gate: "plan", actor: "human", decision: "reject", reason_inferred: "faltou teste", cost: { tokens: 0, duration_ms: 5 } },
+      { type: "run.end", run_id: RUN_C, ts: "2026-09-08T11:02:00Z", cost: { tokens: 0, duration_ms: 0 } },
+    ];
+    for (const e of [...runA, ...runB, ...runC]) await appendEvent(target, e);
+
+    await runRuns({ target });
+
+    const output = logs.join("\n");
+    // plan reprovado em 2 dos 3 runs (A e C rejeitam, B aprova).
+    expect(output).toMatch(/plan reprovou em 2 de 3 runs/);
+    // sem supressão por limiar: gates sem nenhuma rejeição também aparecem.
+    expect(output).toMatch(/spec reprovou em 0 de 3 runs/);
+    expect(output).toMatch(/dev reprovou em 0 de 3 runs/);
+    expect(output).toMatch(/review reprovou em 0 de 3 runs/);
+  });
+});
