@@ -5,6 +5,7 @@ import { runDoctor } from "./commands/doctor.js";
 import { runUpdate } from "./commands/update.js";
 import { runAdd } from "./commands/add.js";
 import { runRemove } from "./commands/remove.js";
+import { runRuns } from "./commands/runs.js";
 import { makerVersion } from "./util/version.js";
 
 const program = new Command();
@@ -60,6 +61,14 @@ program
   .option("-t, --target <dir>", "diretório do projeto (default: cwd)")
   .action(async (addon, opts) => {
     await runRemove(addon, opts);
+  });
+
+program
+  .command("runs")
+  .description("Lista runs registrados com custo/tempo por gate + total.")
+  .option("-t, --target <dir>", "diretório do projeto (default: cwd)")
+  .action(async (opts) => {
+    await runRuns(opts);
   });
 
 program.parseAsync(process.argv).catch((err: unknown) => {
