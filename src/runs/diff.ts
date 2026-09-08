@@ -6,7 +6,7 @@
  *
  * Seam com o orquestrador (plan.md §2): este módulo entrega só uma narração-
  * *stub* determinística (contagem +N/−M derivada do próprio diff) — nunca chama
- * LLM nem fabrica motivo (FR-018/019/020). A narração NL rica de `reason_inferred`
+ * LLM nem fabrica motivo. A narração NL rica de `reason_inferred`
  * é responsabilidade do agente orquestrador ao emitir `gate.decision`; aqui o
  * contrato é só "diff persistido + resumo determinístico do delta".
  */
@@ -84,7 +84,7 @@ function serializeHunks(hunks: HunkLine[]): string {
 
 /**
  * Narração-stub determinística: contagem de linhas adicionadas/removidas.
- * Não interpreta conteúdo — só resume o delta bruto (FR-018/020).
+ * Não interpreta conteúdo — só resume o delta bruto.
  */
 function summarizeDelta(hunks: HunkLine[]): string {
   const added = hunks.filter((h) => h.kind === "add").length;

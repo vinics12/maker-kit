@@ -8,9 +8,9 @@ export interface GateCost {
 export type CostByGate = Partial<Record<Phase, GateCost>>;
 
 /**
- * FR-011a: custo de um gate = soma de `agent.handoff` com `phase==G` mais
+ * Custo de um gate = soma de `agent.handoff` com `phase==G` mais
  * `gate.decision` com `gate==G`. Eventos de nível de run (`run.start`/`run.end`)
- * não carregam fase (INV-3) e ficam fora de qualquer gate — soma comutativa,
+ * não carregam fase e ficam fora de qualquer gate — soma comutativa,
  * então a ordem de leitura não altera o resultado.
  */
 export function costByGate(events: Event[]): CostByGate {

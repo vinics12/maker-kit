@@ -11,7 +11,7 @@ export interface RunsOptions {
 
 const GATES = phaseSchema.options; // ordem fixa (spec, plan, dev, review) — saída determinística
 
-/** Lista runs com custo/tempo por gate + total (FR-009..015). Leitura pura, nunca muta `.maker/runs/`. */
+/** Lista runs com custo/tempo por gate + total. Leitura pura, nunca muta `.maker/runs/`. */
 export async function runRuns(opts: RunsOptions): Promise<void> {
   const targetDir = resolve(opts.target ?? process.cwd());
   const files = await listRunFiles(targetDir);

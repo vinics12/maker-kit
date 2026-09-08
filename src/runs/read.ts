@@ -12,7 +12,7 @@ export interface RunFile {
 /**
  * Lista só `.jsonl` de topo (os diffs de gate ficam em subdiretórios
  * companheiros e não são runs) — leitura pura, nenhum `.maker/runs/`
- * ausente/vazio derruba o comando (FR-014).
+ * ausente/vazio derruba o comando.
  */
 export async function listRunFiles(target: string): Promise<RunFile[]> {
   const dir = join(target, RUNS_DIR);
@@ -29,7 +29,7 @@ export async function listRunFiles(target: string): Promise<RunFile[]> {
 }
 
 /**
- * Parse tolerante linha-a-linha (FR-013): uma linha truncada (ex.: escrita
+ * Parse tolerante linha-a-linha: uma linha truncada (ex.: escrita
  * interrompida) ou inválida não pode derrubar a leitura das demais — só é
  * descartada silenciosamente.
  */
