@@ -217,6 +217,7 @@ Em cada gate, o pipeline compara o artefato **antes** e **depois** da intervenç
 
 - **L2 — propor emendas à constitution** a partir de rejeições recorrentes: **fora de escopo**. Precisa de volume; visão, não escopo.
 - **Resumabilidade de pipeline**: **fora de escopo**. Exige serializar estado, não só logar eventos — Fase 2.
-- **Telemetria remota / distribuição de add-ons**: **fora de escopo**.
+- **Telemetria remota / distribuição de add-ons**: **fora de escopo**. Nenhum dado sai da máquina de forma autônoma na Fase 1.
+- **Export estruturado / programático** (flag `maker runs --json`, CSV, arquivo de relatório consolidado): **fora de escopo da Fase 1** (decisão de gate, 2026-09-08). O consumo na Fase 1 é: (a) `maker runs` no **terminal** para leitura humana, e (b) os próprios `.maker/runs/<run-id>.jsonl` como **substrato machine-readable cru** (uma linha JSON por evento, greppável/pipeável). Uma superfície de export estruturada é candidata a fase posterior, não escopo agora.
 - **Observability do app-alvo**: **fora de escopo** — isto é observability do **pipeline** `/run-spec`, não do produto que o consumidor constrói (aquilo é o add-on `observability` do backlog).
 - Um dogfood verde prova **usabilidade e generalidade** do motor, **não qualidade** do output. Não superinterpretar.
