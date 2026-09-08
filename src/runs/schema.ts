@@ -41,7 +41,7 @@ export const gateDecisionSchema = z
   .strict();
 
 // discriminatedUnion + .strict() por variante é o que impede `phase` vazar para
-// run-level e campos extras em qualquer tipo — codifica FR-007a/INV-3/INV-4 no schema.
+// run-level e campos extras em qualquer tipo — a atribuição custo→fase fica inderrubável.
 export const eventSchema = z.discriminatedUnion("type", [
   runStartSchema,
   agentHandoffSchema,
