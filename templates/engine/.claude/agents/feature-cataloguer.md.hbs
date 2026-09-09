@@ -100,6 +100,26 @@ Regras de conteúdo:
 - Ao **atualizar** um arquivo existente, preserve o que continua válido; ajuste apenas o que mudou
   e atualize a linha "Última atualização / Specs / PRs".
 
+# Promoção do contrato/modelo e poda de combustível (Gate 4)
+
+Antes de fechar, aplique a **política de retenção de artefatos** sobre `specs/NNN-<slug>/`. Só
+`spec.md` é artefato de spec durável; o resto é combustível de execução ou detalhe que já vive
+melhor em outro lugar. Sua parte:
+
+1. **Promova o durável do contrato/modelo para o catálogo.** Leia `data-model.md` e `contracts/*.md`
+   (se existirem) e destile os **invariantes e regras em linguagem de negócio** para a seção
+   "Entidades e regras de negócio" do feature-doc — sempre conceitual (nunca schema, nome de campo
+   ou assinatura). O contrato executável já mora em código+testes; não o copie.
+2. **Liste o que deve ser podado** de `specs/NNN-<slug>/` (não delete você mesmo — quem commita no
+   Gate 4 remove):
+   - **Combustível (efêmero):** `tasks.md`, `briefs/` inteiro, e as seções de execução do
+     `plan.md` (paralelismo, dev slots, boundary check).
+   - **Já promovido:** `contracts/`, `data-model.md`.
+   - **Mantém:** `spec.md` (registro de intenção) e, quando ainda útil como regressão manual,
+     `acceptance-guide.md` — sinalize o que dele já virou teste automatizado.
+
+Emita essa lista de poda no bloco de Saída, sob `PRUNE:` (um path por linha).
+
 # INDEX.md
 
 Mantenha `docs/features/INDEX.md` como índice navegável — uma linha por área, no padrão do
@@ -120,6 +140,7 @@ Crie o `INDEX.md` se ainda não existir. Garanta que toda área com arquivo tenh
 
 Ao terminar, emita:
 - A lista de arquivos criados/atualizados em `docs/features/`.
+- `PRUNE:` — os paths de combustível/artefatos já promovidos a podar (um por linha; vazio se nada).
 - `VERDICT: CATALOGUED` — registro concluído.
 
 Não crie branch, não commite (o orquestrador cuida do commit no fluxo do Gate 4; no backfill, quem
