@@ -1,0 +1,16 @@
+{
+  "project": {
+    "name": "maker",
+    "slug": "maker"
+  },
+  "layout": {
+    "frontendGlobs": [],
+    "backendGlobs": ["src/**"]
+  },
+  "commands": {
+    "verify": "pnpm typecheck && pnpm test && pnpm audit:coupling",
+    "build": "pnpm build",
+    "test": "pnpm test",
+    "dev": "pnpm dev"
+  }
+}

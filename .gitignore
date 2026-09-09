@@ -6,3 +6,17 @@ coverage/
 .turbo/
 *.tsbuildinfo
 *.tgz
+
+# Dogfooding self-host: o pipeline renderizado por `maker init` é um artefato regenerável
+# (derivado de templates/engine/), não código-fonte do produto. Versionamos só os INPUTS
+# duráveis escritos à mão — .specify/memory/ e maker.config.json — e ignoramos o resto.
+# Materialize com `maker init`; atualize com `maker update` (preserva a memória editada).
+/.specify/*
+!/.specify/memory/
+/.claude/skills/
+/.claude/agents/
+/.maker/
+# arquivos de raiz renderizados pelo `maker init` (pipeline, não produto)
+/CLAUDE.md
+/.mcp.json
+/.gitattributes
