@@ -5,7 +5,7 @@ O `maker` se constrói com o próprio `maker` (**dogfooding**): uma feature nova
 caminho e as convenções.
 
 > Pré-requisitos: Node ≥ 18, `pnpm`, Git. No Windows, faça tudo dentro do **WSL2** (o workflow gerado
-> usa scripts POSIX). Veja a seção "Requisitos por SO" do [README](README.md).
+> usa scripts POSIX). Veja a seção "Requisitos por sistema operacional" do [README](README.md).
 
 ---
 
@@ -80,7 +80,9 @@ Os **4 gates humanos** (PR2, não-negociável):
 Em features **MINI**, Gate 1 e Gate 2 são fundidos (não removidos). A referência viva do fluxo é a
 skill `run-spec`
 ([templates/engine/.claude/skills/run-spec/SKILL.md.hbs](templates/engine/.claude/skills/run-spec/SKILL.md.hbs));
-o exemplo real ponta-a-ponta é [`specs/001-event-stream/`](specs/001-event-stream/).
+o exemplo real ponta-a-ponta é [`specs/001-event-stream/`](specs/001-event-stream/) — **anterior a esta
+política de artefatos** (§4), por isso mantido inteiro (com `tasks.md`, `briefs/`, `contracts/`,
+`data-model.md`) como referência do fluxo completo.
 
 ---
 
@@ -134,6 +136,9 @@ os arquivos junto com o Tier 1.
 **Estado final em `main` após o Gate 4:** `specs/NNN-*/spec.md` + `docs/features/*` + `src/`/`test/`
 — nada de andaime de execução. O `feature-cataloguer` emite a lista de arquivos a podar; o
 orquestrador/humano remove no commit do Gate 4.
+
+> Exceção histórica: `specs/001-event-stream/` é **anterior** a esta política e foi mantida inteira
+> como exemplo de referência do fluxo — não a tome como o estado-alvo de uma feature nova.
 
 ---
 
