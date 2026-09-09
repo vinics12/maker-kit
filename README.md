@@ -242,6 +242,10 @@ preservados.
 
 ## Desenvolvimento
 
+> Contribuindo? Leia o **[CONTRIBUTING.md](CONTRIBUTING.md)** — os dois níveis de contribuição
+> (motor × metodologia), o caminho de uma feature via `/run-spec` (dogfooding self-host), as
+> convenções de branch/commit/release e a política de artefatos (combustível vs. documentação).
+
 ```bash
 pnpm install
 pnpm build            # tsup → dist/cli.js
