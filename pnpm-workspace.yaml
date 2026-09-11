@@ -1,0 +1,7 @@
+# esbuild traz seu binário nativo via optional dep de plataforma — não precisa do build-script
+# (postinstall). Sob pnpm 11 o "deps status check" trata build-scripts ignorados como ERRO e derruba
+# `pnpm build/test/audit` (e o CI) com ERR_PNPM_IGNORED_BUILDS. Declarar esbuild:false aqui é a decisão
+# canônica: silencia o erro sem rodar o postinstall. NÃO reintroduza pnpm.onlyBuiltDependencies no
+# package.json — declarar a decisão em dois lugares é contraditório sob pnpm 11.
+allowBuilds:
+  esbuild: false
