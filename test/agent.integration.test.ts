@@ -12,6 +12,7 @@ import { applyAddon } from "../src/addons/apply.js";
 import { validateAgentIntegration } from "../src/agents/validate.js";
 
 const FIXTURE = join(__dirname, "..", "fixtures", "example.config.json");
+const ANSI_ESCAPE = /\x1B(?:[@-_]|\[[0-?]*[ -/]*[@-~])/g;
 
 async function filesUnder(dir: string): Promise<string[]> {
   const files: string[] = [];
@@ -112,8 +113,9 @@ describe("integrações de agentes", () => {
     } finally {
       console.log = originalLog;
     }
-    expect(messages.join("\n")).toContain("claude: não habilitada");
-    expect(messages.join("\n")).toMatch(/codex: .*íntegra · \d+ skills · 12 agentes/);
+    const output = messages.join("\n").replace(ANSI_ESCAPE, "");
+    expect(output).toContain("claude: não habilitada");
+    expect(output).toMatch(/codex: .*íntegra · \d+ skills · 12 agentes/);
 
     await writeFile(join(target, ".codex/agents/architect.toml"), "name = [toml quebrado", "utf-8");
     const validation = await validateAgentIntegration(target, "codex");
