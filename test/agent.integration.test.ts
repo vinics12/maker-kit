@@ -12,7 +12,7 @@ import { applyAddon } from "../src/addons/apply.js";
 import { validateAgentIntegration } from "../src/agents/validate.js";
 
 const FIXTURE = join(__dirname, "..", "fixtures", "example.config.json");
-const ANSI_ESCAPE = /\x1B(?:[@-_]|\[[0-?]*[ -/]*[@-~])/g;
+const ANSI_ESCAPE = /\x1B(?:\[[0-?]*[ -/]*[@-~]|[@-_])/g;
 
 async function filesUnder(dir: string): Promise<string[]> {
   const files: string[] = [];
