@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { listAddonCatalog } from "../src/addons/loader.js";
@@ -94,5 +94,15 @@ describe("maker list", () => {
     expect(output).toContain("saas · Base SaaS · v0.1.0 · degraded");
     expect(output).toContain("problema: .maker/addons deveria ser um diretório");
     expect(output).toContain("próximo: maker doctor");
+  });
+
+  it("classifica symlink quebrado no diretório de states como degradado", async () => {
+    const target = await mkdtemp(join(tmpdir(), "maker-list-state-link-"));
+    await runInit({ target, config: FIXTURE, yes: true });
+    await symlink(join(target, "diretório-ausente"), join(target, ".maker", "addons"));
+
+    const output = await outputOf(() => runList({ target }));
+    expect(output).toContain("saas · Base SaaS · v0.1.0 · degraded");
+    expect(output).toContain("problema: .maker/addons deveria ser um diretório");
   });
 });

@@ -1207,11 +1207,20 @@ async function classifyAddons(targetDir, catalog) {
 }
 async function listStateIds(targetDir) {
   const dir = join14(targetDir, ".maker", "addons");
-  if (!existsSync11(dir)) return { ids: [] };
+  let metadata;
   try {
-    if (!(await lstat(dir)).isDirectory()) {
-      return { ids: [], issue: ".maker/addons deveria ser um diret\xF3rio" };
-    }
+    metadata = await lstat(dir);
+  } catch (error) {
+    if (error.code === "ENOENT") return { ids: [] };
+    return {
+      ids: [],
+      issue: `n\xE3o foi poss\xEDvel inspecionar .maker/addons: ${error instanceof Error ? error.message : String(error)}`
+    };
+  }
+  if (!metadata.isDirectory()) {
+    return { ids: [], issue: ".maker/addons deveria ser um diret\xF3rio" };
+  }
+  try {
     const ids = (await readdir3(dir, { withFileTypes: true })).filter((entry) => entry.isFile() && entry.name.endsWith(".json")).map((entry) => basename2(entry.name, ".json")).sort();
     return { ids };
   } catch (error) {

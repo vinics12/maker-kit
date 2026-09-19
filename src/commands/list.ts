@@ -87,11 +87,20 @@ async function listStateIds(
   targetDir: string,
 ): Promise<{ ids: string[]; issue?: string }> {
   const dir = join(targetDir, ".maker", "addons");
-  if (!existsSync(dir)) return { ids: [] };
+  let metadata: Awaited<ReturnType<typeof lstat>>;
   try {
-    if (!(await lstat(dir)).isDirectory()) {
-      return { ids: [], issue: ".maker/addons deveria ser um diretório" };
-    }
+    metadata = await lstat(dir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { ids: [] };
+    return {
+      ids: [],
+      issue: `não foi possível inspecionar .maker/addons: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+  if (!metadata.isDirectory()) {
+    return { ids: [], issue: ".maker/addons deveria ser um diretório" };
+  }
+  try {
     const ids = (await readdir(dir, { withFileTypes: true }))
       .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
       .map((entry) => basename(entry.name, ".json"))
