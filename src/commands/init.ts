@@ -22,6 +22,7 @@ export interface InitOptions {
 interface InitCollision {
   path: string;
   reason: string;
+  removeBeforeApply: boolean;
 }
 
 export async function runInit(opts: InitOptions): Promise<void> {
@@ -60,6 +61,11 @@ export async function runInit(opts: InitOptions): Promise<void> {
     console.log(pc.yellow("\n⚠ --force substituirá estes caminhos:"));
     for (const collision of collisions) {
       console.log(pc.yellow(`  ${collision.path} (${collision.reason})`));
+    }
+    for (const collision of collisions) {
+      if (collision.removeBeforeApply) {
+        await rm(join(targetDir, collision.path), { recursive: true, force: true });
+      }
     }
   }
 
@@ -126,6 +132,7 @@ async function findInitCollisions(
           collisions.set(ancestor, {
             path: ancestor,
             reason: "deveria ser um diretório",
+            removeBeforeApply: true,
           });
           blockedByAncestor = true;
           break;
@@ -140,6 +147,7 @@ async function findInitCollisions(
         collisions.set(file.rel, {
           path: file.rel,
           reason: "deveria ser um arquivo regular",
+          removeBeforeApply: true,
         });
         continue;
       }
@@ -148,7 +156,11 @@ async function findInitCollisions(
         readFile(join(staging, file.rel)),
       ]);
       if (!current.equals(rendered)) {
-        collisions.set(file.rel, { path: file.rel, reason: "conteúdo diferente" });
+        collisions.set(file.rel, {
+          path: file.rel,
+          reason: "conteúdo diferente",
+          removeBeforeApply: false,
+        });
       }
     }
 

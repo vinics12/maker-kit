@@ -450,6 +450,11 @@ Revise os arquivos ou execute novamente com --force para substitu\xED-los; nenhu
     for (const collision of collisions) {
       console.log(pc.yellow(`  ${collision.path} (${collision.reason})`));
     }
+    for (const collision of collisions) {
+      if (collision.removeBeforeApply) {
+        await rm(join6(targetDir, collision.path), { recursive: true, force: true });
+      }
+    }
   }
   const applied = await applyEngine(targetDir, ctx, agents);
   const manifest = {
@@ -502,7 +507,8 @@ async function findInitCollisions(targetDir, ctx, agents) {
         if (metadata2 && !metadata2.isDirectory()) {
           collisions.set(ancestor, {
             path: ancestor,
-            reason: "deveria ser um diret\xF3rio"
+            reason: "deveria ser um diret\xF3rio",
+            removeBeforeApply: true
           });
           blockedByAncestor = true;
           break;
@@ -515,7 +521,8 @@ async function findInitCollisions(targetDir, ctx, agents) {
       if (!metadata.isFile()) {
         collisions.set(file.rel, {
           path: file.rel,
-          reason: "deveria ser um arquivo regular"
+          reason: "deveria ser um arquivo regular",
+          removeBeforeApply: true
         });
         continue;
       }
@@ -524,7 +531,11 @@ async function findInitCollisions(targetDir, ctx, agents) {
         readFile5(join6(staging, file.rel))
       ]);
       if (!current.equals(rendered)) {
-        collisions.set(file.rel, { path: file.rel, reason: "conte\xFAdo diferente" });
+        collisions.set(file.rel, {
+          path: file.rel,
+          reason: "conte\xFAdo diferente",
+          removeBeforeApply: false
+        });
       }
     }
     return [...collisions.values()].sort((a, b) => a.path.localeCompare(b.path));

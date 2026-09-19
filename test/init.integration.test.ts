@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll } from "vitest";
-import { mkdir, mkdtemp, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, readdir, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { existsSync } from "node:fs";
@@ -170,5 +170,19 @@ describe("maker init (preflight de colisões)", () => {
     expect(await readFile(join(target, "arquivo-local.txt"), "utf-8")).toBe("preservar\n");
     const manifest = await readManifest(target);
     expect((await verifyManifest(target, manifest!)).ok).toBe(true);
+  });
+
+  it("--force substitui symlink sem seguir nem alterar seu destino", async () => {
+    const target = await mkdtemp(join(tmpdir(), "maker-init-symlink-"));
+    const outside = await mkdtemp(join(tmpdir(), "maker-init-outside-"));
+    const externalFile = join(outside, "CLAUDE.md");
+    await writeFile(externalFile, "conteúdo externo\n");
+    await symlink(externalFile, join(target, "CLAUDE.md"));
+
+    await runInit({ target, config: FIXTURE, yes: true, force: true });
+
+    expect(await readFile(externalFile, "utf-8")).toBe("conteúdo externo\n");
+    expect((await lstat(join(target, "CLAUDE.md"))).isSymbolicLink()).toBe(false);
+    expect(await readFile(join(target, "CLAUDE.md"), "utf-8")).toContain("Nimbus Ledger");
   });
 });
