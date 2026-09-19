@@ -1146,7 +1146,7 @@ async function runRuns(opts) {
 
 // src/commands/list.ts
 import { existsSync as existsSync11 } from "fs";
-import { readdir as readdir3 } from "fs/promises";
+import { lstat, readdir as readdir3 } from "fs/promises";
 import { basename as basename2, join as join14, resolve as resolve8 } from "path";
 import pc7 from "picocolors";
 async function runList(opts) {
@@ -1162,11 +1162,14 @@ async function runList(opts) {
 }
 async function classifyAddons(targetDir, catalog) {
   const byId = new Map(catalog.map((entry) => [entry.id, entry]));
-  const stateIds = await listStateIds(targetDir);
-  const ids = [.../* @__PURE__ */ new Set([...byId.keys(), ...stateIds])].sort();
+  const stateIndex = await listStateIds(targetDir);
+  const ids = [.../* @__PURE__ */ new Set([...byId.keys(), ...stateIndex.ids])].sort();
   return Promise.all(
     ids.map(async (id) => {
       const entry = byId.get(id) ?? null;
+      if (stateIndex.issue) {
+        return { id, catalog: entry, status: "degraded", issue: stateIndex.issue };
+      }
       if (!entry?.manifest) {
         return {
           id,
@@ -1204,8 +1207,19 @@ async function classifyAddons(targetDir, catalog) {
 }
 async function listStateIds(targetDir) {
   const dir = join14(targetDir, ".maker", "addons");
-  if (!existsSync11(dir)) return [];
-  return (await readdir3(dir, { withFileTypes: true })).filter((entry) => entry.isFile() && entry.name.endsWith(".json")).map((entry) => basename2(entry.name, ".json")).sort();
+  if (!existsSync11(dir)) return { ids: [] };
+  try {
+    if (!(await lstat(dir)).isDirectory()) {
+      return { ids: [], issue: ".maker/addons deveria ser um diret\xF3rio" };
+    }
+    const ids = (await readdir3(dir, { withFileTypes: true })).filter((entry) => entry.isFile() && entry.name.endsWith(".json")).map((entry) => basename2(entry.name, ".json")).sort();
+    return { ids };
+  } catch (error) {
+    return {
+      ids: [],
+      issue: `n\xE3o foi poss\xEDvel ler .maker/addons: ${error instanceof Error ? error.message : String(error)}`
+    };
+  }
 }
 function printAddon(addon) {
   const manifest = addon.catalog?.manifest;

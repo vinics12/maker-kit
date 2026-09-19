@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { readdir } from "node:fs/promises";
+import { lstat, readdir } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import pc from "picocolors";
 import { listAddonCatalog, type AddonCatalogEntry } from "../addons/loader.js";
@@ -37,12 +37,15 @@ async function classifyAddons(
   catalog: AddonCatalogEntry[],
 ): Promise<ListedAddon[]> {
   const byId = new Map(catalog.map((entry) => [entry.id, entry]));
-  const stateIds = await listStateIds(targetDir);
-  const ids = [...new Set([...byId.keys(), ...stateIds])].sort();
+  const stateIndex = await listStateIds(targetDir);
+  const ids = [...new Set([...byId.keys(), ...stateIndex.ids])].sort();
 
   return Promise.all(
     ids.map(async (id): Promise<ListedAddon> => {
       const entry = byId.get(id) ?? null;
+      if (stateIndex.issue) {
+        return { id, catalog: entry, status: "degraded", issue: stateIndex.issue };
+      }
       if (!entry?.manifest) {
         return {
           id,
@@ -80,13 +83,26 @@ async function classifyAddons(
   );
 }
 
-async function listStateIds(targetDir: string): Promise<string[]> {
+async function listStateIds(
+  targetDir: string,
+): Promise<{ ids: string[]; issue?: string }> {
   const dir = join(targetDir, ".maker", "addons");
-  if (!existsSync(dir)) return [];
-  return (await readdir(dir, { withFileTypes: true }))
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
-    .map((entry) => basename(entry.name, ".json"))
-    .sort();
+  if (!existsSync(dir)) return { ids: [] };
+  try {
+    if (!(await lstat(dir)).isDirectory()) {
+      return { ids: [], issue: ".maker/addons deveria ser um diretório" };
+    }
+    const ids = (await readdir(dir, { withFileTypes: true }))
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
+      .map((entry) => basename(entry.name, ".json"))
+      .sort();
+    return { ids };
+  } catch (error) {
+    return {
+      ids: [],
+      issue: `não foi possível ler .maker/addons: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
 }
 
 function printAddon(addon: ListedAddon): void {

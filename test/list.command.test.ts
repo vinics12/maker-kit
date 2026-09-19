@@ -84,4 +84,15 @@ describe("maker list", () => {
     expect(output).toContain("saas · Base SaaS · v0.1.0 · degraded");
     expect(output).toContain("state v9.9.9 difere do catálogo v0.1.0");
   });
+
+  it("continua a listagem quando o diretório de states tem tipo inválido", async () => {
+    const target = await mkdtemp(join(tmpdir(), "maker-list-state-dir-"));
+    await runInit({ target, config: FIXTURE, yes: true });
+    await writeFile(join(target, ".maker", "addons"), "não é diretório\n", "utf-8");
+
+    const output = await outputOf(() => runList({ target }));
+    expect(output).toContain("saas · Base SaaS · v0.1.0 · degraded");
+    expect(output).toContain("problema: .maker/addons deveria ser um diretório");
+    expect(output).toContain("próximo: maker doctor");
+  });
 });
