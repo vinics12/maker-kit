@@ -12,6 +12,8 @@ export interface ManifestEntry {
   hash: string;
   /** origem lógica: "engine" (Fase 1) ou o id de um add-on (Fase 2). */
   source: string;
+  /** Conteúdo upstream exato usado como ancestral do próximo 3-way merge. */
+  baseHash?: string;
 }
 
 export interface Manifest {

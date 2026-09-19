@@ -4,11 +4,13 @@ import { tmpdir } from "node:os";
 import pc from "picocolors";
 import { loadConfig } from "../config/load.js";
 import { buildContext } from "../render/engine.js";
-import { writeManifest, type Manifest } from "../render/manifest.js";
+import { type Manifest } from "../render/manifest.js";
 import { makerVersion } from "../util/version.js";
 import { applyEngine } from "../util/engine-scaffold.js";
 import { readManifest, enabledAgents } from "../render/manifest.js";
 import { parseConfig, type AgentProvider } from "../config/schema.js";
+import { createPlan, formatPlan, inspectTarget, planWrite, type PlannedChange } from "../changes/plan.js";
+import { applyChangePlan, assertNoPendingTransactions } from "../changes/transaction.js";
 
 export interface InitOptions {
   target?: string;
@@ -17,6 +19,7 @@ export interface InitOptions {
   name?: string;
   agent?: AgentProvider;
   force?: boolean;
+  dryRun?: boolean;
 }
 
 interface InitCollision {
@@ -27,6 +30,7 @@ interface InitCollision {
 
 export async function runInit(opts: InitOptions): Promise<void> {
   const targetDir = resolve(opts.target ?? process.cwd());
+  if (opts.dryRun) await assertNoPendingTransactions(targetDir);
   const priorManifest = await readManifest(targetDir);
   const loadedConfig = await loadConfig({
     targetDir,
@@ -49,7 +53,7 @@ export async function runInit(opts: InitOptions): Promise<void> {
   const ctx = buildContext(config);
 
   const collisions = await findInitCollisions(targetDir, ctx, agents);
-  if (collisions.length && !opts.force) {
+  if (collisions.length && !opts.force && !opts.dryRun) {
     throw new Error(
       "A instalação não foi iniciada porque estes caminhos possuem conteúdo diferente ou " +
       `estrutura incompatível:\n${formatCollisions(collisions)}\n` +
@@ -57,30 +61,102 @@ export async function runInit(opts: InitOptions): Promise<void> {
       "nenhuma alteração foi feita.",
     );
   }
-  if (collisions.length) {
+  if (collisions.length && opts.force && !opts.dryRun) {
     console.log(pc.yellow("\n⚠ --force substituirá estes caminhos:"));
     for (const collision of collisions) {
       console.log(pc.yellow(`  ${collision.path} (${collision.reason})`));
     }
-    for (const collision of collisions) {
-      if (collision.removeBeforeApply) {
-        await rm(join(targetDir, collision.path), { recursive: true, force: true });
-      }
-    }
   }
 
-  const applied = await applyEngine(targetDir, ctx, agents);
+  const staging = await mkdtemp(join(tmpdir(), "maker-init-plan-"));
+  const changes: PlannedChange[] = [];
+  const renderedByPath = new Map<string, Buffer>();
+  let applied: Awaited<ReturnType<typeof applyEngine>>;
+  try {
+    applied = await applyEngine(staging, ctx, agents);
+    const blocked = new Set(collisions.map((collision) => collision.path));
+    if (!opts.force) {
+      for (const collision of collisions) {
+        const current = await inspectTarget(targetDir, collision.path);
+        changes.push({
+          path: collision.path,
+          action: "conflict",
+          source: "engine",
+          reason: collision.reason,
+          expectedHash: current.hash,
+          expectedKind: current.kind,
+        });
+      }
+    }
+    if (opts.force) {
+      for (const collision of collisions.filter((item) => item.removeBeforeApply)) {
+        if (applied.some((file) => file.rel === collision.path)) continue;
+        const current = await inspectTarget(targetDir, collision.path);
+        changes.push({
+          path: collision.path,
+          action: "remove",
+          source: "engine",
+          reason: collision.reason,
+          expectedHash: current.hash,
+          expectedKind: current.kind,
+        });
+      }
+    }
+    for (const file of applied) {
+      const blockedBy = [...blocked].find(
+        (path) => file.rel === path || file.rel.startsWith(`${path}/`),
+      );
+      if (blockedBy && !opts.force) continue;
+      const rendered = await readFile(join(staging, file.rel));
+      renderedByPath.set(file.rel, rendered);
+      changes.push(await planWrite({
+        targetDir,
+        path: file.rel,
+        content: rendered,
+        source: file.entry.source,
+        reason: "conteúdo renderizado pelo maker",
+        force: !!opts.force,
+      }));
+    }
+  } finally {
+    await rm(staging, { recursive: true, force: true });
+  }
 
   const manifest: Manifest = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     makerVersion: makerVersion(),
     project: { name: config.project.name, slug: config.project.slug! },
     config,
     agents,
     installedAt: priorManifest?.installedAt ?? new Date().toISOString(),
-    files: Object.fromEntries(applied.map((a) => [a.rel, a.entry])),
+    files: Object.fromEntries(applied.map((a) => [a.rel, { ...a.entry, baseHash: a.entry.hash }])),
   };
-  await writeManifest(targetDir, manifest);
+  const bases = new Map<string, Buffer>();
+  for (const file of applied) bases.set(file.entry.hash, renderedByPath.get(file.rel)!);
+  for (const [hash, content] of bases) {
+    changes.push(await planWrite({
+      targetDir,
+      path: `.maker/bases/${hash}`,
+      content,
+      source: "metadata",
+      reason: "base upstream inicial",
+    }));
+  }
+  changes.push(await planWrite({
+    targetDir,
+    path: ".maker/manifest.json",
+    content: JSON.stringify(manifest, null, 2) + "\n",
+    source: "metadata",
+    reason: "publicar manifest da instalação",
+    force: true,
+  }));
+  const plan = createPlan(targetDir, changes);
+  if (opts.dryRun) {
+    console.log(formatPlan(plan));
+    if (plan.changes.some((change) => change.action === "conflict")) process.exitCode = 1;
+    return;
+  }
+  await applyChangePlan(plan);
 
   console.log(pc.green(`\n✓ Motor instalado em ${targetDir}`));
   console.log(pc.dim(`  ${applied.length} arquivos · projeto "${config.project.name}"`));

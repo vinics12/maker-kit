@@ -1,11 +1,9 @@
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { rm } from "node:fs/promises";
+import { join } from "node:path";
 import { renderRaw } from "../render/engine.js";
 import {
   readManifest,
-  writeManifest,
   sha256,
   manifestKey,
   type Manifest,
@@ -14,11 +12,12 @@ import { addonDir } from "./loader.js";
 import type { AddonManifest } from "./schema.js";
 import { upsertBlock, stripBlock } from "./inject.js";
 import {
-  writeAddonState,
   readAddonState,
-  deleteAddonState,
+  addonStatePath,
   type AddonState,
 } from "./state.js";
+import { createPlan, formatPlan, inspectTarget, planWrite, type ChangePlan, type PlannedChange } from "../changes/plan.js";
+import { applyChangePlan, assertNoPendingTransactions } from "../changes/transaction.js";
 
 const CONSTITUTION = ".specify/memory/constitution.md";
 const PLACEHOLDER = "_(nenhum princípio de projeto definido ainda)_";
@@ -36,30 +35,23 @@ async function renderFrom(dir: string, rel: string, ctx: object): Promise<string
   return rel.endsWith(".hbs") ? renderRaw(raw, ctx) : raw;
 }
 
-/** Atualiza (ou insere) a entrada do manifest para um arquivo tocado pelo add-on. */
-async function touchManifest(
-  manifest: Manifest,
-  targetDir: string,
-  absPath: string,
-  source: string,
-): Promise<void> {
-  const hash = sha256(await readFile(absPath));
-  manifest.files[manifestKey(targetDir, absPath)] = { hash, source };
-}
-
 export async function applyAddon(
   targetDir: string,
   addon: AddonManifest,
   knobs: Record<string, string>,
-): Promise<{ injectedTargets: string[]; createdFiles: string[] }> {
-  const manifest = await readManifest(targetDir);
-  if (!manifest) {
+  options: { dryRun?: boolean } = {},
+): Promise<{ injectedTargets: string[]; createdFiles: string[]; plan: ChangePlan }> {
+  if (options.dryRun) await assertNoPendingTransactions(targetDir);
+  const currentManifest = await readManifest(targetDir);
+  if (!currentManifest) {
     throw new Error(`Nenhum install do maker em ${targetDir} — rode 'maker init' antes de add-ons.`);
   }
+  const manifest: Manifest = structuredClone(currentManifest);
   const dir = addonDir(addon.id);
   const ctx = addonContext(manifest, knobs);
   const injectedTargets: string[] = [];
   const createdFiles: { path: string; hash: string }[] = [];
+  const changes: PlannedChange[] = [];
 
   // Reaplicação: arquivos que ESTE add-on já criou são "nossos" e podem ser sobrescritos;
   // arquivos alheios de mesmo nome são preservados.
@@ -78,8 +70,8 @@ export async function applyAddon(
       replacePlaceholder: PLACEHOLDER,
       beforeHeading: "## Governance",
     });
-    await writeFile(absConst, next, "utf-8");
-    await touchManifest(manifest, targetDir, absConst, `addon:${addon.id}`);
+    changes.push(await planWrite({ targetDir, path: CONSTITUTION, content: next, source: `addon:${addon.id}`, reason: "injetar princípios do add-on", force: true }));
+    manifest.files[CONSTITUTION] = { hash: sha256(next), source: `addon:${addon.id}` };
     injectedTargets.push(CONSTITUTION);
   }
 
@@ -93,8 +85,8 @@ export async function applyAddon(
     }
     const block = (await renderFrom(dir, frag.file, ctx)).trim();
     const next = upsertBlock(await readFile(abs, "utf-8"), addon.id, block);
-    await writeFile(abs, next, "utf-8");
-    await touchManifest(manifest, targetDir, abs, `addon:${addon.id}`);
+    changes.push(await planWrite({ targetDir, path: rel, content: next, source: `addon:${addon.id}`, reason: "injetar fragmento do add-on", force: true }));
+    manifest.files[rel] = { hash: sha256(next), source: `addon:${addon.id}` };
     injectedTargets.push(rel);
   }
 
@@ -106,14 +98,11 @@ export async function applyAddon(
       continue;
     }
     const content = await renderFrom(dir, f.from, ctx);
-    await mkdir(dirname(abs), { recursive: true });
-    await writeFile(abs, content, "utf-8");
     const hash = sha256(Buffer.from(content, "utf-8"));
     manifest.files[manifestKey(targetDir, abs)] = { hash, source: `addon:${addon.id}` };
     createdFiles.push({ path: f.to, hash });
+    changes.push(await planWrite({ targetDir, path: f.to, content, source: `addon:${addon.id}`, reason: "arquivo criado pelo add-on", force: owned.has(f.to) }));
   }
-
-  await writeManifest(targetDir, manifest);
 
   const state: AddonState = {
     id: addon.id,
@@ -123,15 +112,21 @@ export async function applyAddon(
     createdFiles,
     injectedTargets,
   };
-  await writeAddonState(targetDir, state);
-
-  return { injectedTargets, createdFiles: createdFiles.map((c) => c.path) };
+  changes.push(await planWrite({ targetDir, path: ".maker/manifest.json", content: JSON.stringify(manifest, null, 2) + "\n", source: "metadata", reason: "publicar manifest do add-on", force: true }));
+  const stateRel = manifestKey(targetDir, addonStatePath(targetDir, addon.id));
+  changes.push(await planWrite({ targetDir, path: stateRel, content: JSON.stringify(state, null, 2) + "\n", source: "metadata", reason: "publicar state do add-on", force: true }));
+  const plan = createPlan(targetDir, changes);
+  if (options.dryRun) console.log(formatPlan(plan));
+  else await applyChangePlan(plan);
+  return { injectedTargets, createdFiles: createdFiles.map((c) => c.path), plan };
 }
 
 export async function removeAddon(
   targetDir: string,
   id: string,
-): Promise<{ strippedTargets: string[]; deletedFiles: string[]; keptFiles: string[] }> {
+  options: { dryRun?: boolean } = {},
+): Promise<{ strippedTargets: string[]; deletedFiles: string[]; keptFiles: string[]; plan: ChangePlan }> {
+  if (options.dryRun) await assertNoPendingTransactions(targetDir);
   const state = await readAddonState(targetDir, id);
   if (!state) throw new Error(`Add-on "${id}" não está aplicado em ${targetDir}.`);
   const manifest = await readManifest(targetDir);
@@ -139,14 +134,15 @@ export async function removeAddon(
   const strippedTargets: string[] = [];
   const deletedFiles: string[] = [];
   const keptFiles: string[] = [];
+  const changes: PlannedChange[] = [];
 
   // 1. Remove os blocos injetados dos arquivos do motor.
   for (const rel of state.injectedTargets) {
     const abs = join(targetDir, rel);
     if (!existsSync(abs)) continue;
     const next = stripBlock(await readFile(abs, "utf-8"), id);
-    await writeFile(abs, next, "utf-8");
-    if (manifest) await touchManifest(manifest, targetDir, abs, "engine");
+    changes.push(await planWrite({ targetDir, path: rel, content: next, source: "engine", reason: "remover bloco do add-on", force: true }));
+    if (manifest) manifest.files[rel] = { hash: sha256(next), source: "engine" };
     strippedTargets.push(rel);
   }
 
@@ -156,16 +152,21 @@ export async function removeAddon(
     if (!existsSync(abs)) continue;
     const current = sha256(await readFile(abs));
     if (current === f.hash) {
-      await rm(abs);
       if (manifest) delete manifest.files[manifestKey(targetDir, abs)];
       deletedFiles.push(f.path);
+      const inspected = await inspectTarget(targetDir, f.path);
+      changes.push({ path: f.path, action: "remove", source: `addon:${id}`, reason: "arquivo intacto criado pelo add-on", expectedHash: inspected.hash, expectedKind: inspected.kind });
     } else {
       keptFiles.push(f.path); // editado localmente — preserva
     }
   }
 
-  if (manifest) await writeManifest(targetDir, manifest);
-  await deleteAddonState(targetDir, id);
-
-  return { strippedTargets, deletedFiles, keptFiles };
+  if (manifest) changes.push(await planWrite({ targetDir, path: ".maker/manifest.json", content: JSON.stringify(manifest, null, 2) + "\n", source: "metadata", reason: "publicar manifest sem o add-on", force: true }));
+  const stateRel = manifestKey(targetDir, addonStatePath(targetDir, id));
+  const stateTarget = await inspectTarget(targetDir, stateRel);
+  changes.push({ path: stateRel, action: "remove", source: "metadata", reason: "remover state do add-on", expectedHash: stateTarget.hash, expectedKind: stateTarget.kind });
+  const plan = createPlan(targetDir, changes);
+  if (options.dryRun) console.log(formatPlan(plan));
+  else await applyChangePlan(plan);
+  return { strippedTargets, deletedFiles, keptFiles, plan };
 }

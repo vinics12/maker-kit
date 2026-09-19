@@ -52,6 +52,7 @@
     "commander": "^12.1.0",
     "fast-glob": "^3.3.2",
     "handlebars": "^4.7.8",
+    "node-diff3": "3.2.1",
     "picocolors": "^1.1.1",
     "smol-toml": "^1.8.0",
     "zod": "^3.23.8"

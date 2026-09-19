@@ -10,6 +10,7 @@ export interface AddOptions {
   target?: string;
   set?: string[]; // ["tenantColumn=tenant_id", ...]
   yes?: boolean;
+  dryRun?: boolean;
 }
 
 function parseSet(pairs: string[] = []): Record<string, string> {
@@ -56,7 +57,8 @@ export async function runAdd(id: string, opts: AddOptions): Promise<void> {
   const provided = parseSet(opts.set);
   const knobs = await collectKnobs(addon.knobs, provided, !!opts.yes);
 
-  const res = await applyAddon(targetDir, addon, knobs);
+  const res = await applyAddon(targetDir, addon, knobs, { dryRun: opts.dryRun });
+  if (opts.dryRun) return;
 
   console.log(pc.green(`\n✓ Add-on "${addon.name}" aplicado em ${targetDir}`));
   if (res.injectedTargets.length)
