@@ -24,7 +24,7 @@ program
   .option("-n, --name <name>", "nome do projeto (modo --yes sem config)")
   .option("-a, --agent <agent>", "CLI agêntica inicial: claude | codex")
   .option("-y, --yes", "não interativo; usa config/defaults")
-  .option("-f, --force", "reinstala por cima de um .specify/ existente")
+  .option("-f, --force", "substitui explicitamente arquivos gerados que tenham conteúdo diferente")
   .action(async (opts) => {
     await runInit(opts);
   });

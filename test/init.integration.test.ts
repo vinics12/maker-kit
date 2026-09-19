@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll } from "vitest";
-import { mkdtemp, readFile, readdir, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { existsSync } from "node:fs";
 import { runInit } from "../src/commands/init.js";
 import { readManifest, verifyManifest } from "../src/render/manifest.js";
@@ -16,6 +16,15 @@ async function walk(dir: string): Promise<string[]> {
     else out.push(p);
   }
   return out;
+}
+
+async function snapshot(dir: string): Promise<Record<string, string>> {
+  const entries = await walk(dir);
+  const result: Record<string, string> = {};
+  for (const file of entries.sort()) {
+    result[relative(dir, file)] = (await readFile(file)).toString("base64");
+  }
+  return result;
 }
 
 describe("maker init (integração)", () => {
@@ -89,5 +98,77 @@ describe("maker init (integração)", () => {
     const r = await verifyManifest(target, m!);
     expect(r.ok, `missing=${r.missing}, modified=${r.modified}`).toBe(true);
     expect(r.checked).toBeGreaterThan(10);
+  });
+});
+
+describe("maker init (preflight de colisões)", () => {
+  it("aborta com todas as colisões e não altera o diretório-alvo", async () => {
+    const target = await mkdtemp(join(tmpdir(), "maker-init-collision-"));
+    await mkdir(join(target, ".specify/memory"), { recursive: true });
+    await Promise.all([
+      writeFile(join(target, "CLAUDE.md"), "claude do usuário\n"),
+      writeFile(join(target, ".mcp.json"), '{"mcp":"usuario"}\n'),
+      writeFile(join(target, ".gitattributes"), "*.custom text\n"),
+      writeFile(join(target, "AGENTS.md"), "agentes do usuário\n"),
+      writeFile(join(target, ".specify/memory/project-rules.md"), "regras do usuário\n"),
+    ]);
+    const before = await snapshot(target);
+
+    await expect(runInit({ target, config: FIXTURE, yes: true })).rejects.toThrow(
+      /\.gitattributes[\s\S]*\.mcp\.json[\s\S]*\.specify\/memory\/project-rules\.md[\s\S]*AGENTS\.md[\s\S]*CLAUDE\.md[\s\S]*nenhuma alteração foi feita/,
+    );
+
+    expect(await snapshot(target)).toEqual(before);
+    expect(existsSync(join(target, ".maker/manifest.json"))).toBe(false);
+  });
+
+  it("aceita conteúdo idêntico e reutiliza config e installedAt do manifest", async () => {
+    const target = await mkdtemp(join(tmpdir(), "maker-init-idempotent-"));
+    await runInit({ target, config: FIXTURE, yes: true });
+    const before = await readManifest(target);
+
+    await runInit({ target, yes: true });
+
+    const after = await readManifest(target);
+    expect(after?.config).toEqual(before?.config);
+    expect(after?.installedAt).toBe(before?.installedAt);
+    expect((await verifyManifest(target, after!)).ok).toBe(true);
+  });
+
+  it("reporta colisão estrutural antes de escrever qualquer arquivo", async () => {
+    const target = await mkdtemp(join(tmpdir(), "maker-init-structural-"));
+    await writeFile(join(target, ".claude"), "não é diretório\n");
+    await mkdir(join(target, "CLAUDE.md"));
+    const before = await snapshot(target);
+
+    const result = runInit({ target, config: FIXTURE, yes: true });
+    await expect(result).rejects.toThrow(/\.claude: deveria ser um diretório/);
+    await expect(result).rejects.toThrow(/CLAUDE\.md: deveria ser um arquivo regular/);
+    expect(await snapshot(target)).toEqual(before);
+    expect((await stat(join(target, "CLAUDE.md"))).isDirectory()).toBe(true);
+  });
+
+  it("--force lista e substitui colisões sem tocar em arquivos alheios", async () => {
+    const target = await mkdtemp(join(tmpdir(), "maker-init-force-"));
+    await writeFile(join(target, "CLAUDE.md"), "claude do usuário\n");
+    await writeFile(join(target, ".mcp.json"), '{"mcp":"usuario"}\n');
+    await writeFile(join(target, "arquivo-local.txt"), "preservar\n");
+    const messages: string[] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => messages.push(args.map(String).join(" "));
+    try {
+      await runInit({ target, config: FIXTURE, yes: true, force: true });
+    } finally {
+      console.log = originalLog;
+    }
+
+    const output = messages.join("\n");
+    expect(output).toContain("--force substituirá estes caminhos");
+    expect(output).toContain("CLAUDE.md");
+    expect(output).toContain(".mcp.json");
+    expect(await readFile(join(target, "CLAUDE.md"), "utf-8")).not.toContain("do usuário");
+    expect(await readFile(join(target, "arquivo-local.txt"), "utf-8")).toBe("preservar\n");
+    const manifest = await readManifest(target);
+    expect((await verifyManifest(target, manifest!)).ok).toBe(true);
   });
 });
