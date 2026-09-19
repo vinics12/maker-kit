@@ -32,8 +32,9 @@ Interprete o pedido atual:
 
 ### `init` — instalar o motor no projeto
 
-1. Confirme o diretório-alvo (default: cwd) e cheque se já existe `.specify/` (se sim, avise que
-   `--force` sobrescreve; peça confirmação).
+1. Confirme o diretório-alvo (default: cwd). O `init` faz preflight de todas as saídas: arquivos
+   idênticos são aceitos e qualquer conteúdo/estrutura divergente aborta sem escrita. Se o usuário
+   quiser substituir todos os caminhos listados, peça confirmação antes de usar `--force`.
 2. Se **não** houver `maker.config.json` no alvo, **colete os knobs na conversa** (só mecânica, nada
    de regra de negócio):
    - `agent`: `claude` (padrão) ou `codex`.
@@ -121,4 +122,5 @@ localmente. Relate o que foi revertido e o que foi preservado por edição local
 - **Delegue, não reimplemente.** Toda ação efetiva é um comando `maker`. Você só orquestra e coleta input.
 - **Só knobs mecânicos.** Nunca peça nem invente regra de negócio, banco, observabilidade — isso o
   projeto declara depois nos stubs (`project-rules.md`, `constitution.md`).
-- **Confirme antes de `--force`.** Sobrescrever um install existente precisa do ok explícito do usuário.
+- **Confirme antes de `--force`.** A flag autoriza substituir todos os caminhos divergentes listados
+  pelo preflight; só prossiga com o ok explícito do usuário.
