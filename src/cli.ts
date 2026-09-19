@@ -6,6 +6,7 @@ import { runUpdate } from "./commands/update.js";
 import { runAdd } from "./commands/add.js";
 import { runRemove } from "./commands/remove.js";
 import { runRuns } from "./commands/runs.js";
+import { runList } from "./commands/list.js";
 import { runAgentAdd, runAgentList } from "./commands/agent.js";
 import { makerVersion } from "./util/version.js";
 
@@ -63,6 +64,14 @@ program
   .option("-t, --target <dir>", "diretório do projeto (default: cwd)")
   .action(async (opts) => {
     await runUpdate(opts);
+  });
+
+program
+  .command("list")
+  .description("Lista add-ons disponíveis e seu estado no projeto.")
+  .option("-t, --target <dir>", "diretório do projeto (default: cwd)")
+  .action(async (opts) => {
+    await runList(opts);
   });
 
 program

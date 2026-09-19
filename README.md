@@ -253,9 +253,14 @@ princípios na constitution, fragmentos nos papéis compartilhados e arquivos de
 reversível** (rastreada por marcadores e por um estado em `.maker/addons/<id>.json`).
 
 ```bash
+maker list
 maker add saas --set tenantColumn=tenant_id --set brandVarPrefix=--brand- --set roles=admin,member
 maker remove saas
 ```
+
+`maker list` funciona mesmo fora de um projeto inicializado e mostra o catálogo local, versões,
+knobs e o próximo comando. Dentro de um projeto, também classifica cada add-on como `available`,
+`applied` ou `degraded` a partir do estado em `.maker/addons/`.
 
 ### `saas` — base multi-tenant / whitelabel / service-roles
 
