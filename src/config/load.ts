@@ -8,8 +8,8 @@ export const CONFIG_FILE = "maker.config.json";
 
 /**
  * Resolve a config na ordem: --config explícito → maker.config.json no target →
- * prompts interativos. Em modo --yes sem config, usa defaults exigindo só o name
- * (que também deve vir por flag) — caso contrário falha pedindo config.
+ * config anterior (em reinstalação) → prompts interativos. Em modo --yes sem
+ * config anterior, usa defaults exigindo só o name — caso contrário falha.
  */
 export async function loadConfig(opts: {
   targetDir: string;
@@ -17,6 +17,7 @@ export async function loadConfig(opts: {
   yes?: boolean;
   name?: string;
   agent?: string;
+  fallback?: MakerConfig;
 }): Promise<MakerConfig> {
   if (opts.configPath) {
     const raw = JSON.parse(await readFile(opts.configPath, "utf-8"));
@@ -26,6 +27,9 @@ export async function loadConfig(opts: {
   if (existsSync(inTarget)) {
     const raw = JSON.parse(await readFile(inTarget, "utf-8"));
     return parseConfig(opts.agent ? { ...raw, agent: opts.agent } : raw);
+  }
+  if (!opts.name && opts.fallback) {
+    return parseConfig(opts.agent ? { ...opts.fallback, agent: opts.agent } : opts.fallback);
   }
   if (opts.yes) {
     if (!opts.name) {

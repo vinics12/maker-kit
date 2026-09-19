@@ -6,7 +6,8 @@ import pc8 from "picocolors";
 
 // src/commands/init.ts
 import { resolve as resolve2, join as join6 } from "path";
-import { existsSync as existsSync5 } from "fs";
+import { lstat, mkdtemp, readFile as readFile5, rm } from "fs/promises";
+import { tmpdir } from "os";
 import pc from "picocolors";
 
 // src/config/load.ts
@@ -129,6 +130,9 @@ async function loadConfig(opts) {
   if (existsSync(inTarget)) {
     const raw = JSON.parse(await readFile(inTarget, "utf-8"));
     return parseConfig(opts.agent ? { ...raw, agent: opts.agent } : raw);
+  }
+  if (!opts.name && opts.fallback) {
+    return parseConfig(opts.agent ? { ...opts.fallback, agent: opts.agent } : opts.fallback);
   }
   if (opts.yes) {
     if (!opts.name) {
@@ -413,18 +417,14 @@ async function appliedEntry(targetDir, absOut, source) {
 // src/commands/init.ts
 async function runInit(opts) {
   const targetDir = resolve2(opts.target ?? process.cwd());
-  if (existsSync5(join6(targetDir, ".specify")) && !opts.force) {
-    throw new Error(
-      `${targetDir} j\xE1 cont\xE9m .specify/ \u2014 use --force para reinstalar por cima.`
-    );
-  }
   const priorManifest = await readManifest(targetDir);
   const loadedConfig = await loadConfig({
     targetDir,
     configPath: opts.config,
     yes: opts.yes,
     name: opts.name,
-    agent: opts.agent
+    agent: opts.agent,
+    fallback: priorManifest?.config
   });
   const agents = priorManifest ? enabledAgents(priorManifest) : [loadedConfig.agent];
   if (priorManifest && opts.agent && !agents.includes(opts.agent)) {
@@ -437,6 +437,25 @@ async function runInit(opts) {
     agent: opts.agent ?? priorManifest?.config?.agent ?? agents[0]
   });
   const ctx = buildContext(config);
+  const collisions = await findInitCollisions(targetDir, ctx, agents);
+  if (collisions.length && !opts.force) {
+    throw new Error(
+      `A instala\xE7\xE3o n\xE3o foi iniciada porque estes caminhos possuem conte\xFAdo diferente ou estrutura incompat\xEDvel:
+${formatCollisions(collisions)}
+Revise os arquivos ou execute novamente com --force para substitu\xED-los; nenhuma altera\xE7\xE3o foi feita.`
+    );
+  }
+  if (collisions.length) {
+    console.log(pc.yellow("\n\u26A0 --force substituir\xE1 estes caminhos:"));
+    for (const collision of collisions) {
+      console.log(pc.yellow(`  ${collision.path} (${collision.reason})`));
+    }
+    for (const collision of collisions) {
+      if (collision.removeBeforeApply) {
+        await rm(join6(targetDir, collision.path), { recursive: true, force: true });
+      }
+    }
+  }
   const applied = await applyEngine(targetDir, ctx, agents);
   const manifest = {
     schemaVersion: 2,
@@ -444,7 +463,7 @@ async function runInit(opts) {
     project: { name: config.project.name, slug: config.project.slug },
     config,
     agents,
-    installedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    installedAt: priorManifest?.installedAt ?? (/* @__PURE__ */ new Date()).toISOString(),
     files: Object.fromEntries(applied.map((a) => [a.rel, a.entry]))
   };
   await writeManifest(targetDir, manifest);
@@ -474,14 +493,76 @@ async function runInit(opts) {
     `  3. Abra o ${config.agent === "codex" ? "Codex" : "Claude Code"} e rode ${pc.cyan(`${invocation}run-brainstorm`)} ou ${pc.cyan(`${invocation}run-spec`)}`
   );
 }
+async function findInitCollisions(targetDir, ctx, agents) {
+  const staging = await mkdtemp(join6(tmpdir(), "maker-init-preflight-"));
+  try {
+    const expected = await applyEngine(staging, ctx, agents);
+    const collisions = /* @__PURE__ */ new Map();
+    for (const file of expected) {
+      const parts = file.rel.split("/");
+      let blockedByAncestor = false;
+      for (let i = 1; i < parts.length; i++) {
+        const ancestor = parts.slice(0, i).join("/");
+        const metadata2 = await lstatIfPresent(join6(targetDir, ancestor));
+        if (metadata2 && !metadata2.isDirectory()) {
+          collisions.set(ancestor, {
+            path: ancestor,
+            reason: "deveria ser um diret\xF3rio",
+            removeBeforeApply: true
+          });
+          blockedByAncestor = true;
+          break;
+        }
+      }
+      if (blockedByAncestor) continue;
+      const destination = join6(targetDir, file.rel);
+      const metadata = await lstatIfPresent(destination);
+      if (!metadata) continue;
+      if (!metadata.isFile()) {
+        collisions.set(file.rel, {
+          path: file.rel,
+          reason: "deveria ser um arquivo regular",
+          removeBeforeApply: true
+        });
+        continue;
+      }
+      const [current, rendered] = await Promise.all([
+        readFile5(destination),
+        readFile5(join6(staging, file.rel))
+      ]);
+      if (!current.equals(rendered)) {
+        collisions.set(file.rel, {
+          path: file.rel,
+          reason: "conte\xFAdo diferente",
+          removeBeforeApply: false
+        });
+      }
+    }
+    return [...collisions.values()].sort((a, b) => a.path.localeCompare(b.path));
+  } finally {
+    await rm(staging, { recursive: true, force: true });
+  }
+}
+async function lstatIfPresent(path) {
+  try {
+    return await lstat(path);
+  } catch (error) {
+    const code = error.code;
+    if (code === "ENOENT" || code === "ENOTDIR") return null;
+    throw error;
+  }
+}
+function formatCollisions(collisions) {
+  return collisions.map((collision) => `  - ${collision.path}: ${collision.reason}`).join("\n");
+}
 
 // src/commands/doctor.ts
 import { resolve as resolve3 } from "path";
 import pc2 from "picocolors";
 
 // src/agents/validate.ts
-import { existsSync as existsSync6 } from "fs";
-import { readFile as readFile5 } from "fs/promises";
+import { existsSync as existsSync5 } from "fs";
+import { readFile as readFile6 } from "fs/promises";
 import { join as join7 } from "path";
 import fg3 from "fast-glob";
 import { parse as parseToml } from "smol-toml";
@@ -494,15 +575,15 @@ var codexAgentSchema = z2.object({
 async function validateAgentIntegration(targetDir, provider) {
   const skillRoot = join7(targetDir, provider === "claude" ? ".claude/skills" : ".agents/skills");
   const agentRoot = join7(targetDir, provider === "claude" ? ".claude/agents" : ".codex/agents");
-  const skillFiles = existsSync6(skillRoot) ? await fg3("**/SKILL.md", { cwd: skillRoot, onlyFiles: true }) : [];
-  const agentFiles = existsSync6(agentRoot) ? await fg3(provider === "claude" ? "*.md" : "*.toml", { cwd: agentRoot, onlyFiles: true }) : [];
+  const skillFiles = existsSync5(skillRoot) ? await fg3("**/SKILL.md", { cwd: skillRoot, onlyFiles: true }) : [];
+  const agentFiles = existsSync5(agentRoot) ? await fg3(provider === "claude" ? "*.md" : "*.toml", { cwd: agentRoot, onlyFiles: true }) : [];
   const issues = [];
-  if (!existsSync6(join7(targetDir, "AGENTS.md"))) issues.push("AGENTS.md ausente");
+  if (!existsSync5(join7(targetDir, "AGENTS.md"))) issues.push("AGENTS.md ausente");
   if (skillFiles.length === 0) issues.push(`${relativeRoot(provider, "skills")} sem skills`);
   if (agentFiles.length === 0) issues.push(`${relativeRoot(provider, "agents")} sem agentes`);
   for (const rel of skillFiles) {
     const path = join7(skillRoot, rel);
-    const content = await readFile5(path, "utf-8");
+    const content = await readFile6(path, "utf-8");
     if (!/^---\n[\s\S]*?^name:\s*.+$[\s\S]*?^description:\s*.+$[\s\S]*?^---$/m.test(content)) {
       issues.push(`${relativeRoot(provider, "skills")}/${rel}: frontmatter name/description inv\xE1lido`);
     }
@@ -512,7 +593,7 @@ async function validateAgentIntegration(targetDir, provider) {
   }
   for (const rel of agentFiles) {
     const path = join7(agentRoot, rel);
-    const content = await readFile5(path, "utf-8");
+    const content = await readFile6(path, "utf-8");
     if (provider === "codex") {
       try {
         codexAgentSchema.parse(parseToml(content));
@@ -525,11 +606,11 @@ async function validateAgentIntegration(targetDir, provider) {
       issues.push(`.claude/agents/${rel}: frontmatter inv\xE1lido`);
     }
     const shared = content.match(/\.maker\/workflow\/agents\/[a-z0-9-]+\.md/)?.[0];
-    if (!shared || !existsSync6(join7(targetDir, shared))) {
+    if (!shared || !existsSync5(join7(targetDir, shared))) {
       issues.push(`${relativeRoot(provider, "agents")}/${rel}: papel compartilhado ausente`);
     }
   }
-  if (provider === "claude" && !existsSync6(join7(targetDir, "CLAUDE.md"))) {
+  if (provider === "claude" && !existsSync5(join7(targetDir, "CLAUDE.md"))) {
     issues.push("CLAUDE.md ausente");
   }
   return { provider, skills: skillFiles.length, agents: agentFiles.length, issues };
@@ -573,9 +654,9 @@ ${result.missing.length} ausente(s), ${result.modified.length} modificado(s).`)
 }
 
 // src/commands/update.ts
-import { existsSync as existsSync7 } from "fs";
-import { copyFile as copyFile3, mkdir as mkdir4, mkdtemp, readFile as readFile6, rm } from "fs/promises";
-import { tmpdir } from "os";
+import { existsSync as existsSync6 } from "fs";
+import { copyFile as copyFile3, mkdir as mkdir4, mkdtemp as mkdtemp2, readFile as readFile7, rm as rm2 } from "fs/promises";
+import { tmpdir as tmpdir2 } from "os";
 import { dirname as dirname4, join as join8, resolve as resolve4 } from "path";
 import pc3 from "picocolors";
 async function runUpdate(opts) {
@@ -584,7 +665,7 @@ async function runUpdate(opts) {
   if (!manifest) throw new Error(`Nenhum install do maker em ${targetDir}.`);
   const { config, recovered } = await resolveConfig(targetDir, manifest.config, manifest.project);
   const agents = enabledAgents(manifest);
-  const staging = await mkdtemp(join8(tmpdir(), "maker-update-"));
+  const staging = await mkdtemp2(join8(tmpdir2(), "maker-update-"));
   const updated = [];
   const skipped = [];
   try {
@@ -592,10 +673,10 @@ async function runUpdate(opts) {
     for (const file of expected) {
       const staged = join8(staging, file.rel);
       const destination = join8(targetDir, file.rel);
-      const newContent = await readFile6(staged);
+      const newContent = await readFile7(staged);
       const newHash = sha256(newContent);
-      if (existsSync7(destination)) {
-        const currentHash = sha256(await readFile6(destination));
+      if (existsSync6(destination)) {
+        const currentHash = sha256(await readFile7(destination));
         const recordedEntry = manifest.files[file.rel];
         const recorded = recordedEntry?.hash;
         if (recordedEntry?.source.startsWith("addon:") && currentHash === recorded) {
@@ -617,7 +698,7 @@ async function runUpdate(opts) {
       updated.push(file.rel);
     }
   } finally {
-    await rm(staging, { recursive: true, force: true });
+    await rm2(staging, { recursive: true, force: true });
   }
   manifest.schemaVersion = 2;
   manifest.agents = agents;
@@ -633,9 +714,9 @@ async function runUpdate(opts) {
 async function resolveConfig(targetDir, stored, project) {
   if (stored) return { config: parseConfig(stored), recovered: true };
   const configPath = join8(targetDir, "maker.config.json");
-  if (existsSync7(configPath)) {
+  if (existsSync6(configPath)) {
     return {
-      config: parseConfig(JSON.parse(await readFile6(configPath, "utf-8"))),
+      config: parseConfig(JSON.parse(await readFile7(configPath, "utf-8"))),
       recovered: true
     };
   }
@@ -648,8 +729,8 @@ import pc4 from "picocolors";
 import * as p2 from "@clack/prompts";
 
 // src/addons/loader.ts
-import { readFile as readFile7 } from "fs/promises";
-import { existsSync as existsSync8 } from "fs";
+import { readFile as readFile8 } from "fs/promises";
+import { existsSync as existsSync7 } from "fs";
 import { join as join9 } from "path";
 
 // src/addons/schema.ts
@@ -692,10 +773,10 @@ function addonDir(id) {
 async function loadAddon(id) {
   const dir = addonDir(id);
   const manifestPath = join9(dir, "addon.json");
-  if (!existsSync8(manifestPath)) {
+  if (!existsSync7(manifestPath)) {
     throw new Error(`Add-on "${id}" n\xE3o encontrado (esperado em addons/${id}/addon.json).`);
   }
-  const raw = JSON.parse(await readFile7(manifestPath, "utf-8"));
+  const raw = JSON.parse(await readFile8(manifestPath, "utf-8"));
   const parsed = addonManifestSchema.parse(raw);
   if (parsed.id !== id) {
     throw new Error(`Add-on id divergente: pasta "${id}" vs manifest "${parsed.id}".`);
@@ -704,10 +785,10 @@ async function loadAddon(id) {
 }
 
 // src/addons/apply.ts
-import { readFile as readFile9, writeFile as writeFile5, mkdir as mkdir6 } from "fs/promises";
-import { existsSync as existsSync10 } from "fs";
+import { readFile as readFile10, writeFile as writeFile5, mkdir as mkdir6 } from "fs/promises";
+import { existsSync as existsSync9 } from "fs";
 import { dirname as dirname6, join as join11 } from "path";
-import { rm as rm3 } from "fs/promises";
+import { rm as rm4 } from "fs/promises";
 
 // src/addons/inject.ts
 var startMarker = (id) => `<!-- maker:addon:${id}:start -->`;
@@ -750,19 +831,19 @@ function escapeRe(s) {
 }
 
 // src/addons/state.ts
-import { readFile as readFile8, writeFile as writeFile4, mkdir as mkdir5, rm as rm2 } from "fs/promises";
-import { existsSync as existsSync9 } from "fs";
+import { readFile as readFile9, writeFile as writeFile4, mkdir as mkdir5, rm as rm3 } from "fs/promises";
+import { existsSync as existsSync8 } from "fs";
 import { dirname as dirname5, join as join10 } from "path";
 function addonStatePath(targetDir, id) {
   return join10(targetDir, ".maker", "addons", `${id}.json`);
 }
 function isAddonApplied(targetDir, id) {
-  return existsSync9(addonStatePath(targetDir, id));
+  return existsSync8(addonStatePath(targetDir, id));
 }
 async function readAddonState(targetDir, id) {
   const p3 = addonStatePath(targetDir, id);
-  if (!existsSync9(p3)) return null;
-  return JSON.parse(await readFile8(p3, "utf-8"));
+  if (!existsSync8(p3)) return null;
+  return JSON.parse(await readFile9(p3, "utf-8"));
 }
 async function writeAddonState(targetDir, state) {
   const p3 = addonStatePath(targetDir, state.id);
@@ -771,7 +852,7 @@ async function writeAddonState(targetDir, state) {
 }
 async function deleteAddonState(targetDir, id) {
   const p3 = addonStatePath(targetDir, id);
-  if (existsSync9(p3)) await rm2(p3);
+  if (existsSync8(p3)) await rm3(p3);
 }
 
 // src/addons/apply.ts
@@ -785,11 +866,11 @@ function addonContext(manifest, knobs) {
   };
 }
 async function renderFrom(dir, rel, ctx) {
-  const raw = await readFile9(join11(dir, rel), "utf-8");
+  const raw = await readFile10(join11(dir, rel), "utf-8");
   return rel.endsWith(".hbs") ? renderRaw(raw, ctx) : raw;
 }
 async function touchManifest(manifest, targetDir, absPath, source) {
-  const hash = sha256(await readFile9(absPath));
+  const hash = sha256(await readFile10(absPath));
   manifest.files[manifestKey(targetDir, absPath)] = { hash, source };
 }
 async function applyAddon(targetDir, addon, knobs) {
@@ -805,11 +886,11 @@ async function applyAddon(targetDir, addon, knobs) {
   const owned = new Set((prior?.createdFiles ?? []).map((f) => f.path));
   if (addon.principles.length) {
     const absConst = join11(targetDir, CONSTITUTION);
-    if (!existsSync10(absConst)) throw new Error(`${CONSTITUTION} ausente no install.`);
+    if (!existsSync9(absConst)) throw new Error(`${CONSTITUTION} ausente no install.`);
     const rendered = [];
     for (const p3 of addon.principles) rendered.push((await renderFrom(dir, p3, ctx)).trim());
     const block = rendered.join("\n\n");
-    const current = await readFile9(absConst, "utf-8");
+    const current = await readFile10(absConst, "utf-8");
     const next = upsertBlock(current, addon.id, block, {
       replacePlaceholder: PLACEHOLDER,
       beforeHeading: "## Governance"
@@ -821,19 +902,19 @@ async function applyAddon(targetDir, addon, knobs) {
   for (const frag of addon.agentFragments) {
     const rel = `.maker/workflow/agents/${frag.agent}.md`;
     const abs = join11(targetDir, rel);
-    if (!existsSync10(abs)) {
+    if (!existsSync9(abs)) {
       console.warn(`  aviso: agente ${frag.agent} ausente \u2014 fragmento pulado.`);
       continue;
     }
     const block = (await renderFrom(dir, frag.file, ctx)).trim();
-    const next = upsertBlock(await readFile9(abs, "utf-8"), addon.id, block);
+    const next = upsertBlock(await readFile10(abs, "utf-8"), addon.id, block);
     await writeFile5(abs, next, "utf-8");
     await touchManifest(manifest, targetDir, abs, `addon:${addon.id}`);
     injectedTargets.push(rel);
   }
   for (const f of addon.files) {
     const abs = join11(targetDir, f.to);
-    if (existsSync10(abs) && !owned.has(f.to)) {
+    if (existsSync9(abs) && !owned.has(f.to)) {
       console.warn(`  aviso: ${f.to} j\xE1 existe (n\xE3o \xE9 deste add-on) \u2014 n\xE3o sobrescrito.`);
       continue;
     }
@@ -865,18 +946,18 @@ async function removeAddon(targetDir, id) {
   const keptFiles = [];
   for (const rel of state.injectedTargets) {
     const abs = join11(targetDir, rel);
-    if (!existsSync10(abs)) continue;
-    const next = stripBlock(await readFile9(abs, "utf-8"), id);
+    if (!existsSync9(abs)) continue;
+    const next = stripBlock(await readFile10(abs, "utf-8"), id);
     await writeFile5(abs, next, "utf-8");
     if (manifest) await touchManifest(manifest, targetDir, abs, "engine");
     strippedTargets.push(rel);
   }
   for (const f of state.createdFiles) {
     const abs = join11(targetDir, f.path);
-    if (!existsSync10(abs)) continue;
-    const current = sha256(await readFile9(abs));
+    if (!existsSync9(abs)) continue;
+    const current = sha256(await readFile10(abs));
     if (current === f.hash) {
-      await rm3(abs);
+      await rm4(abs);
       if (manifest) delete manifest.files[manifestKey(targetDir, abs)];
       deletedFiles.push(f.path);
     } else {
@@ -962,7 +1043,7 @@ import { resolve as resolve7 } from "path";
 import pc6 from "picocolors";
 
 // src/runs/read.ts
-import { readdir, readFile as readFile10 } from "fs/promises";
+import { readdir, readFile as readFile11 } from "fs/promises";
 import { basename, join as join13 } from "path";
 
 // src/runs/schema.ts
@@ -1020,7 +1101,7 @@ async function listRunFiles(target) {
   return entries.filter((e) => e.isFile() && e.name.endsWith(".jsonl")).map((e) => ({ runId: basename(e.name, ".jsonl"), path: join13(dir, e.name) })).sort((a, b) => a.runId.localeCompare(b.runId));
 }
 async function readRun(path) {
-  const raw = await readFile10(path, "utf-8");
+  const raw = await readFile11(path, "utf-8");
   const events = [];
   for (const line of raw.split("\n")) {
     const trimmed = line.trim();
@@ -1112,11 +1193,11 @@ async function runRuns(opts) {
 }
 
 // src/commands/agent.ts
-import { existsSync as existsSync11 } from "fs";
-import { readFile as readFile11 } from "fs/promises";
+import { existsSync as existsSync10 } from "fs";
+import { readFile as readFile12 } from "fs/promises";
 import { join as join14, resolve as resolve8 } from "path";
-import { mkdtemp as mkdtemp2, rm as rm4 } from "fs/promises";
-import { tmpdir as tmpdir2 } from "os";
+import { mkdtemp as mkdtemp3, rm as rm5 } from "fs/promises";
+import { tmpdir as tmpdir3 } from "os";
 import pc7 from "picocolors";
 async function runAgentAdd(providerInput, opts) {
   const provider = agentProviderSchema.parse(providerInput);
@@ -1165,23 +1246,23 @@ async function runAgentList(opts) {
 async function resolveRenderConfig(targetDir, stored, explicitPath) {
   if (stored) return parseConfig(stored);
   const path = explicitPath ? resolve8(explicitPath) : join14(targetDir, "maker.config.json");
-  if (!existsSync11(path)) {
+  if (!existsSync10(path)) {
     throw new Error(
       "Este install usa um manifest legado sem a configura\xE7\xE3o de renderiza\xE7\xE3o. Forne\xE7a --config <maker.config.json> para adicionar outra integra\xE7\xE3o com seguran\xE7a."
     );
   }
-  return parseConfig(JSON.parse(await readFile11(path, "utf-8")));
+  return parseConfig(JSON.parse(await readFile12(path, "utf-8")));
 }
 async function assertNoUnmanagedProviderFiles(targetDir, provider, managed, ctx) {
-  const staging = await mkdtemp2(join14(tmpdir2(), "maker-agent-preflight-"));
+  const staging = await mkdtemp3(join14(tmpdir3(), "maker-agent-preflight-"));
   let expected;
   try {
     expected = (await applyAgentProvider(staging, ctx, provider)).map((file) => file.rel);
   } finally {
-    await rm4(staging, { recursive: true, force: true });
+    await rm5(staging, { recursive: true, force: true });
   }
   const collisions = expected.filter(
-    (rel) => existsSync11(join14(targetDir, rel)) && !(rel in managed)
+    (rel) => existsSync10(join14(targetDir, rel)) && !(rel in managed)
   );
   if (collisions.length) {
     throw new Error(
@@ -1195,7 +1276,7 @@ Mova ou renomeie esses arquivos e execute o comando novamente; nenhuma altera\xE
 // src/cli.ts
 var program = new Command();
 program.name("maker").description("Encapsulador do workflow de cria\xE7\xE3o de produtos (motor SpecKit + multi-agente).").version(makerVersion());
-program.command("init").description("Instala o motor no projeto-alvo.").option("-t, --target <dir>", "diret\xF3rio do projeto (default: cwd)").option("-c, --config <file>", "caminho para maker.config.json").option("-n, --name <name>", "nome do projeto (modo --yes sem config)").option("-a, --agent <agent>", "CLI ag\xEAntica inicial: claude | codex").option("-y, --yes", "n\xE3o interativo; usa config/defaults").option("-f, --force", "reinstala por cima de um .specify/ existente").action(async (opts) => {
+program.command("init").description("Instala o motor no projeto-alvo.").option("-t, --target <dir>", "diret\xF3rio do projeto (default: cwd)").option("-c, --config <file>", "caminho para maker.config.json").option("-n, --name <name>", "nome do projeto (modo --yes sem config)").option("-a, --agent <agent>", "CLI ag\xEAntica inicial: claude | codex").option("-y, --yes", "n\xE3o interativo; usa config/defaults").option("-f, --force", "substitui explicitamente arquivos gerados que tenham conte\xFAdo diferente").action(async (opts) => {
   await runInit(opts);
 });
 var agent = program.command("agent").description("Gerencia integra\xE7\xF5es de CLI ag\xEAntica.");

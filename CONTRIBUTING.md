@@ -156,10 +156,8 @@ orquestrador/humano remove no commit do Gate 4.
 
 ## 6. Gaps conhecidos (próximos passos, não bloqueiam contribuição)
 
-Hoje as convenções vivem em skills de agente + disciplina humana. Automação ainda **não** existe e é
-bem-vinda como contribuição:
-- **CI** (GitHub Actions rodando `build` + `typecheck` + `test` + `audit:coupling` em PR) — não há
-  `.github/` no repo.
+Hoje parte das convenções ainda vive em skills de agente + disciplina humana. A CI já executa
+`build` + `typecheck` + `test` + `audit:coupling`; permanece como oportunidade de automação:
 - **Lint/format/commitlint/husky** — nenhum configurado; o único enforcement é `typecheck` + testes +
   `audit:coupling`.
 - Alinhado ao Backlog do [README](README.md#roadmap).

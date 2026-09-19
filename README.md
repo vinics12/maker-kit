@@ -137,6 +137,13 @@ maker init --yes --name "Acme Platform" --agent codex
 maker init --force
 ```
 
+Antes de escrever, o `init` renderiza a instalação esperada e verifica **todas** as saídas. Arquivos
+idênticos são aceitos; conteúdo diferente ou uma estrutura incompatível (por exemplo, um arquivo
+onde deveria existir um diretório) faz o comando abortar com a lista completa de colisões, sem
+alterar o projeto. Use `--force` somente quando quiser substituir explicitamente todos os caminhos
+listados. Numa reinstalação sem nova configuração, o Maker reutiliza a configuração registrada no
+manifest existente.
+
 O init instala uma única integração. Para habilitar a outra depois, sem remover a atual:
 
 ```bash
