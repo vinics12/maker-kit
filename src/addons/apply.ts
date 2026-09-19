@@ -83,9 +83,9 @@ export async function applyAddon(
     injectedTargets.push(CONSTITUTION);
   }
 
-  // 2. Fragmentos de agente → anexados ao fim do agente-alvo.
+  // 2. Fragmentos de agente → papel canônico compartilhado por Claude e Codex.
   for (const frag of addon.agentFragments) {
-    const rel = `.claude/agents/${frag.agent}.md`;
+    const rel = `.maker/workflow/agents/${frag.agent}.md`;
     const abs = join(targetDir, rel);
     if (!existsSync(abs)) {
       console.warn(`  aviso: agente ${frag.agent} ausente — fragmento pulado.`);

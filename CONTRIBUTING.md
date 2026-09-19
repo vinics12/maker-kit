@@ -48,7 +48,7 @@ git checkout -- .specify/memory docs/features/INDEX.md        # restaura os arqu
 > ⚠️ **Por que o `git checkout`:** o `init` reescreve **toda** a árvore renderizada — inclusive os
 > arquivos versionados que também são templates: `.specify/memory/*` (vira stub em branco) e
 > `docs/features/INDEX.md` (vira o catálogo vazio). Restaure-os logo após o `init`. Todo o resto que
-> o `init` escreveu (pipeline stock, `.claude/{skills,agents}`, `.maker/`, e os `CLAUDE.md`/`.mcp.json`/
+> o `init` escreveu (pipeline stock, adaptadores `.claude`/`.agents`/`.codex`, `.maker/`, e os `AGENTS.md`/`CLAUDE.md`/`.mcp.json`/
 > `.gitattributes` de raiz) é gitignorado.
 
 Depois disso, ao evoluir `templates/engine/`, prefira `node dist/cli.js update` para regenerar o
@@ -61,7 +61,7 @@ pipeline: `update` reescreve só os arquivos do motor que você não editou e **
 
 ### 2.2 Rode o pipeline
 
-No Claude Code, no diretório do repo:
+No Claude Code, no diretório do repo (no Codex, use `$run-brainstorm` e `$run-spec`):
 
 ```
 /run-brainstorm "ideia difusa"     # opcional — exploração → design doc
@@ -79,7 +79,7 @@ Os **4 gates humanos** (PR2, não-negociável):
 
 Em features **MINI**, Gate 1 e Gate 2 são fundidos (não removidos). A referência viva do fluxo é a
 skill `run-spec`
-([templates/engine/.claude/skills/run-spec/SKILL.md.hbs](templates/engine/.claude/skills/run-spec/SKILL.md.hbs));
+([templates/engine/workflow/skills/run-spec/SKILL.md.hbs](templates/engine/workflow/skills/run-spec/SKILL.md.hbs));
 o exemplo real ponta-a-ponta é [`specs/001-event-stream/`](specs/001-event-stream/) — **anterior a esta
 política de artefatos** (§4), por isso mantido inteiro (com `tasks.md`, `briefs/`, `contracts/`,
 `data-model.md`) como referência do fluxo completo.
@@ -146,10 +146,11 @@ orquestrador/humano remove no commit do Gate 4.
 
 - [ ] `pnpm typecheck && pnpm test && pnpm audit:coupling` verdes
 - [ ] `pnpm build` rodado (se mexeu em `src/` — `dist/` versionado atualizado)
+- [ ] `maker agent list` e `maker doctor` íntegros em fixtures Claude e Codex
 - [ ] Branch `NNN-<slug>` + commits `type(NNN/usN): ...`
 - [ ] `docs/features/` atualizado (Tier 3) e Tier 2 promovido ao catálogo
 - [ ] Combustível (Tier 1 + arquivos Tier 2) podado da branch
-- [ ] `git ls-files` não lista pipeline de dev (`.claude/skills`, `.claude/agents`, `.specify` stock, `.maker/`)
+- [ ] `git ls-files` não lista pipeline de dev (`.claude`, `.agents`, `.codex`, `.specify` stock, `.maker/`)
 
 ---
 

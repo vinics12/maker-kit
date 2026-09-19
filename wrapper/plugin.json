@@ -1,0 +1,14 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "maker",
+  "version": "0.2.0",
+  "description": "Instala e mantém o motor Maker, suas integrações Claude/Codex e add-ons.",
+  "author": {
+    "name": "vinics12",
+    "url": "https://github.com/vinics12"
+  },
+  "homepage": "https://github.com/vinics12/maker-kit",
+  "repository": "https://github.com/vinics12/maker-kit",
+  "license": "MIT",
+  "keywords": ["speckit", "workflow", "multi-agent", "claude", "codex"]
+}

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
+import type { AgentProvider, MakerConfig } from "../config/schema.js";
 
 /** Nome do arquivo de manifest gravado na raiz do install. */
 export const MANIFEST_FILE = ".maker/manifest.json";
@@ -14,10 +15,19 @@ export interface ManifestEntry {
 }
 
 export interface Manifest {
+  schemaVersion?: number;
   makerVersion: string;
   project: { name: string; slug: string };
+  /** Config normalizada usada para renderizar novos adaptadores. Ausente em manifests v1. */
+  config?: MakerConfig;
+  /** Integrações instaladas. Manifests v1 sem o campo equivalem a ["claude"]. */
+  agents?: AgentProvider[];
   installedAt: string;
   files: Record<string, ManifestEntry>;
+}
+
+export function enabledAgents(manifest: Manifest): AgentProvider[] {
+  return manifest.agents?.length ? manifest.agents : ["claude"];
 }
 
 export function sha256(content: string | Buffer): string {

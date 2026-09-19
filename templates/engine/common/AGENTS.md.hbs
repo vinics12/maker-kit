@@ -1,0 +1,38 @@
+# {{project.name}}
+
+Este projeto usa o **maker**: SpecKit + um pipeline multiagente com quatro gates humanos.
+
+## Entrada do workflow
+
+- Feature definida: use a skill `run-spec`.
+- Feature difusa: use `run-brainstorm` numa conversa separada e entregue o handoff resultante a
+  `run-spec`.
+- No Claude Code, skills explícitas usam `/run-spec`; no Codex, usam `$run-spec`.
+
+## Fontes de verdade
+
+- `.specify/memory/constitution.md`: princípios de processo e do projeto; vence instruções em conflito.
+- `.specify/memory/project-rules.md`: bases técnicas, comandos e regras declaradas pelo projeto.
+- `.specify/memory/product-overview.md`: visão de produto.
+- `docs/features/INDEX.md`: catálogo as-built mantido após o aceite.
+
+## Pipeline
+
+O `run-spec` conduz spec → plano → implementação → aceite. Nunca pule gates. Os papéis especializados
+devem ler a constitution antes de agir, rotear pelos verdicts canônicos e não inventar regras de
+negócio ou escolhas de stack ausentes das fontes de verdade.
+
+## Comandos do projeto
+
+- Verify: `{{commands.verify}}`
+- Build: `{{commands.build}}`
+- Test: `{{commands.test}}`
+- Dev: `{{commands.dev}}`
+
+## Manutenção
+
+- `maker doctor`: verifica a integridade do motor.
+- `maker update`: atualiza arquivos não editados das integrações habilitadas.
+- `maker agent add <claude|codex>`: adiciona outra integração sem remover a atual.
+
+<!-- Acrescente abaixo convenções específicas do projeto. -->

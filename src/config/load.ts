@@ -16,13 +16,16 @@ export async function loadConfig(opts: {
   configPath?: string;
   yes?: boolean;
   name?: string;
+  agent?: string;
 }): Promise<MakerConfig> {
   if (opts.configPath) {
-    return parseConfig(JSON.parse(await readFile(opts.configPath, "utf-8")));
+    const raw = JSON.parse(await readFile(opts.configPath, "utf-8"));
+    return parseConfig(opts.agent ? { ...raw, agent: opts.agent } : raw);
   }
   const inTarget = join(opts.targetDir, CONFIG_FILE);
   if (existsSync(inTarget)) {
-    return parseConfig(JSON.parse(await readFile(inTarget, "utf-8")));
+    const raw = JSON.parse(await readFile(inTarget, "utf-8"));
+    return parseConfig(opts.agent ? { ...raw, agent: opts.agent } : raw);
   }
   if (opts.yes) {
     if (!opts.name) {
@@ -30,7 +33,8 @@ export async function loadConfig(opts: {
         `Sem ${CONFIG_FILE} e sem --name: em modo --yes forneça --config <arquivo> ou --name <nome>.`,
       );
     }
-    return parseConfig({ project: { name: opts.name } });
+    return parseConfig({ agent: opts.agent, project: { name: opts.name } });
   }
-  return promptConfig();
+  const prompted = await promptConfig();
+  return opts.agent ? parseConfig({ ...prompted, agent: opts.agent }) : prompted;
 }

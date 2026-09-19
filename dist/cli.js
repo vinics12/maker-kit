@@ -2,11 +2,11 @@
 
 // src/cli.ts
 import { Command } from "commander";
-import pc6 from "picocolors";
+import pc8 from "picocolors";
 
 // src/commands/init.ts
-import { resolve as resolve2, join as join5 } from "path";
-import { existsSync as existsSync4 } from "fs";
+import { resolve as resolve2, join as join6 } from "path";
+import { existsSync as existsSync5 } from "fs";
 import pc from "picocolors";
 
 // src/config/load.ts
@@ -16,7 +16,10 @@ import { join } from "path";
 
 // src/config/schema.ts
 import { z } from "zod";
+var agentProviderSchema = z.enum(["claude", "codex"]);
 var configSchema = z.object({
+  /** CLI agêntica instalada inicialmente. Claude permanece o default retrocompatível. */
+  agent: agentProviderSchema.default("claude"),
   project: z.object({
     name: z.string().min(1, "project.name \xE9 obrigat\xF3rio"),
     /** slug kebab-case; derivado de name quando ausente. */
@@ -50,6 +53,15 @@ function parseConfig(raw) {
 import * as p from "@clack/prompts";
 async function promptConfig() {
   p.intro("maker \u2014 instalar o motor de cria\xE7\xE3o de produtos");
+  const agent2 = await p.select({
+    message: "CLI ag\xEAntica",
+    initialValue: "claude",
+    options: [
+      { value: "claude", label: "Claude Code", hint: "padr\xE3o" },
+      { value: "codex", label: "Codex" }
+    ]
+  });
+  if (p.isCancel(agent2)) cancel2();
   const name = await p.text({
     message: "Nome do projeto",
     placeholder: "Acme Platform",
@@ -84,6 +96,7 @@ async function promptConfig() {
   const dev = await p.text({ message: "Comando de dev", initialValue: "npm run dev" });
   if (p.isCancel(dev)) cancel2();
   return parseConfig({
+    agent: agent2,
     project: { name: name.trim(), slug },
     layout: {
       frontendGlobs: splitList(frontendGlobs),
@@ -109,11 +122,13 @@ function cancel2() {
 var CONFIG_FILE = "maker.config.json";
 async function loadConfig(opts) {
   if (opts.configPath) {
-    return parseConfig(JSON.parse(await readFile(opts.configPath, "utf-8")));
+    const raw = JSON.parse(await readFile(opts.configPath, "utf-8"));
+    return parseConfig(opts.agent ? { ...raw, agent: opts.agent } : raw);
   }
   const inTarget = join(opts.targetDir, CONFIG_FILE);
   if (existsSync(inTarget)) {
-    return parseConfig(JSON.parse(await readFile(inTarget, "utf-8")));
+    const raw = JSON.parse(await readFile(inTarget, "utf-8"));
+    return parseConfig(opts.agent ? { ...raw, agent: opts.agent } : raw);
   }
   if (opts.yes) {
     if (!opts.name) {
@@ -121,9 +136,10 @@ async function loadConfig(opts) {
         `Sem ${CONFIG_FILE} e sem --name: em modo --yes forne\xE7a --config <arquivo> ou --name <nome>.`
       );
     }
-    return parseConfig({ project: { name: opts.name } });
+    return parseConfig({ agent: opts.agent, project: { name: opts.name } });
   }
-  return promptConfig();
+  const prompted = await promptConfig();
+  return opts.agent ? parseConfig({ ...prompted, agent: opts.agent }) : prompted;
 }
 
 // src/render/engine.ts
@@ -133,6 +149,7 @@ function buildContext(config) {
     project: { ...config.project, slug: config.project.slug },
     layout: config.layout,
     commands: config.commands,
+    agent: config.agent,
     generatedAt: (/* @__PURE__ */ new Date()).toISOString().slice(0, 10)
   };
 }
@@ -149,19 +166,15 @@ function renderRaw(source, ctx) {
   return template(ctx);
 }
 
-// src/util/scaffold.ts
-import { fileURLToPath } from "url";
-import { dirname as dirname2, join as join3, resolve } from "path";
-import { existsSync as existsSync3 } from "fs";
-import { mkdir as mkdir2, readFile as readFile3, writeFile as writeFile2, copyFile } from "fs/promises";
-import fg from "fast-glob";
-
 // src/render/manifest.ts
 import { createHash } from "crypto";
 import { readFile as readFile2, writeFile, mkdir } from "fs/promises";
 import { existsSync as existsSync2 } from "fs";
 import { dirname, join as join2, relative } from "path";
 var MANIFEST_FILE = ".maker/manifest.json";
+function enabledAgents(manifest) {
+  return manifest.agents?.length ? manifest.agents : ["claude"];
+}
 function sha256(content) {
   return createHash("sha256").update(content).digest("hex");
 }
@@ -198,7 +211,16 @@ function manifestKey(targetDir, absPath) {
   return relative(targetDir, absPath).split("\\").join("/");
 }
 
+// src/util/version.ts
+import { readFileSync } from "fs";
+import { join as join4 } from "path";
+
 // src/util/scaffold.ts
+import { fileURLToPath } from "url";
+import { dirname as dirname2, join as join3, resolve } from "path";
+import { existsSync as existsSync3 } from "fs";
+import { mkdir as mkdir2, readFile as readFile3, writeFile as writeFile2, copyFile } from "fs/promises";
+import fg from "fast-glob";
 var HBS_EXT = ".hbs";
 function packageRoot() {
   let dir = dirname2(fileURLToPath(import.meta.url));
@@ -242,8 +264,6 @@ async function applyTree(srcTree, targetDir, ctx, source) {
 }
 
 // src/util/version.ts
-import { readFileSync } from "fs";
-import { join as join4 } from "path";
 function makerVersion() {
   try {
     const pkg = JSON.parse(
@@ -255,25 +275,175 @@ function makerVersion() {
   }
 }
 
+// src/util/engine-scaffold.ts
+import { existsSync as existsSync4 } from "fs";
+import { mkdir as mkdir3, readFile as readFile4, writeFile as writeFile3, copyFile as copyFile2 } from "fs/promises";
+import { dirname as dirname3, join as join5 } from "path";
+import fg2 from "fast-glob";
+var HBS_EXT2 = ".hbs";
+async function applyEngine(targetDir, ctx, agents) {
+  const applied = await applyTree(templatesDir("engine/common"), targetDir, ctx, "engine:common");
+  applied.push(...await applySharedAgents(targetDir, ctx));
+  for (const agent2 of agents) applied.push(...await applyProviderAdapter(targetDir, ctx, agent2));
+  return applied;
+}
+async function applyAgentProvider(targetDir, ctx, provider) {
+  const sharedRoot = join5(targetDir, ".maker/workflow/agents");
+  return [
+    ...existsSync4(sharedRoot) ? [] : await applySharedAgents(targetDir, ctx),
+    ...await applyProviderAdapter(targetDir, ctx, provider)
+  ];
+}
+async function applyProviderAdapter(targetDir, ctx, provider) {
+  const staticTree = templatesDir(`engine/providers/${provider}`);
+  const applied = existsSync4(staticTree) ? await applyTree(staticTree, targetDir, ctx, `engine:${provider}`) : [];
+  applied.push(...await applySkills(targetDir, ctx, provider));
+  applied.push(...await applyAgents(targetDir, ctx, provider));
+  return applied;
+}
+async function applySkills(targetDir, ctx, provider) {
+  const root = templatesDir("engine/workflow/skills");
+  const files = await fg2("**/*", { cwd: root, dot: true, onlyFiles: true });
+  const outputRoot = provider === "claude" ? ".claude/skills" : ".agents/skills";
+  const applied = [];
+  for (const relSrc of files) {
+    const isTemplate = relSrc.endsWith(HBS_EXT2);
+    const rel = isTemplate ? relSrc.slice(0, -HBS_EXT2.length) : relSrc;
+    const absSrc = join5(root, relSrc);
+    const absOut = join5(targetDir, outputRoot, rel);
+    await mkdir3(dirname3(absOut), { recursive: true });
+    if (!isTemplate && !rel.endsWith(".md")) {
+      await copyFile2(absSrc, absOut);
+    } else {
+      const raw = await readFile4(absSrc, "utf-8");
+      const rendered = isTemplate ? render(raw, ctx) : raw;
+      const content = provider === "codex" && rel.endsWith("SKILL.md") ? codexSkill(rendered) : provider === "codex" ? adaptCodexText(rendered) : rendered;
+      await writeFile3(absOut, content, "utf-8");
+    }
+    applied.push(await appliedEntry(targetDir, absOut, `engine:${provider}`));
+  }
+  return applied;
+}
+async function applyAgents(targetDir, ctx, provider) {
+  const root = templatesDir("engine/workflow/agents");
+  const files = await fg2("*.md{,.hbs}", { cwd: root, onlyFiles: true });
+  const applied = [];
+  for (const relSrc of files) {
+    const raw = await readFile4(join5(root, relSrc), "utf-8");
+    const rendered = relSrc.endsWith(HBS_EXT2) ? render(raw, ctx) : raw;
+    const parsed = parseFrontmatter(rendered);
+    const fileName = relSrc.replace(/\.md(?:\.hbs)?$/, provider === "claude" ? ".md" : ".toml");
+    const absOut = join5(
+      targetDir,
+      provider === "claude" ? ".claude/agents" : ".codex/agents",
+      fileName
+    );
+    await mkdir3(dirname3(absOut), { recursive: true });
+    const sharedPath = `.maker/workflow/agents/${parsed.name}.md`;
+    const content = provider === "claude" ? `---
+${parsed.frontmatter}
+---
+
+Read \`${sharedPath}\` completely before acting and follow it as your role instructions.
+` : [
+      `name = ${JSON.stringify(parsed.name)}`,
+      `description = ${JSON.stringify(adaptCodexText(parsed.description))}`,
+      `developer_instructions = ${JSON.stringify(`Read ${sharedPath} completely before acting and follow it as your role instructions.
+`)}`,
+      ""
+    ].join("\n");
+    await writeFile3(absOut, content, "utf-8");
+    applied.push(await appliedEntry(targetDir, absOut, `engine:${provider}`));
+  }
+  return applied;
+}
+async function applySharedAgents(targetDir, ctx) {
+  const root = templatesDir("engine/workflow/agents");
+  const files = await fg2("*.md{,.hbs}", { cwd: root, onlyFiles: true });
+  const applied = [];
+  for (const relSrc of files) {
+    const raw = await readFile4(join5(root, relSrc), "utf-8");
+    const rendered = relSrc.endsWith(HBS_EXT2) ? render(raw, ctx) : raw;
+    const parsed = parseFrontmatter(rendered);
+    const absOut = join5(targetDir, ".maker/workflow/agents", `${parsed.name}.md`);
+    await mkdir3(dirname3(absOut), { recursive: true });
+    await writeFile3(absOut, `${adaptSharedAgentText(parsed.body.trim())}
+`, "utf-8");
+    applied.push(await appliedEntry(targetDir, absOut, "engine:common"));
+  }
+  return applied;
+}
+function parseFrontmatter(input) {
+  const match = input.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
+  if (!match) throw new Error("Template de agente sem frontmatter YAML.");
+  const frontmatter = match[1];
+  const name = frontmatter.match(/^name:\s*["']?([^\n"']+)["']?\s*$/m)?.[1]?.trim();
+  if (!name) throw new Error("Template de agente sem name.");
+  const block = frontmatter.match(/^description:\s*\|\n((?:[ \t]+.*\n?)*)/m)?.[1];
+  const inline = frontmatter.match(/^description:\s*["']?([^\n"']+)["']?\s*$/m)?.[1];
+  const description = (block ? block.replace(/^\s+/gm, " ") : inline ?? name).replace(/\s+/g, " ").trim();
+  return { name, description, frontmatter, body: match[2] };
+}
+function codexSkill(input) {
+  const parsed = parseFrontmatter(input);
+  const body = adaptCodexText(parsed.body).replace(
+    /\$ARGUMENTS/g,
+    `o texto da mensagem do usu\xE1rio que acompanha \`$${parsed.name}\``
+  );
+  return `---
+name: ${parsed.name}
+description: ${adaptCodexText(parsed.description)}
+---
+${body}`;
+}
+function adaptCodexText(input) {
+  return input.replace(/\.claude\/skills/g, ".agents/skills").replace(
+    /\/(run-spec|run-brainstorm|speckit-[a-z0-9-]+|fix-on-validation)\b/g,
+    (_match, name) => `$${name}`
+  ).replace(/Generated with \[Claude Code\]\([^)]*\)/g, "Generated with maker on Codex").replace(/CLAUDE\.md\/Auto Memory/g, "AGENTS.md/mem\xF3ria do projeto").replace(/Claude Preview/g, "automa\xE7\xE3o de browser dispon\xEDvel").replace(/Chrome MCP/g, "automa\xE7\xE3o de browser dispon\xEDvel").replace(/Claude Code/g, "Codex").replace(/\(Skill tool\)/g, "(skill dispon\xEDvel)").replace(/subagent_type:/g, "agent:");
+}
+function adaptSharedAgentText(input) {
+  return input.replace(/Claude Preview/g, "automa\xE7\xE3o de browser dispon\xEDvel").replace(/Chrome MCP/g, "automa\xE7\xE3o de browser dispon\xEDvel").replace(/mcp__Claude_Preview__[a-z0-9_]+/gi, "uma ferramenta de browser dispon\xEDvel").replace(/mcp__claude-in-chrome__[a-z0-9_]+/gi, "uma ferramenta de browser dispon\xEDvel").replace(/\.claude\/launch\.json/g, "a configura\xE7\xE3o de execu\xE7\xE3o do agente").replace(/Claude Code/g, "a CLI ag\xEAntica");
+}
+async function appliedEntry(targetDir, absOut, source) {
+  const entry = { hash: sha256(await readFile4(absOut)), source };
+  return { rel: manifestKey(targetDir, absOut), entry };
+}
+
 // src/commands/init.ts
 async function runInit(opts) {
   const targetDir = resolve2(opts.target ?? process.cwd());
-  if (existsSync4(join5(targetDir, ".specify")) && !opts.force) {
+  if (existsSync5(join6(targetDir, ".specify")) && !opts.force) {
     throw new Error(
       `${targetDir} j\xE1 cont\xE9m .specify/ \u2014 use --force para reinstalar por cima.`
     );
   }
-  const config = await loadConfig({
+  const priorManifest = await readManifest(targetDir);
+  const loadedConfig = await loadConfig({
     targetDir,
     configPath: opts.config,
     yes: opts.yes,
-    name: opts.name
+    name: opts.name,
+    agent: opts.agent
+  });
+  const agents = priorManifest ? enabledAgents(priorManifest) : [loadedConfig.agent];
+  if (priorManifest && opts.agent && !agents.includes(opts.agent)) {
+    throw new Error(
+      `A integra\xE7\xE3o ${opts.agent} ainda n\xE3o est\xE1 habilitada \u2014 use 'maker agent add ${opts.agent}'.`
+    );
+  }
+  const config = parseConfig({
+    ...loadedConfig,
+    agent: opts.agent ?? priorManifest?.config?.agent ?? agents[0]
   });
   const ctx = buildContext(config);
-  const applied = await applyTree(templatesDir("engine"), targetDir, ctx, "engine");
+  const applied = await applyEngine(targetDir, ctx, agents);
   const manifest = {
+    schemaVersion: 2,
     makerVersion: makerVersion(),
     project: { name: config.project.name, slug: config.project.slug },
+    config,
+    agents,
     installedAt: (/* @__PURE__ */ new Date()).toISOString(),
     files: Object.fromEntries(applied.map((a) => [a.rel, a.entry]))
   };
@@ -299,12 +469,77 @@ async function runInit(opts) {
     `  1. Preencha ${pc.cyan(".specify/memory/project-rules.md")} (bases t\xE9cnicas + regras de neg\xF3cio)`
   );
   console.log(`  2. Revise ${pc.cyan(".specify/memory/constitution.md")} (se\xE7\xF5es do projeto)`);
-  console.log(`  3. Abra o Claude Code e rode ${pc.cyan("/run-brainstorm")} ou ${pc.cyan("/run-spec")}`);
+  const invocation = config.agent === "codex" ? "$" : "/";
+  console.log(
+    `  3. Abra o ${config.agent === "codex" ? "Codex" : "Claude Code"} e rode ${pc.cyan(`${invocation}run-brainstorm`)} ou ${pc.cyan(`${invocation}run-spec`)}`
+  );
 }
 
 // src/commands/doctor.ts
 import { resolve as resolve3 } from "path";
 import pc2 from "picocolors";
+
+// src/agents/validate.ts
+import { existsSync as existsSync6 } from "fs";
+import { readFile as readFile5 } from "fs/promises";
+import { join as join7 } from "path";
+import fg3 from "fast-glob";
+import { parse as parseToml } from "smol-toml";
+import { z as z2 } from "zod";
+var codexAgentSchema = z2.object({
+  name: z2.string().min(1),
+  description: z2.string().min(1),
+  developer_instructions: z2.string().min(1)
+});
+async function validateAgentIntegration(targetDir, provider) {
+  const skillRoot = join7(targetDir, provider === "claude" ? ".claude/skills" : ".agents/skills");
+  const agentRoot = join7(targetDir, provider === "claude" ? ".claude/agents" : ".codex/agents");
+  const skillFiles = existsSync6(skillRoot) ? await fg3("**/SKILL.md", { cwd: skillRoot, onlyFiles: true }) : [];
+  const agentFiles = existsSync6(agentRoot) ? await fg3(provider === "claude" ? "*.md" : "*.toml", { cwd: agentRoot, onlyFiles: true }) : [];
+  const issues = [];
+  if (!existsSync6(join7(targetDir, "AGENTS.md"))) issues.push("AGENTS.md ausente");
+  if (skillFiles.length === 0) issues.push(`${relativeRoot(provider, "skills")} sem skills`);
+  if (agentFiles.length === 0) issues.push(`${relativeRoot(provider, "agents")} sem agentes`);
+  for (const rel of skillFiles) {
+    const path = join7(skillRoot, rel);
+    const content = await readFile5(path, "utf-8");
+    if (!/^---\n[\s\S]*?^name:\s*.+$[\s\S]*?^description:\s*.+$[\s\S]*?^---$/m.test(content)) {
+      issues.push(`${relativeRoot(provider, "skills")}/${rel}: frontmatter name/description inv\xE1lido`);
+    }
+    if (provider === "codex" && /\/(?:run-spec|run-brainstorm|speckit-[a-z0-9-]+)\b/.test(content)) {
+      issues.push(`${relativeRoot(provider, "skills")}/${rel}: refer\xEAncia slash incompat\xEDvel com Codex`);
+    }
+  }
+  for (const rel of agentFiles) {
+    const path = join7(agentRoot, rel);
+    const content = await readFile5(path, "utf-8");
+    if (provider === "codex") {
+      try {
+        codexAgentSchema.parse(parseToml(content));
+      } catch (error) {
+        const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
+        issues.push(`.codex/agents/${rel}: TOML inv\xE1lido (${message})`);
+        continue;
+      }
+    } else if (!/^---\n[\s\S]*?^name:\s*.+$[\s\S]*?^description:\s*[|"']?.+$[\s\S]*?^---$/m.test(content)) {
+      issues.push(`.claude/agents/${rel}: frontmatter inv\xE1lido`);
+    }
+    const shared = content.match(/\.maker\/workflow\/agents\/[a-z0-9-]+\.md/)?.[0];
+    if (!shared || !existsSync6(join7(targetDir, shared))) {
+      issues.push(`${relativeRoot(provider, "agents")}/${rel}: papel compartilhado ausente`);
+    }
+  }
+  if (provider === "claude" && !existsSync6(join7(targetDir, "CLAUDE.md"))) {
+    issues.push("CLAUDE.md ausente");
+  }
+  return { provider, skills: skillFiles.length, agents: agentFiles.length, issues };
+}
+function relativeRoot(provider, kind) {
+  if (provider === "claude") return kind === "skills" ? ".claude/skills" : ".claude/agents";
+  return kind === "skills" ? ".agents/skills" : ".codex/agents";
+}
+
+// src/commands/doctor.ts
 async function runDoctor(opts) {
   const targetDir = resolve3(opts.target ?? process.cwd());
   const manifest = await readManifest(targetDir);
@@ -312,9 +547,19 @@ async function runDoctor(opts) {
     throw new Error(`Nenhum install do maker encontrado em ${targetDir} (.maker/manifest.json ausente).`);
   }
   const result = await verifyManifest(targetDir, manifest);
+  const integrations = await Promise.all(
+    enabledAgents(manifest).map((agent2) => validateAgentIntegration(targetDir, agent2))
+  );
   console.log(pc2.dim(`Projeto "${manifest.project.name}" \xB7 maker ${manifest.makerVersion}`));
   console.log(pc2.dim(`${result.checked} arquivos verificados`));
-  if (result.ok) {
+  for (const integration of integrations) {
+    const status = integration.issues.length ? pc2.red("degradada") : pc2.green("\xEDntegra");
+    console.log(
+      `  ${integration.provider}: ${status} \xB7 ${integration.skills} skills \xB7 ${integration.agents} agentes`
+    );
+    for (const issue of integration.issues) console.log(pc2.red(`    ${issue}`));
+  }
+  if (result.ok && integrations.every((integration) => integration.issues.length === 0)) {
     console.log(pc2.green("\u2713 Install \xEDntegro."));
     return;
   }
@@ -328,53 +573,73 @@ ${result.missing.length} ausente(s), ${result.modified.length} modificado(s).`)
 }
 
 // src/commands/update.ts
-import { resolve as resolve4, join as join6 } from "path";
-import { existsSync as existsSync5 } from "fs";
-import { readFile as readFile4, writeFile as writeFile3, copyFile as copyFile2, mkdir as mkdir3 } from "fs/promises";
-import { dirname as dirname3 } from "path";
+import { existsSync as existsSync7 } from "fs";
+import { copyFile as copyFile3, mkdir as mkdir4, mkdtemp, readFile as readFile6, rm } from "fs/promises";
+import { tmpdir } from "os";
+import { dirname as dirname4, join as join8, resolve as resolve4 } from "path";
 import pc3 from "picocolors";
-import fg2 from "fast-glob";
 async function runUpdate(opts) {
   const targetDir = resolve4(opts.target ?? process.cwd());
   const manifest = await readManifest(targetDir);
   if (!manifest) throw new Error(`Nenhum install do maker em ${targetDir}.`);
-  const ctx = buildContext(
-    parseConfig({ project: { name: manifest.project.name, slug: manifest.project.slug } })
-  );
-  const srcTree = templatesDir("engine");
-  const files = await fg2("**/*", { cwd: srcTree, dot: true, onlyFiles: true });
+  const { config, recovered } = await resolveConfig(targetDir, manifest.config, manifest.project);
+  const agents = enabledAgents(manifest);
+  const staging = await mkdtemp(join8(tmpdir(), "maker-update-"));
   const updated = [];
   const skipped = [];
-  for (const relSrc of files) {
-    const absSrc = join6(srcTree, relSrc);
-    const isTemplate = relSrc.endsWith(".hbs");
-    const relOut = isTemplate ? relSrc.slice(0, -4) : relSrc;
-    const absOut = join6(targetDir, relOut);
-    const key = manifestKey(targetDir, absOut);
-    const newContent = isTemplate ? Buffer.from(render(await readFile4(absSrc, "utf-8"), ctx), "utf-8") : await readFile4(absSrc);
-    const newHash = sha256(newContent);
-    if (existsSync5(absOut)) {
-      const currentHash = sha256(await readFile4(absOut));
-      const recorded = manifest.files[key]?.hash;
-      if (currentHash !== recorded) {
-        skipped.push(key);
-        continue;
+  try {
+    const expected = await applyEngine(staging, buildContext(config), agents);
+    for (const file of expected) {
+      const staged = join8(staging, file.rel);
+      const destination = join8(targetDir, file.rel);
+      const newContent = await readFile6(staged);
+      const newHash = sha256(newContent);
+      if (existsSync7(destination)) {
+        const currentHash = sha256(await readFile6(destination));
+        const recordedEntry = manifest.files[file.rel];
+        const recorded = recordedEntry?.hash;
+        if (recordedEntry?.source.startsWith("addon:") && currentHash === recorded) {
+          skipped.push(file.rel);
+          continue;
+        }
+        if (recorded && currentHash !== recorded) {
+          skipped.push(file.rel);
+          continue;
+        }
+        if (currentHash === newHash) {
+          manifest.files[file.rel] = file.entry;
+          continue;
+        }
       }
-      if (currentHash === newHash) continue;
+      await mkdir4(dirname4(destination), { recursive: true });
+      await copyFile3(staged, destination);
+      manifest.files[file.rel] = file.entry;
+      updated.push(file.rel);
     }
-    await mkdir3(dirname3(absOut), { recursive: true });
-    if (isTemplate) await writeFile3(absOut, newContent);
-    else await copyFile2(absSrc, absOut);
-    manifest.files[key] = { hash: newHash, source: "engine" };
-    updated.push(key);
+  } finally {
+    await rm(staging, { recursive: true, force: true });
   }
+  manifest.schemaVersion = 2;
+  manifest.agents = agents;
+  if (manifest.config || recovered) manifest.config = config;
   manifest.makerVersion = makerVersion();
   await writeManifest(targetDir, manifest);
   console.log(pc3.green(`\u2713 ${updated.length} arquivo(s) atualizado(s).`));
   if (skipped.length) {
     console.log(pc3.yellow(`${skipped.length} preservado(s) por edi\xE7\xE3o local:`));
-    for (const s of skipped) console.log(pc3.dim(`  ${s}`));
+    for (const path of skipped) console.log(pc3.dim(`  ${path}`));
   }
+}
+async function resolveConfig(targetDir, stored, project) {
+  if (stored) return { config: parseConfig(stored), recovered: true };
+  const configPath = join8(targetDir, "maker.config.json");
+  if (existsSync7(configPath)) {
+    return {
+      config: parseConfig(JSON.parse(await readFile6(configPath, "utf-8"))),
+      recovered: true
+    };
+  }
+  return { config: parseConfig({ project }), recovered: false };
 }
 
 // src/commands/add.ts
@@ -383,54 +648,54 @@ import pc4 from "picocolors";
 import * as p2 from "@clack/prompts";
 
 // src/addons/loader.ts
-import { readFile as readFile5 } from "fs/promises";
-import { existsSync as existsSync6 } from "fs";
-import { join as join7 } from "path";
+import { readFile as readFile7 } from "fs/promises";
+import { existsSync as existsSync8 } from "fs";
+import { join as join9 } from "path";
 
 // src/addons/schema.ts
-import { z as z2 } from "zod";
-var addonKnobSchema = z2.object({
-  name: z2.string().regex(/^[a-zA-Z][a-zA-Z0-9_]*$/, "knob.name deve ser identificador simples"),
-  prompt: z2.string(),
-  default: z2.string().default("")
+import { z as z3 } from "zod";
+var addonKnobSchema = z3.object({
+  name: z3.string().regex(/^[a-zA-Z][a-zA-Z0-9_]*$/, "knob.name deve ser identificador simples"),
+  prompt: z3.string(),
+  default: z3.string().default("")
 });
-var agentFragmentSchema = z2.object({
-  agent: z2.string(),
+var agentFragmentSchema = z3.object({
+  agent: z3.string(),
   // nome do agente-alvo (sem .md), ex.: "code-reviewer"
-  file: z2.string()
+  file: z3.string()
   // path relativo ao dir do add-on, ex.: "agents/code-reviewer.fragment.md.hbs"
 });
-var addonFileSchema = z2.object({
-  from: z2.string(),
+var addonFileSchema = z3.object({
+  from: z3.string(),
   // path relativo ao dir do add-on
-  to: z2.string()
+  to: z3.string()
   // path relativo ao target, ex.: ".specify/memory/saas-reference.md"
 });
-var addonManifestSchema = z2.object({
-  id: z2.string().regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, "id deve ser kebab-case"),
-  name: z2.string(),
-  description: z2.string().default(""),
-  version: z2.string().default("0.1.0"),
-  knobs: z2.array(addonKnobSchema).default([]),
+var addonManifestSchema = z3.object({
+  id: z3.string().regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, "id deve ser kebab-case"),
+  name: z3.string(),
+  description: z3.string().default(""),
+  version: z3.string().default("0.1.0"),
+  knobs: z3.array(addonKnobSchema).default([]),
   /** .hbs injetados na seção "Princípios do Projeto" da constitution. */
-  principles: z2.array(z2.string()).default([]),
+  principles: z3.array(z3.string()).default([]),
   /** fragmentos anexados a agentes específicos. */
-  agentFragments: z2.array(agentFragmentSchema).default([]),
+  agentFragments: z3.array(agentFragmentSchema).default([]),
   /** arquivos novos escritos no target (renderizados se .hbs). */
-  files: z2.array(addonFileSchema).default([])
+  files: z3.array(addonFileSchema).default([])
 });
 
 // src/addons/loader.ts
 function addonDir(id) {
-  return join7(packageRoot(), "addons", id);
+  return join9(packageRoot(), "addons", id);
 }
 async function loadAddon(id) {
   const dir = addonDir(id);
-  const manifestPath = join7(dir, "addon.json");
-  if (!existsSync6(manifestPath)) {
+  const manifestPath = join9(dir, "addon.json");
+  if (!existsSync8(manifestPath)) {
     throw new Error(`Add-on "${id}" n\xE3o encontrado (esperado em addons/${id}/addon.json).`);
   }
-  const raw = JSON.parse(await readFile5(manifestPath, "utf-8"));
+  const raw = JSON.parse(await readFile7(manifestPath, "utf-8"));
   const parsed = addonManifestSchema.parse(raw);
   if (parsed.id !== id) {
     throw new Error(`Add-on id divergente: pasta "${id}" vs manifest "${parsed.id}".`);
@@ -439,10 +704,10 @@ async function loadAddon(id) {
 }
 
 // src/addons/apply.ts
-import { readFile as readFile7, writeFile as writeFile5, mkdir as mkdir5 } from "fs/promises";
-import { existsSync as existsSync8 } from "fs";
-import { dirname as dirname5, join as join9 } from "path";
-import { rm as rm2 } from "fs/promises";
+import { readFile as readFile9, writeFile as writeFile5, mkdir as mkdir6 } from "fs/promises";
+import { existsSync as existsSync10 } from "fs";
+import { dirname as dirname6, join as join11 } from "path";
+import { rm as rm3 } from "fs/promises";
 
 // src/addons/inject.ts
 var startMarker = (id) => `<!-- maker:addon:${id}:start -->`;
@@ -485,28 +750,28 @@ function escapeRe(s) {
 }
 
 // src/addons/state.ts
-import { readFile as readFile6, writeFile as writeFile4, mkdir as mkdir4, rm } from "fs/promises";
-import { existsSync as existsSync7 } from "fs";
-import { dirname as dirname4, join as join8 } from "path";
+import { readFile as readFile8, writeFile as writeFile4, mkdir as mkdir5, rm as rm2 } from "fs/promises";
+import { existsSync as existsSync9 } from "fs";
+import { dirname as dirname5, join as join10 } from "path";
 function addonStatePath(targetDir, id) {
-  return join8(targetDir, ".maker", "addons", `${id}.json`);
+  return join10(targetDir, ".maker", "addons", `${id}.json`);
 }
 function isAddonApplied(targetDir, id) {
-  return existsSync7(addonStatePath(targetDir, id));
+  return existsSync9(addonStatePath(targetDir, id));
 }
 async function readAddonState(targetDir, id) {
   const p3 = addonStatePath(targetDir, id);
-  if (!existsSync7(p3)) return null;
-  return JSON.parse(await readFile6(p3, "utf-8"));
+  if (!existsSync9(p3)) return null;
+  return JSON.parse(await readFile8(p3, "utf-8"));
 }
 async function writeAddonState(targetDir, state) {
   const p3 = addonStatePath(targetDir, state.id);
-  await mkdir4(dirname4(p3), { recursive: true });
+  await mkdir5(dirname5(p3), { recursive: true });
   await writeFile4(p3, JSON.stringify(state, null, 2) + "\n", "utf-8");
 }
 async function deleteAddonState(targetDir, id) {
   const p3 = addonStatePath(targetDir, id);
-  if (existsSync7(p3)) await rm(p3);
+  if (existsSync9(p3)) await rm2(p3);
 }
 
 // src/addons/apply.ts
@@ -520,11 +785,11 @@ function addonContext(manifest, knobs) {
   };
 }
 async function renderFrom(dir, rel, ctx) {
-  const raw = await readFile7(join9(dir, rel), "utf-8");
+  const raw = await readFile9(join11(dir, rel), "utf-8");
   return rel.endsWith(".hbs") ? renderRaw(raw, ctx) : raw;
 }
 async function touchManifest(manifest, targetDir, absPath, source) {
-  const hash = sha256(await readFile7(absPath));
+  const hash = sha256(await readFile9(absPath));
   manifest.files[manifestKey(targetDir, absPath)] = { hash, source };
 }
 async function applyAddon(targetDir, addon, knobs) {
@@ -539,12 +804,12 @@ async function applyAddon(targetDir, addon, knobs) {
   const prior = await readAddonState(targetDir, addon.id);
   const owned = new Set((prior?.createdFiles ?? []).map((f) => f.path));
   if (addon.principles.length) {
-    const absConst = join9(targetDir, CONSTITUTION);
-    if (!existsSync8(absConst)) throw new Error(`${CONSTITUTION} ausente no install.`);
+    const absConst = join11(targetDir, CONSTITUTION);
+    if (!existsSync10(absConst)) throw new Error(`${CONSTITUTION} ausente no install.`);
     const rendered = [];
     for (const p3 of addon.principles) rendered.push((await renderFrom(dir, p3, ctx)).trim());
     const block = rendered.join("\n\n");
-    const current = await readFile7(absConst, "utf-8");
+    const current = await readFile9(absConst, "utf-8");
     const next = upsertBlock(current, addon.id, block, {
       replacePlaceholder: PLACEHOLDER,
       beforeHeading: "## Governance"
@@ -554,26 +819,26 @@ async function applyAddon(targetDir, addon, knobs) {
     injectedTargets.push(CONSTITUTION);
   }
   for (const frag of addon.agentFragments) {
-    const rel = `.claude/agents/${frag.agent}.md`;
-    const abs = join9(targetDir, rel);
-    if (!existsSync8(abs)) {
+    const rel = `.maker/workflow/agents/${frag.agent}.md`;
+    const abs = join11(targetDir, rel);
+    if (!existsSync10(abs)) {
       console.warn(`  aviso: agente ${frag.agent} ausente \u2014 fragmento pulado.`);
       continue;
     }
     const block = (await renderFrom(dir, frag.file, ctx)).trim();
-    const next = upsertBlock(await readFile7(abs, "utf-8"), addon.id, block);
+    const next = upsertBlock(await readFile9(abs, "utf-8"), addon.id, block);
     await writeFile5(abs, next, "utf-8");
     await touchManifest(manifest, targetDir, abs, `addon:${addon.id}`);
     injectedTargets.push(rel);
   }
   for (const f of addon.files) {
-    const abs = join9(targetDir, f.to);
-    if (existsSync8(abs) && !owned.has(f.to)) {
+    const abs = join11(targetDir, f.to);
+    if (existsSync10(abs) && !owned.has(f.to)) {
       console.warn(`  aviso: ${f.to} j\xE1 existe (n\xE3o \xE9 deste add-on) \u2014 n\xE3o sobrescrito.`);
       continue;
     }
     const content = await renderFrom(dir, f.from, ctx);
-    await mkdir5(dirname5(abs), { recursive: true });
+    await mkdir6(dirname6(abs), { recursive: true });
     await writeFile5(abs, content, "utf-8");
     const hash = sha256(Buffer.from(content, "utf-8"));
     manifest.files[manifestKey(targetDir, abs)] = { hash, source: `addon:${addon.id}` };
@@ -599,19 +864,19 @@ async function removeAddon(targetDir, id) {
   const deletedFiles = [];
   const keptFiles = [];
   for (const rel of state.injectedTargets) {
-    const abs = join9(targetDir, rel);
-    if (!existsSync8(abs)) continue;
-    const next = stripBlock(await readFile7(abs, "utf-8"), id);
+    const abs = join11(targetDir, rel);
+    if (!existsSync10(abs)) continue;
+    const next = stripBlock(await readFile9(abs, "utf-8"), id);
     await writeFile5(abs, next, "utf-8");
     if (manifest) await touchManifest(manifest, targetDir, abs, "engine");
     strippedTargets.push(rel);
   }
   for (const f of state.createdFiles) {
-    const abs = join9(targetDir, f.path);
-    if (!existsSync8(abs)) continue;
-    const current = sha256(await readFile7(abs));
+    const abs = join11(targetDir, f.path);
+    if (!existsSync10(abs)) continue;
+    const current = sha256(await readFile9(abs));
     if (current === f.hash) {
-      await rm2(abs);
+      await rm3(abs);
       if (manifest) delete manifest.files[manifestKey(targetDir, abs)];
       deletedFiles.push(f.path);
     } else {
@@ -692,11 +957,253 @@ async function runRemove(id, opts) {
     );
 }
 
+// src/commands/runs.ts
+import { resolve as resolve7 } from "path";
+import pc6 from "picocolors";
+
+// src/runs/read.ts
+import { readdir, readFile as readFile10 } from "fs/promises";
+import { basename, join as join13 } from "path";
+
+// src/runs/schema.ts
+import { z as z4 } from "zod";
+var phaseSchema = z4.enum(["spec", "plan", "dev", "review"]);
+var decisionSchema = z4.enum(["approve", "reject", "edit"]);
+var costSchema = z4.object({
+  tokens: z4.number().int().nonnegative(),
+  duration_ms: z4.number().int().nonnegative()
+}).strict();
+var base = {
+  run_id: z4.string().min(1),
+  ts: z4.string().datetime({ offset: true }),
+  // ISO-8601 UTC
+  cost: costSchema
+};
+var runStartSchema = z4.object({ type: z4.literal("run.start"), ...base }).strict();
+var runEndSchema = z4.object({ type: z4.literal("run.end"), ...base }).strict();
+var agentHandoffSchema = z4.object({
+  type: z4.literal("agent.handoff"),
+  actor: z4.string().min(1),
+  phase: phaseSchema,
+  ...base
+}).strict();
+var gateDecisionSchema = z4.object({
+  type: z4.literal("gate.decision"),
+  gate: phaseSchema,
+  actor: z4.string().min(1),
+  decision: decisionSchema,
+  reason_inferred: z4.string(),
+  artifact_diff_ref: z4.string().optional(),
+  ...base
+}).strict();
+var eventSchema = z4.discriminatedUnion("type", [
+  runStartSchema,
+  agentHandoffSchema,
+  gateDecisionSchema,
+  runEndSchema
+]);
+
+// src/runs/emit.ts
+import { appendFile, mkdir as mkdir7 } from "fs/promises";
+import { dirname as dirname7, join as join12 } from "path";
+var RUNS_DIR = ".maker/runs";
+
+// src/runs/read.ts
+async function listRunFiles(target) {
+  const dir = join13(target, RUNS_DIR);
+  let entries;
+  try {
+    entries = await readdir(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return entries.filter((e) => e.isFile() && e.name.endsWith(".jsonl")).map((e) => ({ runId: basename(e.name, ".jsonl"), path: join13(dir, e.name) })).sort((a, b) => a.runId.localeCompare(b.runId));
+}
+async function readRun(path) {
+  const raw = await readFile10(path, "utf-8");
+  const events = [];
+  for (const line of raw.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed === "") continue;
+    let parsedJson;
+    try {
+      parsedJson = JSON.parse(trimmed);
+    } catch {
+      continue;
+    }
+    const result = eventSchema.safeParse(parsedJson);
+    if (result.success) events.push(result.data);
+  }
+  return events;
+}
+
+// src/runs/aggregate.ts
+function costByGate(events) {
+  const result = {};
+  for (const event of events) {
+    const gate = faseDe(event);
+    if (gate === void 0) continue;
+    const acc = result[gate] ??= { tokens: 0, duration_ms: 0 };
+    acc.tokens += event.cost.tokens;
+    acc.duration_ms += event.cost.duration_ms;
+  }
+  return result;
+}
+function runTotals(events) {
+  const total = { tokens: 0, duration_ms: 0 };
+  for (const event of events) {
+    total.tokens += event.cost.tokens;
+    total.duration_ms += event.cost.duration_ms;
+  }
+  return total;
+}
+function faseDe(event) {
+  if (event.type === "agent.handoff") return event.phase;
+  if (event.type === "gate.decision") return event.gate;
+  return void 0;
+}
+function rejectionsByGate(runs) {
+  const m = runs.length;
+  const result = {};
+  for (const gate of phaseSchema.options) result[gate] = { n: 0, m };
+  for (const events of runs) {
+    const rejectedGates = /* @__PURE__ */ new Set();
+    for (const event of events) {
+      if (event.type === "gate.decision" && event.decision === "reject") {
+        rejectedGates.add(event.gate);
+      }
+    }
+    for (const gate of rejectedGates) result[gate].n += 1;
+  }
+  return result;
+}
+
+// src/commands/runs.ts
+var GATES = phaseSchema.options;
+async function runRuns(opts) {
+  const targetDir = resolve7(opts.target ?? process.cwd());
+  const files = await listRunFiles(targetDir);
+  if (files.length === 0) {
+    console.log(pc6.dim("nenhum run registrado"));
+    return;
+  }
+  const allRunsEvents = [];
+  for (const file of files) {
+    const events = await readRun(file.path);
+    allRunsEvents.push(events);
+    const perGate = costByGate(events);
+    const total = runTotals(events);
+    console.log(pc6.bold(file.runId));
+    for (const gate of GATES) {
+      const cost = perGate[gate];
+      if (!cost) continue;
+      console.log(
+        pc6.dim(`  ${gate}: tokens=${cost.tokens} duration_ms=${cost.duration_ms}`)
+      );
+    }
+    console.log(`  total: tokens=${total.tokens} duration_ms=${total.duration_ms}`);
+  }
+  const rejections = rejectionsByGate(allRunsEvents);
+  console.log("");
+  for (const gate of GATES) {
+    const { n, m } = rejections[gate];
+    console.log(`${gate} reprovou em ${n} de ${m} runs`);
+  }
+}
+
+// src/commands/agent.ts
+import { existsSync as existsSync11 } from "fs";
+import { readFile as readFile11 } from "fs/promises";
+import { join as join14, resolve as resolve8 } from "path";
+import { mkdtemp as mkdtemp2, rm as rm4 } from "fs/promises";
+import { tmpdir as tmpdir2 } from "os";
+import pc7 from "picocolors";
+async function runAgentAdd(providerInput, opts) {
+  const provider = agentProviderSchema.parse(providerInput);
+  const targetDir = resolve8(opts.target ?? process.cwd());
+  const manifest = await readManifest(targetDir);
+  if (!manifest) throw new Error(`Nenhum install do maker em ${targetDir} \u2014 rode 'maker init' antes.`);
+  const agents = enabledAgents(manifest);
+  if (agents.includes(provider)) {
+    console.log(pc7.dim(`Integra\xE7\xE3o ${provider} j\xE1 est\xE1 habilitada.`));
+    return;
+  }
+  const config = await resolveRenderConfig(targetDir, manifest.config, opts.config);
+  await assertNoUnmanagedProviderFiles(
+    targetDir,
+    provider,
+    manifest.files,
+    buildContext(config)
+  );
+  const applied = await applyAgentProvider(targetDir, buildContext(config), provider);
+  for (const file of applied) manifest.files[file.rel] = file.entry;
+  manifest.schemaVersion = 2;
+  manifest.config = config;
+  manifest.agents = [...agents, provider];
+  await writeManifest(targetDir, manifest);
+  const sigil = provider === "codex" ? "$" : "/";
+  console.log(pc7.green(`\u2713 Integra\xE7\xE3o ${provider} adicionada (${applied.length} arquivos).`));
+  console.log(`  Use ${pc7.cyan(`${sigil}run-brainstorm`)} ou ${pc7.cyan(`${sigil}run-spec`)}.`);
+}
+async function runAgentList(opts) {
+  const targetDir = resolve8(opts.target ?? process.cwd());
+  const manifest = await readManifest(targetDir);
+  if (!manifest) throw new Error(`Nenhum install do maker em ${targetDir}.`);
+  const enabled = new Set(enabledAgents(manifest));
+  console.log(pc7.dim(`Projeto "${manifest.project.name}"`));
+  for (const provider of agentProviderSchema.options) {
+    if (!enabled.has(provider)) {
+      console.log(`  ${provider}: ${pc7.dim("n\xE3o habilitada")}`);
+      continue;
+    }
+    const validation = await validateAgentIntegration(targetDir, provider);
+    const status = validation.issues.length ? pc7.red("degradada") : pc7.green("\xEDntegra");
+    console.log(`  ${provider}: ${status} \xB7 ${validation.skills} skills \xB7 ${validation.agents} agentes`);
+    for (const issue of validation.issues) console.log(pc7.red(`    ${issue}`));
+  }
+}
+async function resolveRenderConfig(targetDir, stored, explicitPath) {
+  if (stored) return parseConfig(stored);
+  const path = explicitPath ? resolve8(explicitPath) : join14(targetDir, "maker.config.json");
+  if (!existsSync11(path)) {
+    throw new Error(
+      "Este install usa um manifest legado sem a configura\xE7\xE3o de renderiza\xE7\xE3o. Forne\xE7a --config <maker.config.json> para adicionar outra integra\xE7\xE3o com seguran\xE7a."
+    );
+  }
+  return parseConfig(JSON.parse(await readFile11(path, "utf-8")));
+}
+async function assertNoUnmanagedProviderFiles(targetDir, provider, managed, ctx) {
+  const staging = await mkdtemp2(join14(tmpdir2(), "maker-agent-preflight-"));
+  let expected;
+  try {
+    expected = (await applyAgentProvider(staging, ctx, provider)).map((file) => file.rel);
+  } finally {
+    await rm4(staging, { recursive: true, force: true });
+  }
+  const collisions = expected.filter(
+    (rel) => existsSync11(join14(targetDir, rel)) && !(rel in managed)
+  );
+  if (collisions.length) {
+    throw new Error(
+      `A integra\xE7\xE3o ${provider} n\xE3o foi adicionada porque estes arquivos j\xE1 existem e n\xE3o pertencem ao manifest do maker:
+  - ${collisions.join("\n  - ")}
+Mova ou renomeie esses arquivos e execute o comando novamente; nenhuma altera\xE7\xE3o foi feita.`
+    );
+  }
+}
+
 // src/cli.ts
 var program = new Command();
 program.name("maker").description("Encapsulador do workflow de cria\xE7\xE3o de produtos (motor SpecKit + multi-agente).").version(makerVersion());
-program.command("init").description("Instala o motor no projeto-alvo.").option("-t, --target <dir>", "diret\xF3rio do projeto (default: cwd)").option("-c, --config <file>", "caminho para maker.config.json").option("-n, --name <name>", "nome do projeto (modo --yes sem config)").option("-y, --yes", "n\xE3o interativo; usa config/defaults").option("-f, --force", "reinstala por cima de um .specify/ existente").action(async (opts) => {
+program.command("init").description("Instala o motor no projeto-alvo.").option("-t, --target <dir>", "diret\xF3rio do projeto (default: cwd)").option("-c, --config <file>", "caminho para maker.config.json").option("-n, --name <name>", "nome do projeto (modo --yes sem config)").option("-a, --agent <agent>", "CLI ag\xEAntica inicial: claude | codex").option("-y, --yes", "n\xE3o interativo; usa config/defaults").option("-f, --force", "reinstala por cima de um .specify/ existente").action(async (opts) => {
   await runInit(opts);
+});
+var agent = program.command("agent").description("Gerencia integra\xE7\xF5es de CLI ag\xEAntica.");
+agent.command("add").argument("<agent>", "integra\xE7\xE3o a adicionar: claude | codex").description("Adiciona outra integra\xE7\xE3o sem remover as j\xE1 habilitadas.").option("-t, --target <dir>", "diret\xF3rio do projeto (default: cwd)").option("-c, --config <file>", "config exigida apenas para manifests legados").action(async (provider, opts) => {
+  await runAgentAdd(provider, opts);
+});
+agent.command("list").description("Lista integra\xE7\xF5es dispon\xEDveis, habilitadas e seu estado estrutural.").option("-t, --target <dir>", "diret\xF3rio do projeto (default: cwd)").action(async (opts) => {
+  await runAgentList(opts);
 });
 program.command("doctor").description("Verifica a integridade de um install contra o manifest.").option("-t, --target <dir>", "diret\xF3rio do projeto (default: cwd)").action(async (opts) => {
   await runDoctor(opts);
@@ -710,8 +1217,11 @@ program.command("add").argument("<addon>", "id do add-on (ex.: saas)").descripti
 program.command("remove").argument("<addon>", "id do add-on (ex.: saas)").description("Remove um add-on aplicado, revertendo inje\xE7\xF5es e arquivos criados.").option("-t, --target <dir>", "diret\xF3rio do projeto (default: cwd)").action(async (addon, opts) => {
   await runRemove(addon, opts);
 });
+program.command("runs").description("Lista runs registrados com custo/tempo por gate + total.").option("-t, --target <dir>", "diret\xF3rio do projeto (default: cwd)").action(async (opts) => {
+  await runRuns(opts);
+});
 program.parseAsync(process.argv).catch((err) => {
-  console.error(pc6.red(`
+  console.error(pc8.red(`
 erro: ${err instanceof Error ? err.message : String(err)}`));
   process.exit(1);
 });

@@ -2,7 +2,7 @@
 /**
  * Authoring helper (re-runnable): copia a camada custom generica de um PROJETO DE
  * ORIGEM (um repo que ja tenha .claude/skills + .claude/agents no padrao) para
- * templates/engine, sanitizando os pontos de acoplamento MECANICOS (nome do repo,
+ * templates/engine/workflow, sanitizando os pontos de acoplamento MECANICOS (nome do repo,
  * comandos). NAO tenta remover regra de negocio — isso e feito a mao nos poucos
  * agentes business-bound. Apos rodar, use `npm run audit:coupling`.
  *
@@ -20,6 +20,7 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const ENGINE = join(ROOT, "templates", "engine");
+const WORKFLOW = join(ENGINE, "workflow");
 
 function arg(flag) {
   const i = process.argv.indexOf(flag);
@@ -70,7 +71,7 @@ const GENERIC_SKILLS = ["run-brainstorm", "brainstorming"];
 async function copySkillSanitized(name) {
   const srcDir = join(SRC, ".claude", "skills", name);
   if (!existsSync(srcDir)) return void console.warn(`  skip skill ${name} (ausente)`);
-  const dstDir = join(ENGINE, ".claude", "skills", name);
+  const dstDir = join(WORKFLOW, "skills", name);
   await cp(srcDir, dstDir, { recursive: true });
   const walk = async (d) => {
     for (const e of await readdir(d)) {
@@ -89,7 +90,7 @@ async function copySkillSanitized(name) {
 async function copyAgentSanitized(name) {
   const src = join(SRC, ".claude", "agents", `${name}.md`);
   if (!existsSync(src)) return void console.warn(`  skip agent ${name} (ausente)`);
-  const dst = join(ENGINE, ".claude", "agents", `${name}.md.hbs`);
+  const dst = join(WORKFLOW, "agents", `${name}.md.hbs`);
   await mkdir(dirname(dst), { recursive: true });
   await writeFile(dst, sanitize(await readFile(src, "utf-8")), "utf-8");
   console.log(`  agent ${name} → sanitizado`);

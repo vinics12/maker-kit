@@ -10,8 +10,14 @@ describe("config schema", () => {
 
   it("aplica defaults de commands e layout", () => {
     const c = parseConfig({ project: { name: "X" } });
+    expect(c.agent).toBe("claude");
     expect(c.commands.verify).toBeTruthy();
     expect(c.layout.frontendGlobs.length).toBeGreaterThan(0);
+  });
+
+  it("aceita codex e rejeita agentes desconhecidos", () => {
+    expect(parseConfig({ agent: "codex", project: { name: "X" } }).agent).toBe("codex");
+    expect(() => parseConfig({ agent: "outro", project: { name: "X" } })).toThrow();
   });
 
   it("rejeita slug não-kebab", () => {

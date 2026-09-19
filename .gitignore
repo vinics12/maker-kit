@@ -15,8 +15,11 @@ coverage/
 !/.specify/memory/
 /.claude/skills/
 /.claude/agents/
+/.agents/skills/
+/.codex/agents/
 /.maker/
 # arquivos de raiz renderizados pelo `maker init` (pipeline, não produto)
 /CLAUDE.md
+/AGENTS.md
 /.mcp.json
 /.gitattributes
