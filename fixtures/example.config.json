@@ -1,4 +1,5 @@
 {
+  "agent": "claude",
   "project": {
     "name": "Nimbus Ledger",
     "slug": "nimbus-ledger"

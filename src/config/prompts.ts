@@ -5,6 +5,16 @@ import { parseConfig, slugify, type MakerConfig } from "./schema.js";
 export async function promptConfig(): Promise<MakerConfig> {
   p.intro("maker — instalar o motor de criação de produtos");
 
+  const agent = await p.select({
+    message: "CLI agêntica",
+    initialValue: "claude",
+    options: [
+      { value: "claude", label: "Claude Code", hint: "padrão" },
+      { value: "codex", label: "Codex" },
+    ],
+  });
+  if (p.isCancel(agent)) cancel();
+
   const name = await p.text({
     message: "Nome do projeto",
     placeholder: "Acme Platform",
@@ -46,6 +56,7 @@ export async function promptConfig(): Promise<MakerConfig> {
   if (p.isCancel(dev)) cancel();
 
   return parseConfig({
+    agent: agent as "claude" | "codex",
     project: { name: (name as string).trim(), slug: slug as string },
     layout: {
       frontendGlobs: splitList(frontendGlobs as string),

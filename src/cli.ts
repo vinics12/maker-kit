@@ -6,6 +6,7 @@ import { runUpdate } from "./commands/update.js";
 import { runAdd } from "./commands/add.js";
 import { runRemove } from "./commands/remove.js";
 import { runRuns } from "./commands/runs.js";
+import { runAgentAdd, runAgentList } from "./commands/agent.js";
 import { makerVersion } from "./util/version.js";
 
 const program = new Command();
@@ -21,10 +22,31 @@ program
   .option("-t, --target <dir>", "diretório do projeto (default: cwd)")
   .option("-c, --config <file>", "caminho para maker.config.json")
   .option("-n, --name <name>", "nome do projeto (modo --yes sem config)")
+  .option("-a, --agent <agent>", "CLI agêntica inicial: claude | codex")
   .option("-y, --yes", "não interativo; usa config/defaults")
   .option("-f, --force", "reinstala por cima de um .specify/ existente")
   .action(async (opts) => {
     await runInit(opts);
+  });
+
+const agent = program.command("agent").description("Gerencia integrações de CLI agêntica.");
+
+agent
+  .command("add")
+  .argument("<agent>", "integração a adicionar: claude | codex")
+  .description("Adiciona outra integração sem remover as já habilitadas.")
+  .option("-t, --target <dir>", "diretório do projeto (default: cwd)")
+  .option("-c, --config <file>", "config exigida apenas para manifests legados")
+  .action(async (provider, opts) => {
+    await runAgentAdd(provider, opts);
+  });
+
+agent
+  .command("list")
+  .description("Lista integrações disponíveis, habilitadas e seu estado estrutural.")
+  .option("-t, --target <dir>", "diretório do projeto (default: cwd)")
+  .action(async (opts) => {
+    await runAgentList(opts);
   });
 
 program

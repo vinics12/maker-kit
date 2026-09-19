@@ -41,9 +41,9 @@ os scripts `.sh` e o `grep` não existem).
    ```
 3. **Trabalhe com os arquivos dentro do Linux** (ex.: `~/dev/meu-projeto`), não em `/mnt/c/...` — o
    filesystem nativo do WSL é muito mais rápido e evita problemas de fim-de-linha/permissão.
-4. Use o Claude Code / a CLI `maker` normalmente **de dentro da distro**. Tudo se comporta como Linux.
+4. Use o Claude Code, o Codex e a CLI `maker` normalmente **de dentro da distro**.
 
-5. Abra o Claude Code **apontando para o WSL** (ou rode o `claude` de dentro da distro) e trabalhe
+5. Abra sua CLI agêntica **apontando para o WSL** (ou rode `claude`/`codex` dentro da distro) e trabalhe
    normalmente. `maker init` e o pipeline (`/run-spec`) se comportam exatamente como no Linux.
 
 > **O que muda na instalação no Windows?** Nada no *comando* — a CLI `maker` é Node puro e roda igual
@@ -111,6 +111,7 @@ maker init
 
 Ele pergunta (interativo) os **knobs mecânicos** — nada de regra de negócio:
 
+- **CLI agêntica inicial** (`claude`, padrão, ou `codex`)
 - **Nome / slug** do projeto
 - **Globs de layout** (o que é frontend vs backend, pro roteamento de dev)
 - **Comandos** do projeto: `verify` (lint+types+test), `build`, `test`, `dev`
@@ -119,6 +120,7 @@ Prefere não-interativo? Crie um `maker.config.json` e aponte com `--config`:
 
 ```jsonc
 {
+  "agent": "codex",
   "project":  { "name": "Acme Platform", "slug": "acme-platform" },
   "layout":   { "frontendGlobs": ["apps/*/src/**"], "backendGlobs": ["services/**"] },
   "commands": { "verify": "pnpm verify", "build": "pnpm build", "test": "pnpm test", "dev": "make dev" }
@@ -129,8 +131,18 @@ Prefere não-interativo? Crie um `maker.config.json` e aponte com `--config`:
 maker init --target ./meu-projeto --config maker.config.json
 # mínimo, sem prompts:
 maker init --yes --name "Acme Platform"
+# escolher explicitamente o Codex:
+maker init --yes --name "Acme Platform" --agent codex
 # reinstalar por cima de um install existente:
 maker init --force
+```
+
+O init instala uma única integração. Para habilitar a outra depois, sem remover a atual:
+
+```bash
+maker agent add codex   # em um projeto inicialmente Claude
+maker agent add claude  # em um projeto inicialmente Codex
+maker agent list        # mostra integrações e integridade estrutural
 ```
 
 ### 2. Declarar as bases técnicas e regras (você preenche)
@@ -143,11 +155,20 @@ O motor é agnóstico. Depois do install, abra e preencha:
   as seções **Bases Técnicas** e **Princípios do Projeto**.
 - `.specify/memory/product-overview.md` — visão de produto.
 
-### 3. Rodar o pipeline no Claude Code
+### 3. Rodar o pipeline
+
+No Claude Code:
 
 ```
 /run-brainstorm "ideia difusa"   # exploração → design doc → handoff
 /run-spec "feature bem definida" # spec → plan → dev → aceite (4 gates humanos)
+```
+
+No Codex:
+
+```text
+$run-brainstorm "ideia difusa"
+$run-spec "feature bem definida"
 ```
 
 ### 4. Manter a instalação
@@ -162,19 +183,20 @@ maker update    # atualiza arquivos do motor que você NÃO editou (edições lo
 ## O que é instalado no projeto-alvo
 
 - `.specify/` — base **SpecKit** stock (scripts, templates, workflows) + memória do motor.
-- `.claude/skills/` — `run-spec` (orquestrador de 4 gates), `run-brainstorm`, `brainstorming` e as
-  skills `speckit-*`.
-- `.claude/agents/` — papéis do pipeline (`spec-author`, `spec-reviewer`, `architect`,
+- `AGENTS.md` — contexto compartilhado e fonte principal de instruções do projeto.
+- Claude: `.claude/skills/`, `.claude/agents/` e um `CLAUDE.md` curto que referencia `AGENTS.md`.
+- Codex: `.agents/skills/` e `.codex/agents/*.toml`.
+- `.maker/workflow/agents/` — papéis canônicos do pipeline (`spec-author`, `spec-reviewer`, `architect`,
   `plan-reviewer`, `dev`, `code-reviewer`, `pm-validator`, `ux-designer`, `visual-reviewer`,
-  `e2e-planner`, `e2e-runner`, `feature-cataloguer`). **Todos lêem a constitution do projeto** — nenhuma
-  regra de negócio é codificada no motor.
+  `e2e-planner`, `e2e-runner`, `feature-cataloguer`), compartilhados pelos adaptadores. **Todos leem a
+  constitution do projeto** — nenhuma regra de negócio é codificada no motor.
 - `.specify/memory/` — `constitution.md` (Processo PR1–PR6 + seções vazias) e os stubs guiados
   `project-rules.md` / `product-overview.md`.
 - `.maker/manifest.json` — inventário sha256 usado por `doctor`/`update`.
 
 ---
 
-## Wrapper de skill (Claude Code)
+## Wrapper de skill (Claude Code e Codex)
 
 Além da CLI, o `maker` inclui um **plugin do Claude Code** (em `wrapper/`) que expõe o comando
 `/maker`, conduzindo a instalação pela conversa e delegando 100% para a CLI. Assim você opera o motor
@@ -211,7 +233,14 @@ Dentro do Claude Code, no diretório do projeto-alvo:
 ```
 
 O plugin nasce junto com o motor e **cresce por fase**: expõe `init | doctor | update` (motor) e
-`add | remove` (add-ons).
+`agent add | agent list` (integrações), além de `add | remove` (add-ons).
+
+### Wrapper no Codex
+
+O diretório `wrapper/` também é um plugin portátil de Agent Skills (`plugin.json` + `skills/`). Para
+uso imediato, instale a skill do repositório com o `$skill-installer` do Codex apontando para
+`wrapper/skills/maker`; depois invoque `$maker init`, `$maker agent list`, `$maker doctor`, etc.
+Se a skill recém-instalada não aparecer, reinicie o Codex para recarregar a descoberta de skills.
 
 > No Windows, faça tudo isso dentro do WSL (ver a seção de requisitos por SO).
 
@@ -220,7 +249,7 @@ O plugin nasce junto com o motor e **cresce por fase**: expõe `init | doctor | 
 ## Add-ons
 
 Add-ons sobrepõem **pacotes de regras opcionais** a um projeto que já tem o motor — injetando
-princípios na constitution, fragmentos nos agentes e arquivos de referência, de forma **idempotente e
+princípios na constitution, fragmentos nos papéis compartilhados e arquivos de referência, de forma **idempotente e
 reversível** (rastreada por marcadores e por um estado em `.maker/addons/<id>.json`).
 
 ```bash
@@ -239,6 +268,19 @@ teste E2E de isolamento é o que o prova.
 Knobs: `tenantColumn` (discriminador de tenant), `brandVarPrefix` (prefixo das CSS vars) e `roles`.
 `maker remove saas` reverte tudo e deixa o `doctor` verde; arquivos que você editou localmente são
 preservados.
+
+## Troubleshooting das integrações
+
+- **Skill não aparece no Codex:** confirme `.agents/skills/<nome>/SKILL.md` e reinicie o Codex; a
+  descoberta acontece a partir do diretório atual até a raiz do repositório.
+- **Agente Codex não aparece:** rode `maker doctor` e `maker agent list`; os arquivos devem estar em
+  `.codex/agents/*.toml` e apontar para um papel existente em `.maker/workflow/agents/`.
+- **`maker agent add` encontrou colisões:** a CLI lista cada arquivo não gerenciado e não escreve
+  nada. Mova/renomeie os arquivos indicados e tente novamente.
+- **Integração degradada:** `maker doctor` valida frontmatter das skills, TOML dos agentes Codex,
+  adaptadores Claude, arquivos compartilhados e hashes do manifest.
+- **Browser/MCP indisponível:** o pipeline registra `NO_DRIVER` e transfere a validação visual/E2E
+  para o gate humano; isso não deve bloquear o restante do fluxo.
 
 ## Desenvolvimento
 
@@ -259,8 +301,8 @@ pnpm extract -- --from <projeto>   # re-extrai a camada custom de um projeto de 
 - `src/` — CLI (`cli.ts`), comandos (`init`/`doctor`/`update`), `config/` (zod + prompts),
   `render/` (handlebars + manifest sha256), `util/scaffold` (aplica a árvore de templates). Sem
   shell-out — só `node:path`/fs, então a CLI é cross-platform por construção.
-- `templates/engine/` — **espelha o layout-alvo**. Arquivos `.hbs` são renderizados (e perdem a
-  extensão); o resto é copiado verbatim (a base stock do SpecKit nunca passa pelo engine).
+- `templates/engine/common` contém o núcleo, `workflow` as fontes únicas de skills/papéis e
+  `providers` os adaptadores estáticos. O scaffolder materializa o layout Claude ou Codex.
 - `scripts/extract-templates.mjs` — helper de authoring: copia + sanitiza a camada genérica de um projeto de origem.
 
 ---

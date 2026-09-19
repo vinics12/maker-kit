@@ -1,22 +1,26 @@
 ---
 name: maker
-description: "Instala e mantém o motor de criação de produtos (SpecKit + orquestração multi-agente) num projeto, delegando para a CLI `maker`. Use quando o usuário quiser instalar/verificar/atualizar o motor ou gerenciar add-ons: 'instala o maker aqui', 'roda o maker init', 'verifica a instalação', 'atualiza o motor', 'adiciona a base saas', 'remove o add-on saas'. Expõe init | doctor | update | add | remove."
-argument-hint: "init | doctor | update | add <addon> | remove <addon>"
+description: "Instala e mantém o motor de criação de produtos (SpecKit + orquestração multi-agente) num projeto, delegando para a CLI `maker`. Use para instalar, verificar, atualizar, habilitar Claude/Codex ou gerenciar add-ons. Expõe init | agent add | doctor | update | add | remove."
+argument-hint: "init | agent add <claude|codex> | agent list | doctor | update | add <addon> | remove <addon>"
 user-invocable: true
 disable-model-invocation: false
 ---
 
-## User Input
+## Pedido
 
 ```text
 $ARGUMENTS
 ```
 
+Use a mensagem que invocou esta skill como pedido. No Claude Code, o trecho acima contém os
+argumentos; no Codex, considere o texto que acompanha `$maker` mesmo se `$ARGUMENTS` aparecer literal.
+
 ## O que este skill faz
 
 Este é o **wrapper** do `maker`. Ele **não reimplementa** nada: mapeia o pedido do usuário para a
 CLI `maker` (a fonte única de verdade) e conduz, pela conversa, a coleta dos knobs de configuração.
-Ele cobre **`init`**, **`doctor`**, **`update`** (o motor) e **`add`**/**`remove`** (add-ons).
+Ele cobre **`init`**, **`agent add`**, **`agent list`**, **`doctor`**, **`update`** (o motor) e
+**`add`**/**`remove`** (add-ons).
 
 > Pré-requisito: a CLI precisa estar disponível. Verifique com `maker --version`. Se não estiver,
 > oriente o usuário a instalar via a release tarball (ver README, seção Instalação) —
@@ -24,7 +28,7 @@ Ele cobre **`init`**, **`doctor`**, **`update`** (o motor) e **`add`**/**`remove
 
 ## Roteamento
 
-Interprete `$ARGUMENTS`:
+Interprete o pedido atual:
 
 ### `init` — instalar o motor no projeto
 
@@ -32,6 +36,7 @@ Interprete `$ARGUMENTS`:
    `--force` sobrescreve; peça confirmação).
 2. Se **não** houver `maker.config.json` no alvo, **colete os knobs na conversa** (só mecânica, nada
    de regra de negócio):
+   - `agent`: `claude` (padrão) ou `codex`.
    - `project.name` e `project.slug` (kebab-case; derive do nome e confirme).
    - `layout.frontendGlobs` / `layout.backendGlobs` (globs de roteamento de dev).
    - `commands.verify | build | test | dev`.
@@ -50,6 +55,23 @@ Interprete `$ARGUMENTS`:
 maker doctor --target <dir>
 ```
 Relate arquivos ausentes/modificados. Não conserte nada sem o usuário pedir.
+
+### `agent add <claude|codex>` — habilitar outra CLI agêntica
+
+```bash
+maker agent add <claude|codex> --target <dir>
+```
+
+É aditivo e idempotente: mantém a integração atual e não oferece remoção nesta versão.
+
+### `agent list` — listar integrações e integridade
+
+```bash
+maker agent list --target <dir>
+```
+
+Relate quais integrações estão habilitadas, quantas skills/agentes foram encontrados e qualquer
+problema estrutural informado pela CLI.
 
 ### `update` — atualizar arquivos do motor não modificados
 

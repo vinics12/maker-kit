@@ -30,6 +30,7 @@ describe("maker init (integração)", () => {
 
   it("instala .specify e .claude", () => {
     expect(existsSync(join(target, ".specify"))).toBe(true);
+    expect(existsSync(join(target, "AGENTS.md"))).toBe(true);
     expect(existsSync(join(target, ".claude", "skills", "run-spec", "SKILL.md"))).toBe(true);
     expect(existsSync(join(target, ".claude", "agents", "architect.md"))).toBe(true);
     expect(existsSync(join(target, ".claude", "skills", "speckit-plan"))).toBe(true);
@@ -82,6 +83,9 @@ describe("maker init (integração)", () => {
   it("manifest íntegro (doctor)", async () => {
     const m = await readManifest(target);
     expect(m).not.toBeNull();
+    expect(m!.schemaVersion).toBe(2);
+    expect(m!.agents).toEqual(["claude"]);
+    expect(m!.config?.commands.verify).toBe("just verify");
     const r = await verifyManifest(target, m!);
     expect(r.ok, `missing=${r.missing}, modified=${r.modified}`).toBe(true);
     expect(r.checked).toBeGreaterThan(10);

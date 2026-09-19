@@ -12,7 +12,7 @@ import { isAddonApplied } from "../src/addons/state.js";
 const FIXTURE = join(__dirname, "..", "fixtures", "example.config.json");
 const CONST = ".specify/memory/constitution.md";
 const REF = ".specify/memory/saas-reference.md";
-const REVIEWER = ".claude/agents/code-reviewer.md";
+const REVIEWER = ".maker/workflow/agents/code-reviewer.md";
 
 async function read(target: string, rel: string) {
   return readFile(join(target, rel), "utf-8");

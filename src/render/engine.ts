@@ -9,6 +9,7 @@ export interface RenderContext {
   project: MakerConfig["project"] & { slug: string };
   layout: MakerConfig["layout"];
   commands: MakerConfig["commands"];
+  agent: MakerConfig["agent"];
   /** ISO date do install, útil em cabeçalhos de arquivos gerados. */
   generatedAt: string;
 }
@@ -18,6 +19,7 @@ export function buildContext(config: MakerConfig): RenderContext {
     project: { ...config.project, slug: config.project.slug! },
     layout: config.layout,
     commands: config.commands,
+    agent: config.agent,
     generatedAt: new Date().toISOString().slice(0, 10),
   };
 }

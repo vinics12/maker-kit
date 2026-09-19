@@ -1,6 +1,8 @@
 import { resolve } from "node:path";
 import pc from "picocolors";
 import { readManifest, verifyManifest } from "../render/manifest.js";
+import { enabledAgents } from "../render/manifest.js";
+import { validateAgentIntegration } from "../agents/validate.js";
 
 export interface DoctorOptions {
   target?: string;
@@ -15,10 +17,20 @@ export async function runDoctor(opts: DoctorOptions): Promise<void> {
   }
 
   const result = await verifyManifest(targetDir, manifest);
+  const integrations = await Promise.all(
+    enabledAgents(manifest).map((agent) => validateAgentIntegration(targetDir, agent)),
+  );
   console.log(pc.dim(`Projeto "${manifest.project.name}" · maker ${manifest.makerVersion}`));
   console.log(pc.dim(`${result.checked} arquivos verificados`));
+  for (const integration of integrations) {
+    const status = integration.issues.length ? pc.red("degradada") : pc.green("íntegra");
+    console.log(
+      `  ${integration.provider}: ${status} · ${integration.skills} skills · ${integration.agents} agentes`,
+    );
+    for (const issue of integration.issues) console.log(pc.red(`    ${issue}`));
+  }
 
-  if (result.ok) {
+  if (result.ok && integrations.every((integration) => integration.issues.length === 0)) {
     console.log(pc.green("✓ Install íntegro."));
     return;
   }

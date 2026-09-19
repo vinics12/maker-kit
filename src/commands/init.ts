@@ -3,15 +3,18 @@ import { existsSync } from "node:fs";
 import pc from "picocolors";
 import { loadConfig } from "../config/load.js";
 import { buildContext } from "../render/engine.js";
-import { applyTree, templatesDir } from "../util/scaffold.js";
 import { writeManifest, type Manifest } from "../render/manifest.js";
 import { makerVersion } from "../util/version.js";
+import { applyEngine } from "../util/engine-scaffold.js";
+import { readManifest, enabledAgents } from "../render/manifest.js";
+import { parseConfig, type AgentProvider } from "../config/schema.js";
 
 export interface InitOptions {
   target?: string;
   config?: string;
   yes?: boolean;
   name?: string;
+  agent?: AgentProvider;
   force?: boolean;
 }
 
@@ -25,19 +28,34 @@ export async function runInit(opts: InitOptions): Promise<void> {
     );
   }
 
-  const config = await loadConfig({
+  const priorManifest = await readManifest(targetDir);
+  const loadedConfig = await loadConfig({
     targetDir,
     configPath: opts.config,
     yes: opts.yes,
     name: opts.name,
+    agent: opts.agent,
+  });
+  const agents = priorManifest ? enabledAgents(priorManifest) : [loadedConfig.agent];
+  if (priorManifest && opts.agent && !agents.includes(opts.agent)) {
+    throw new Error(
+      `A integração ${opts.agent} ainda não está habilitada — use 'maker agent add ${opts.agent}'.`,
+    );
+  }
+  const config = parseConfig({
+    ...loadedConfig,
+    agent: opts.agent ?? priorManifest?.config?.agent ?? agents[0],
   });
   const ctx = buildContext(config);
 
-  const applied = await applyTree(templatesDir("engine"), targetDir, ctx, "engine");
+  const applied = await applyEngine(targetDir, ctx, agents);
 
   const manifest: Manifest = {
+    schemaVersion: 2,
     makerVersion: makerVersion(),
     project: { name: config.project.name, slug: config.project.slug! },
+    config,
+    agents,
     installedAt: new Date().toISOString(),
     files: Object.fromEntries(applied.map((a) => [a.rel, a.entry])),
   };
@@ -67,5 +85,8 @@ export async function runInit(opts: InitOptions): Promise<void> {
     `  1. Preencha ${pc.cyan(".specify/memory/project-rules.md")} (bases técnicas + regras de negócio)`,
   );
   console.log(`  2. Revise ${pc.cyan(".specify/memory/constitution.md")} (seções do projeto)`);
-  console.log(`  3. Abra o Claude Code e rode ${pc.cyan("/run-brainstorm")} ou ${pc.cyan("/run-spec")}`);
+  const invocation = config.agent === "codex" ? "$" : "/";
+  console.log(
+    `  3. Abra o ${config.agent === "codex" ? "Codex" : "Claude Code"} e rode ${pc.cyan(`${invocation}run-brainstorm`)} ou ${pc.cyan(`${invocation}run-spec`)}`,
+  );
 }

@@ -7,7 +7,7 @@ export const addonKnobSchema = z.object({
   default: z.string().default(""),
 });
 
-/** Um fragmento anexado a um agente do motor. */
+/** Um fragmento anexado ao papel canônico compartilhado do motor. */
 export const agentFragmentSchema = z.object({
   agent: z.string(), // nome do agente-alvo (sem .md), ex.: "code-reviewer"
   file: z.string(), // path relativo ao dir do add-on, ex.: "agents/code-reviewer.fragment.md.hbs"

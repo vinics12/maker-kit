@@ -1,11 +1,16 @@
 import { z } from "zod";
 
+export const agentProviderSchema = z.enum(["claude", "codex"]);
+export type AgentProvider = z.infer<typeof agentProviderSchema>;
+
 /**
  * maker.config.json — apenas knobs MECÂNICOS.
  * Nenhuma regra de negócio e nenhuma base técnica imposta aqui: banco, testes e
  * observabilidade são declarados pelo projeto consumidor nos stubs gerados, não neste config.
  */
 export const configSchema = z.object({
+  /** CLI agêntica instalada inicialmente. Claude permanece o default retrocompatível. */
+  agent: agentProviderSchema.default("claude"),
   project: z.object({
     name: z.string().min(1, "project.name é obrigatório"),
     /** slug kebab-case; derivado de name quando ausente. */
