@@ -2,7 +2,7 @@
 
 // src/cli.ts
 import { Command } from "commander";
-import pc8 from "picocolors";
+import pc9 from "picocolors";
 
 // src/commands/init.ts
 import { resolve as resolve2, join as join6 } from "path";
@@ -729,7 +729,7 @@ import pc4 from "picocolors";
 import * as p2 from "@clack/prompts";
 
 // src/addons/loader.ts
-import { readFile as readFile8 } from "fs/promises";
+import { readFile as readFile8, readdir } from "fs/promises";
 import { existsSync as existsSync7 } from "fs";
 import { join as join9 } from "path";
 
@@ -783,6 +783,28 @@ async function loadAddon(id) {
   }
   return parsed;
 }
+async function listAddonCatalog(root = join9(packageRoot(), "addons")) {
+  if (!existsSync7(root)) return [];
+  const dirs = (await readdir(root, { withFileTypes: true })).filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
+  return Promise.all(
+    dirs.map(async (id) => {
+      try {
+        const raw = JSON.parse(await readFile8(join9(root, id, "addon.json"), "utf-8"));
+        const manifest = addonManifestSchema.parse(raw);
+        if (manifest.id !== id) {
+          return { id, manifest: null, issue: `id do manifest \xE9 "${manifest.id}"` };
+        }
+        return { id, manifest };
+      } catch (error) {
+        return {
+          id,
+          manifest: null,
+          issue: error instanceof Error ? error.message : String(error)
+        };
+      }
+    })
+  );
+}
 
 // src/addons/apply.ts
 import { readFile as readFile10, writeFile as writeFile5, mkdir as mkdir6 } from "fs/promises";
@@ -834,6 +856,17 @@ function escapeRe(s) {
 import { readFile as readFile9, writeFile as writeFile4, mkdir as mkdir5, rm as rm3 } from "fs/promises";
 import { existsSync as existsSync8 } from "fs";
 import { dirname as dirname5, join as join10 } from "path";
+import { z as z4 } from "zod";
+var addonStateSchema = z4.object({
+  id: z4.string(),
+  version: z4.string(),
+  appliedAt: z4.string(),
+  knobs: z4.record(z4.string()),
+  /** Arquivos novos criados pelo add-on (deletáveis na remoção). */
+  createdFiles: z4.array(z4.object({ path: z4.string(), hash: z4.string() })),
+  /** Arquivos do motor onde o add-on injetou um bloco (por marcador). */
+  injectedTargets: z4.array(z4.string())
+});
 function addonStatePath(targetDir, id) {
   return join10(targetDir, ".maker", "addons", `${id}.json`);
 }
@@ -843,7 +876,7 @@ function isAddonApplied(targetDir, id) {
 async function readAddonState(targetDir, id) {
   const p3 = addonStatePath(targetDir, id);
   if (!existsSync8(p3)) return null;
-  return JSON.parse(await readFile9(p3, "utf-8"));
+  return addonStateSchema.parse(JSON.parse(await readFile9(p3, "utf-8")));
 }
 async function writeAddonState(targetDir, state) {
   const p3 = addonStatePath(targetDir, state.id);
@@ -1043,41 +1076,41 @@ import { resolve as resolve7 } from "path";
 import pc6 from "picocolors";
 
 // src/runs/read.ts
-import { readdir, readFile as readFile11 } from "fs/promises";
+import { readdir as readdir2, readFile as readFile11 } from "fs/promises";
 import { basename, join as join13 } from "path";
 
 // src/runs/schema.ts
-import { z as z4 } from "zod";
-var phaseSchema = z4.enum(["spec", "plan", "dev", "review"]);
-var decisionSchema = z4.enum(["approve", "reject", "edit"]);
-var costSchema = z4.object({
-  tokens: z4.number().int().nonnegative(),
-  duration_ms: z4.number().int().nonnegative()
+import { z as z5 } from "zod";
+var phaseSchema = z5.enum(["spec", "plan", "dev", "review"]);
+var decisionSchema = z5.enum(["approve", "reject", "edit"]);
+var costSchema = z5.object({
+  tokens: z5.number().int().nonnegative(),
+  duration_ms: z5.number().int().nonnegative()
 }).strict();
 var base = {
-  run_id: z4.string().min(1),
-  ts: z4.string().datetime({ offset: true }),
+  run_id: z5.string().min(1),
+  ts: z5.string().datetime({ offset: true }),
   // ISO-8601 UTC
   cost: costSchema
 };
-var runStartSchema = z4.object({ type: z4.literal("run.start"), ...base }).strict();
-var runEndSchema = z4.object({ type: z4.literal("run.end"), ...base }).strict();
-var agentHandoffSchema = z4.object({
-  type: z4.literal("agent.handoff"),
-  actor: z4.string().min(1),
+var runStartSchema = z5.object({ type: z5.literal("run.start"), ...base }).strict();
+var runEndSchema = z5.object({ type: z5.literal("run.end"), ...base }).strict();
+var agentHandoffSchema = z5.object({
+  type: z5.literal("agent.handoff"),
+  actor: z5.string().min(1),
   phase: phaseSchema,
   ...base
 }).strict();
-var gateDecisionSchema = z4.object({
-  type: z4.literal("gate.decision"),
+var gateDecisionSchema = z5.object({
+  type: z5.literal("gate.decision"),
   gate: phaseSchema,
-  actor: z4.string().min(1),
+  actor: z5.string().min(1),
   decision: decisionSchema,
-  reason_inferred: z4.string(),
-  artifact_diff_ref: z4.string().optional(),
+  reason_inferred: z5.string(),
+  artifact_diff_ref: z5.string().optional(),
   ...base
 }).strict();
-var eventSchema = z4.discriminatedUnion("type", [
+var eventSchema = z5.discriminatedUnion("type", [
   runStartSchema,
   agentHandoffSchema,
   gateDecisionSchema,
@@ -1094,7 +1127,7 @@ async function listRunFiles(target) {
   const dir = join13(target, RUNS_DIR);
   let entries;
   try {
-    entries = await readdir(dir, { withFileTypes: true });
+    entries = await readdir2(dir, { withFileTypes: true });
   } catch {
     return [];
   }
@@ -1192,21 +1225,120 @@ async function runRuns(opts) {
   }
 }
 
-// src/commands/agent.ts
+// src/commands/list.ts
 import { existsSync as existsSync10 } from "fs";
+import { lstat as lstat2, readdir as readdir3 } from "fs/promises";
+import { basename as basename2, join as join14, resolve as resolve8 } from "path";
+import pc7 from "picocolors";
+async function runList(opts) {
+  const targetDir = resolve8(opts.target ?? process.cwd());
+  const catalog = await listAddonCatalog();
+  const listed = await classifyAddons(targetDir, catalog);
+  if (!listed.length) {
+    console.log(pc7.dim("nenhum add-on dispon\xEDvel"));
+    return;
+  }
+  console.log(pc7.bold("Add-ons dispon\xEDveis:"));
+  for (const addon of listed) printAddon(addon);
+}
+async function classifyAddons(targetDir, catalog) {
+  const byId = new Map(catalog.map((entry) => [entry.id, entry]));
+  const stateIndex = await listStateIds(targetDir);
+  const ids = [.../* @__PURE__ */ new Set([...byId.keys(), ...stateIndex.ids])].sort();
+  return Promise.all(
+    ids.map(async (id) => {
+      const entry = byId.get(id) ?? null;
+      if (stateIndex.issue) {
+        return { id, catalog: entry, status: "degraded", issue: stateIndex.issue };
+      }
+      if (!entry?.manifest) {
+        return {
+          id,
+          catalog: entry,
+          status: "degraded",
+          issue: entry?.issue ?? "state existe, mas o add-on n\xE3o est\xE1 dispon\xEDvel no cat\xE1logo"
+        };
+      }
+      const statePath = addonStatePath(targetDir, id);
+      if (!existsSync10(statePath)) return { id, catalog: entry, status: "available" };
+      try {
+        const state = await readAddonState(targetDir, id);
+        if (state.id !== id) {
+          return { id, catalog: entry, status: "degraded", issue: `state declara id "${state.id}"` };
+        }
+        if (state.version !== entry.manifest.version) {
+          return {
+            id,
+            catalog: entry,
+            status: "degraded",
+            issue: `state v${state.version} difere do cat\xE1logo v${entry.manifest.version}`
+          };
+        }
+        return { id, catalog: entry, status: "applied" };
+      } catch (error) {
+        return {
+          id,
+          catalog: entry,
+          status: "degraded",
+          issue: `state inv\xE1lido: ${error instanceof Error ? error.message : String(error)}`
+        };
+      }
+    })
+  );
+}
+async function listStateIds(targetDir) {
+  const dir = join14(targetDir, ".maker", "addons");
+  let metadata;
+  try {
+    metadata = await lstat2(dir);
+  } catch (error) {
+    if (error.code === "ENOENT") return { ids: [] };
+    return {
+      ids: [],
+      issue: `n\xE3o foi poss\xEDvel inspecionar .maker/addons: ${error instanceof Error ? error.message : String(error)}`
+    };
+  }
+  if (!metadata.isDirectory()) {
+    return { ids: [], issue: ".maker/addons deveria ser um diret\xF3rio" };
+  }
+  try {
+    const ids = (await readdir3(dir, { withFileTypes: true })).filter((entry) => entry.isFile() && entry.name.endsWith(".json")).map((entry) => basename2(entry.name, ".json")).sort();
+    return { ids };
+  } catch (error) {
+    return {
+      ids: [],
+      issue: `n\xE3o foi poss\xEDvel ler .maker/addons: ${error instanceof Error ? error.message : String(error)}`
+    };
+  }
+}
+function printAddon(addon) {
+  const manifest = addon.catalog?.manifest;
+  const label = addon.status === "applied" ? pc7.green(addon.status) : addon.status === "degraded" ? pc7.red(addon.status) : pc7.dim(addon.status);
+  const name = manifest ? `${manifest.name} \xB7 v${manifest.version}` : "manifest indispon\xEDvel";
+  console.log(`
+${pc7.bold(addon.id)} \xB7 ${name} \xB7 ${label}`);
+  if (manifest?.description) console.log(`  ${manifest.description}`);
+  console.log(`  knobs: ${manifest?.knobs.length ? manifest.knobs.map((knob) => knob.name).join(", ") : "nenhum"}`);
+  if (addon.issue) console.log(pc7.red(`  problema: ${addon.issue}`));
+  const next = addon.status === "available" ? `maker add ${addon.id}` : "maker doctor";
+  console.log(pc7.dim(`  pr\xF3ximo: ${next}`));
+}
+
+// src/commands/agent.ts
+import { existsSync as existsSync11 } from "fs";
 import { readFile as readFile12 } from "fs/promises";
-import { join as join14, resolve as resolve8 } from "path";
+import { join as join15, resolve as resolve9 } from "path";
 import { mkdtemp as mkdtemp3, rm as rm5 } from "fs/promises";
 import { tmpdir as tmpdir3 } from "os";
-import pc7 from "picocolors";
+import pc8 from "picocolors";
 async function runAgentAdd(providerInput, opts) {
   const provider = agentProviderSchema.parse(providerInput);
-  const targetDir = resolve8(opts.target ?? process.cwd());
+  const targetDir = resolve9(opts.target ?? process.cwd());
   const manifest = await readManifest(targetDir);
   if (!manifest) throw new Error(`Nenhum install do maker em ${targetDir} \u2014 rode 'maker init' antes.`);
   const agents = enabledAgents(manifest);
   if (agents.includes(provider)) {
-    console.log(pc7.dim(`Integra\xE7\xE3o ${provider} j\xE1 est\xE1 habilitada.`));
+    console.log(pc8.dim(`Integra\xE7\xE3o ${provider} j\xE1 est\xE1 habilitada.`));
     return;
   }
   const config = await resolveRenderConfig(targetDir, manifest.config, opts.config);
@@ -1223,30 +1355,30 @@ async function runAgentAdd(providerInput, opts) {
   manifest.agents = [...agents, provider];
   await writeManifest(targetDir, manifest);
   const sigil = provider === "codex" ? "$" : "/";
-  console.log(pc7.green(`\u2713 Integra\xE7\xE3o ${provider} adicionada (${applied.length} arquivos).`));
-  console.log(`  Use ${pc7.cyan(`${sigil}run-brainstorm`)} ou ${pc7.cyan(`${sigil}run-spec`)}.`);
+  console.log(pc8.green(`\u2713 Integra\xE7\xE3o ${provider} adicionada (${applied.length} arquivos).`));
+  console.log(`  Use ${pc8.cyan(`${sigil}run-brainstorm`)} ou ${pc8.cyan(`${sigil}run-spec`)}.`);
 }
 async function runAgentList(opts) {
-  const targetDir = resolve8(opts.target ?? process.cwd());
+  const targetDir = resolve9(opts.target ?? process.cwd());
   const manifest = await readManifest(targetDir);
   if (!manifest) throw new Error(`Nenhum install do maker em ${targetDir}.`);
   const enabled = new Set(enabledAgents(manifest));
-  console.log(pc7.dim(`Projeto "${manifest.project.name}"`));
+  console.log(pc8.dim(`Projeto "${manifest.project.name}"`));
   for (const provider of agentProviderSchema.options) {
     if (!enabled.has(provider)) {
-      console.log(`  ${provider}: ${pc7.dim("n\xE3o habilitada")}`);
+      console.log(`  ${provider}: ${pc8.dim("n\xE3o habilitada")}`);
       continue;
     }
     const validation = await validateAgentIntegration(targetDir, provider);
-    const status = validation.issues.length ? pc7.red("degradada") : pc7.green("\xEDntegra");
+    const status = validation.issues.length ? pc8.red("degradada") : pc8.green("\xEDntegra");
     console.log(`  ${provider}: ${status} \xB7 ${validation.skills} skills \xB7 ${validation.agents} agentes`);
-    for (const issue of validation.issues) console.log(pc7.red(`    ${issue}`));
+    for (const issue of validation.issues) console.log(pc8.red(`    ${issue}`));
   }
 }
 async function resolveRenderConfig(targetDir, stored, explicitPath) {
   if (stored) return parseConfig(stored);
-  const path = explicitPath ? resolve8(explicitPath) : join14(targetDir, "maker.config.json");
-  if (!existsSync10(path)) {
+  const path = explicitPath ? resolve9(explicitPath) : join15(targetDir, "maker.config.json");
+  if (!existsSync11(path)) {
     throw new Error(
       "Este install usa um manifest legado sem a configura\xE7\xE3o de renderiza\xE7\xE3o. Forne\xE7a --config <maker.config.json> para adicionar outra integra\xE7\xE3o com seguran\xE7a."
     );
@@ -1254,7 +1386,7 @@ async function resolveRenderConfig(targetDir, stored, explicitPath) {
   return parseConfig(JSON.parse(await readFile12(path, "utf-8")));
 }
 async function assertNoUnmanagedProviderFiles(targetDir, provider, managed, ctx) {
-  const staging = await mkdtemp3(join14(tmpdir3(), "maker-agent-preflight-"));
+  const staging = await mkdtemp3(join15(tmpdir3(), "maker-agent-preflight-"));
   let expected;
   try {
     expected = (await applyAgentProvider(staging, ctx, provider)).map((file) => file.rel);
@@ -1262,7 +1394,7 @@ async function assertNoUnmanagedProviderFiles(targetDir, provider, managed, ctx)
     await rm5(staging, { recursive: true, force: true });
   }
   const collisions = expected.filter(
-    (rel) => existsSync10(join14(targetDir, rel)) && !(rel in managed)
+    (rel) => existsSync11(join15(targetDir, rel)) && !(rel in managed)
   );
   if (collisions.length) {
     throw new Error(
@@ -1292,6 +1424,9 @@ program.command("doctor").description("Verifica a integridade de um install cont
 program.command("update").description("Atualiza arquivos do motor n\xE3o modificados localmente.").option("-t, --target <dir>", "diret\xF3rio do projeto (default: cwd)").action(async (opts) => {
   await runUpdate(opts);
 });
+program.command("list").description("Lista add-ons dispon\xEDveis e seu estado no projeto.").option("-t, --target <dir>", "diret\xF3rio do projeto (default: cwd)").action(async (opts) => {
+  await runList(opts);
+});
 program.command("add").argument("<addon>", "id do add-on (ex.: saas)").description("Aplica um add-on sobre um install existente (injeta princ\xEDpios/agentes/arquivos).").option("-t, --target <dir>", "diret\xF3rio do projeto (default: cwd)").option("-s, --set <pair...>", "knob do add-on como nome=valor (repet\xEDvel)").option("-y, --yes", "n\xE3o interativo; usa defaults dos knobs").action(async (addon, opts) => {
   await runAdd(addon, opts);
 });
@@ -1302,7 +1437,7 @@ program.command("runs").description("Lista runs registrados com custo/tempo por 
   await runRuns(opts);
 });
 program.parseAsync(process.argv).catch((err) => {
-  console.error(pc8.red(`
+  console.error(pc9.red(`
 erro: ${err instanceof Error ? err.message : String(err)}`));
   process.exit(1);
 });

@@ -1,18 +1,21 @@
 import { readFile, writeFile, mkdir, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { z } from "zod";
 
 /** Estado por-install de um add-on aplicado, para permitir remoção reversível. */
-export interface AddonState {
-  id: string;
-  version: string;
-  appliedAt: string;
-  knobs: Record<string, string>;
+export const addonStateSchema = z.object({
+  id: z.string(),
+  version: z.string(),
+  appliedAt: z.string(),
+  knobs: z.record(z.string()),
   /** Arquivos novos criados pelo add-on (deletáveis na remoção). */
-  createdFiles: { path: string; hash: string }[];
+  createdFiles: z.array(z.object({ path: z.string(), hash: z.string() })),
   /** Arquivos do motor onde o add-on injetou um bloco (por marcador). */
-  injectedTargets: string[];
-}
+  injectedTargets: z.array(z.string()),
+});
+
+export type AddonState = z.infer<typeof addonStateSchema>;
 
 export function addonStatePath(targetDir: string, id: string): string {
   return join(targetDir, ".maker", "addons", `${id}.json`);
@@ -28,7 +31,7 @@ export async function readAddonState(
 ): Promise<AddonState | null> {
   const p = addonStatePath(targetDir, id);
   if (!existsSync(p)) return null;
-  return JSON.parse(await readFile(p, "utf-8")) as AddonState;
+  return addonStateSchema.parse(JSON.parse(await readFile(p, "utf-8")));
 }
 
 export async function writeAddonState(targetDir: string, state: AddonState): Promise<void> {

@@ -1,7 +1,7 @@
 ---
 name: maker
-description: "Instala e mantém o motor de criação de produtos (SpecKit + orquestração multi-agente) num projeto, delegando para a CLI `maker`. Use para instalar, verificar, atualizar, habilitar Claude/Codex ou gerenciar add-ons. Expõe init | agent add | doctor | update | add | remove."
-argument-hint: "init | agent add <claude|codex> | agent list | doctor | update | add <addon> | remove <addon>"
+description: "Instala e mantém o motor de criação de produtos (SpecKit + orquestração multi-agente) num projeto, delegando para a CLI `maker`. Use para instalar, verificar, atualizar, habilitar Claude/Codex ou gerenciar add-ons. Expõe init | agent add | doctor | update | list | add | remove."
+argument-hint: "init | agent add <claude|codex> | agent list | doctor | update | list | add <addon> | remove <addon>"
 user-invocable: true
 disable-model-invocation: false
 ---
@@ -19,7 +19,7 @@ argumentos; no Codex, considere o texto que acompanha `$maker` mesmo se `$ARGUME
 
 Este é o **wrapper** do `maker`. Ele **não reimplementa** nada: mapeia o pedido do usuário para a
 CLI `maker` (a fonte única de verdade) e conduz, pela conversa, a coleta dos knobs de configuração.
-Ele cobre **`init`**, **`agent add`**, **`agent list`**, **`doctor`**, **`update`** (o motor) e
+Ele cobre **`init`**, **`agent add`**, **`agent list`**, **`doctor`**, **`update`** (o motor), **`list`** e
 **`add`**/**`remove`** (add-ons).
 
 > Pré-requisito: a CLI precisa estar disponível. Verifique com `maker --version`. Se não estiver,
@@ -81,6 +81,15 @@ maker update --target <dir>
 ```
 Explique que só arquivos intocados localmente são atualizados; edições do usuário são preservadas e
 listadas.
+
+### `list` — descobrir add-ons e seu estado
+
+```bash
+maker list --target <dir>
+```
+
+Relate os add-ons disponíveis em qualquer diretório. Num projeto inicializado, destaque quais estão
+aplicados ou degradados e indique o próximo comando mostrado pela CLI.
 
 ### `add <addon>` — aplicar um add-on sobre o install
 
