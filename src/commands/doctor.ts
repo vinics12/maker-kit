@@ -3,6 +3,7 @@ import pc from "picocolors";
 import { readManifest, verifyManifest } from "../render/manifest.js";
 import { enabledAgents } from "../render/manifest.js";
 import { validateAgentIntegration } from "../agents/validate.js";
+import { inspectAddons } from "../addons/doctor.js";
 
 export interface DoctorOptions {
   target?: string;
@@ -20,6 +21,7 @@ export async function runDoctor(opts: DoctorOptions): Promise<void> {
   const integrations = await Promise.all(
     enabledAgents(manifest).map((agent) => validateAgentIntegration(targetDir, agent)),
   );
+  const addons = await inspectAddons(targetDir, manifest);
   console.log(pc.dim(`Projeto "${manifest.project.name}" · maker ${manifest.makerVersion}`));
   console.log(pc.dim(`${result.checked} arquivos verificados`));
   for (const integration of integrations) {
@@ -30,7 +32,19 @@ export async function runDoctor(opts: DoctorOptions): Promise<void> {
     for (const issue of integration.issues) console.log(pc.red(`    ${issue}`));
   }
 
-  if (result.ok && integrations.every((integration) => integration.issues.length === 0)) {
+  if (addons.addons.length) {
+    console.log(pc.bold("\nAdd-ons aplicados:"));
+    for (const addon of addons.addons) {
+      const status = addon.ok ? pc.green("íntegro") : pc.red("degradado");
+      console.log(`  ${addon.id} · ${addon.name} · v${addon.version ?? "?"} · ${status}`);
+      for (const problem of addon.issues) {
+        console.log(pc.red(`    problema: ${problem.message}`));
+        console.log(pc.yellow(`    ação: ${problem.action}`));
+      }
+    }
+  }
+
+  if (result.ok && integrations.every((integration) => integration.issues.length === 0) && addons.ok) {
     console.log(pc.green("✓ Install íntegro."));
     return;
   }
