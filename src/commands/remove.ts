@@ -5,6 +5,7 @@ import { isAddonApplied } from "../addons/state.js";
 
 export interface RemoveOptions {
   target?: string;
+  dryRun?: boolean;
 }
 
 export async function runRemove(id: string, opts: RemoveOptions): Promise<void> {
@@ -12,7 +13,8 @@ export async function runRemove(id: string, opts: RemoveOptions): Promise<void> 
   if (!isAddonApplied(targetDir, id)) {
     throw new Error(`Add-on "${id}" não está aplicado em ${targetDir}.`);
   }
-  const res = await removeAddon(targetDir, id);
+  const res = await removeAddon(targetDir, id, { dryRun: opts.dryRun });
+  if (opts.dryRun) return;
 
   console.log(pc.green(`\n✓ Add-on "${id}" removido de ${targetDir}`));
   if (res.strippedTargets.length)

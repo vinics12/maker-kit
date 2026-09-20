@@ -182,7 +182,9 @@ $run-spec "feature bem definida"
 
 ```bash
 maker doctor    # verifica integridade (manifest sha256): arquivos ausentes/modificados
-maker update    # atualiza arquivos do motor que você NÃO editou (edições locais são preservadas)
+maker update             # atualiza e mescla mudanças locais/upstream quando possível
+maker update --dry-run   # mostra o plano completo sem escrever
+maker update --no-merge  # preserva todos os arquivos editados localmente
 ```
 
 ---

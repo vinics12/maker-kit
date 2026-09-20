@@ -1,90 +1,144 @@
 import { existsSync } from "node:fs";
-import { copyFile, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import pc from "picocolors";
+import { mergeDiff3 } from "node-diff3";
 import { parseConfig, type MakerConfig } from "../config/schema.js";
 import { buildContext } from "../render/engine.js";
-import { enabledAgents, readManifest, sha256, writeManifest } from "../render/manifest.js";
+import { enabledAgents, readManifest, sha256, type Manifest, type ManifestEntry } from "../render/manifest.js";
 import { applyEngine } from "../util/engine-scaffold.js";
 import { makerVersion } from "../util/version.js";
+import { createPlan, formatPlan, inspectTarget, planWrite, type PlannedChange } from "../changes/plan.js";
+import { applyChangePlan, assertNoPendingTransactions } from "../changes/transaction.js";
 
-export interface UpdateOptions {
-  target?: string;
-}
+export interface UpdateOptions { target?: string; dryRun?: boolean; merge?: boolean }
 
-/** Refresh conservador do núcleo e apenas das integrações registradas no manifest. */
 export async function runUpdate(opts: UpdateOptions): Promise<void> {
   const targetDir = resolve(opts.target ?? process.cwd());
-  const manifest = await readManifest(targetDir);
-  if (!manifest) throw new Error(`Nenhum install do maker em ${targetDir}.`);
-
-  const { config, recovered } = await resolveConfig(targetDir, manifest.config, manifest.project);
-  const agents = enabledAgents(manifest);
-  const staging = await mkdtemp(join(tmpdir(), "maker-update-"));
-  const updated: string[] = [];
-  const skipped: string[] = [];
-
+  if (opts.dryRun) await assertNoPendingTransactions(targetDir);
+  const prior = await readManifest(targetDir);
+  if (!prior) throw new Error(`Nenhum install do maker em ${targetDir}.`);
+  const { config, recovered } = await resolveConfig(targetDir, prior.config, prior.project);
+  const agents = enabledAgents(prior);
+  const staging = await mkdtemp(join(tmpdir(), "maker-update-plan-"));
+  const changes: PlannedChange[] = [];
+  const next: Manifest = structuredClone(prior);
+  next.files = { ...prior.files };
   try {
     const expected = await applyEngine(staging, buildContext(config), agents);
-    for (const file of expected) {
-      const staged = join(staging, file.rel);
-      const destination = join(targetDir, file.rel);
-      const newContent = await readFile(staged);
-      const newHash = sha256(newContent);
-
-      if (existsSync(destination)) {
-        const currentHash = sha256(await readFile(destination));
-        const recordedEntry = manifest.files[file.rel];
-        const recorded = recordedEntry?.hash;
-        if (recordedEntry?.source.startsWith("addon:") && currentHash === recorded) {
-          skipped.push(file.rel);
-          continue;
-        }
-        if (recorded && currentHash !== recorded) {
-          skipped.push(file.rel);
-          continue;
-        }
-        if (currentHash === newHash) {
-          manifest.files[file.rel] = file.entry;
-          continue;
+    for (const file of expected.sort((a, b) => a.rel.localeCompare(b.rel))) {
+      const upstream = await readFile(join(staging, file.rel));
+      const upstreamHash = sha256(upstream);
+      const current = await inspectTarget(targetDir, file.rel);
+      const recorded = prior.files[file.rel];
+      changes.push(await planWrite({ targetDir, path: `.maker/bases/${upstreamHash}`, content: upstream, source: "metadata", reason: `base upstream de ${file.rel}` }));
+      if (recorded?.source.startsWith("addon:")) {
+        changes.push(status("preserve", file.rel, file.entry.source, current, "arquivo controlado por add-on"));
+      } else if (current.kind === "other") {
+        changes.push(status("conflict", file.rel, file.entry.source, current, "o caminho não é um arquivo regular"));
+      } else if (current.kind === "absent") {
+        changes.push(await planWrite({ targetDir, path: file.rel, content: upstream, source: file.entry.source, reason: "arquivo gerenciado ausente" }));
+        next.files[file.rel] = manifestEntry(file.entry, upstreamHash, upstreamHash);
+      } else if (current.hash === upstreamHash) {
+        changes.push(status("preserve", file.rel, file.entry.source, current, "já está atualizado"));
+        next.files[file.rel] = manifestEntry(file.entry, upstreamHash, upstreamHash);
+      } else if (!recorded || current.hash === recorded.hash) {
+        changes.push(await planWrite({ targetDir, path: file.rel, content: upstream, source: file.entry.source, reason: "nova versão upstream", force: true }));
+        next.files[file.rel] = manifestEntry(file.entry, upstreamHash, upstreamHash);
+      } else if (opts.merge === false) {
+        changes.push(status("preserve", file.rel, file.entry.source, current, "edição local; merge desabilitado"));
+      } else if (!recorded.baseHash) {
+        changes.push(status("preserve", file.rel, file.entry.source, current, "edição local em manifest legado sem base exata"));
+      } else {
+        const base = await readBase(targetDir, recorded.baseHash);
+        const merged = base ? mergeText(current.content!, base, upstream) : null;
+        if (!base) {
+          changes.push(status("preserve", file.rel, file.entry.source, current, "base histórica ausente; preservado por segurança"));
+        } else if (!merged) {
+          changes.push(status("conflict", file.rel, file.entry.source, current, "mudanças locais e upstream na mesma região"));
+        } else {
+          const change = await planWrite({ targetDir, path: file.rel, content: merged, source: file.entry.source, reason: "mudanças locais e upstream mescladas", force: true });
+          change.resolution = "merge";
+          changes.push(change);
+          next.files[file.rel] = manifestEntry(file.entry, sha256(merged), upstreamHash);
         }
       }
-
-      await mkdir(dirname(destination), { recursive: true });
-      await copyFile(staged, destination);
-      manifest.files[file.rel] = file.entry;
-      updated.push(file.rel);
     }
   } finally {
     await rm(staging, { recursive: true, force: true });
   }
+  next.schemaVersion = 3;
+  next.agents = agents;
+  if (next.config || recovered) next.config = config;
+  next.makerVersion = makerVersion();
+  const referencedBases = new Set(Object.values(next.files).flatMap((item) => item.baseHash ? [item.baseHash] : []));
+  for (const hash of await listBases(targetDir)) {
+    if (referencedBases.has(hash)) continue;
+    const path = `.maker/bases/${hash}`;
+    const current = await inspectTarget(targetDir, path);
+    changes.push({ path, action: "remove", source: "metadata", reason: "base upstream não referenciada", expectedHash: current.hash, expectedKind: current.kind });
+  }
+  changes.push(await planWrite({ targetDir, path: ".maker/manifest.json", content: JSON.stringify(next, null, 2) + "\n", source: "metadata", reason: "publicar manifest atualizado", force: true }));
+  const plan = createPlan(targetDir, changes);
+  if (opts.dryRun) {
+    console.log(formatPlan(plan));
+    if (plan.changes.some((change) => change.action === "conflict")) process.exitCode = 1;
+    return;
+  }
+  await applyChangePlan(plan);
+  const merged = plan.changes.filter((change) => change.resolution === "merge").length;
+  const updated = plan.changes.filter((change) => (change.action === "update" || change.action === "create") && !change.path.startsWith(".maker/") && change.resolution !== "merge").length;
+  const preserved = plan.changes.filter((change) => change.action === "preserve" && !change.path.startsWith(".maker/") && change.reason !== "já está atualizado").length;
+  console.log(pc.green(`✓ ${updated} arquivo(s) atualizado(s), ${merged} mesclado(s).`));
+  if (preserved) console.log(pc.yellow(`${preserved} preservado(s) por segurança.`));
+}
 
-  manifest.schemaVersion = 2;
-  manifest.agents = agents;
-  if (manifest.config || recovered) manifest.config = config;
-  manifest.makerVersion = makerVersion();
-  await writeManifest(targetDir, manifest);
+function manifestEntry(source: ManifestEntry, hash: string, baseHash: string): ManifestEntry {
+  return { ...source, hash, baseHash };
+}
 
-  console.log(pc.green(`✓ ${updated.length} arquivo(s) atualizado(s).`));
-  if (skipped.length) {
-    console.log(pc.yellow(`${skipped.length} preservado(s) por edição local:`));
-    for (const path of skipped) console.log(pc.dim(`  ${path}`));
+function status(action: "preserve" | "conflict", path: string, source: string, current: Awaited<ReturnType<typeof inspectTarget>>, reason: string): PlannedChange {
+  return { path, action, source, reason, expectedHash: current.hash, expectedKind: current.kind };
+}
+
+async function readBase(targetDir: string, hash: string): Promise<Buffer | null> {
+  try {
+    const content = await readFile(join(targetDir, ".maker", "bases", hash));
+    return sha256(content) === hash ? content : null;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
   }
 }
 
-async function resolveConfig(
-  targetDir: string,
-  stored: MakerConfig | undefined,
-  project: { name: string; slug: string },
-): Promise<{ config: MakerConfig; recovered: boolean }> {
+async function listBases(targetDir: string): Promise<string[]> {
+  try {
+    return (await readdir(join(targetDir, ".maker", "bases")))
+      .filter((name) => /^[a-f0-9]{64}$/.test(name))
+      .sort();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+}
+
+export function mergeText(local: Buffer, base: Buffer, upstream: Buffer): Buffer | null {
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  let values: string[];
+  try { values = [decoder.decode(local), decoder.decode(base), decoder.decode(upstream)]; } catch { return null; }
+  if (values.some((value) => value.includes("\0"))) return null;
+  const split = (value: string): string[] => value.match(/[^\n]*\n|[^\n]+$/g) ?? [];
+  const result = mergeDiff3(split(values[0]!), split(values[1]!), split(values[2]!), {
+    excludeFalseConflicts: true,
+    label: { a: "local", o: "base", b: "upstream" },
+  });
+  return result.conflict ? null : Buffer.from(result.result.join(""), "utf-8");
+}
+
+async function resolveConfig(targetDir: string, stored: MakerConfig | undefined, project: { name: string; slug: string }): Promise<{ config: MakerConfig; recovered: boolean }> {
   if (stored) return { config: parseConfig(stored), recovered: true };
   const configPath = join(targetDir, "maker.config.json");
-  if (existsSync(configPath)) {
-    return {
-      config: parseConfig(JSON.parse(await readFile(configPath, "utf-8"))),
-      recovered: true,
-    };
-  }
+  if (existsSync(configPath)) return { config: parseConfig(JSON.parse(await readFile(configPath, "utf-8"))), recovered: true };
   return { config: parseConfig({ project }), recovered: false };
 }

@@ -26,6 +26,7 @@ program
   .option("-a, --agent <agent>", "CLI agêntica inicial: claude | codex")
   .option("-y, --yes", "não interativo; usa config/defaults")
   .option("-f, --force", "substitui explicitamente arquivos gerados que tenham conteúdo diferente")
+  .option("--dry-run", "mostra o plano sem alterar arquivos")
   .action(async (opts) => {
     await runInit(opts);
   });
@@ -62,6 +63,8 @@ program
   .command("update")
   .description("Atualiza arquivos do motor não modificados localmente.")
   .option("-t, --target <dir>", "diretório do projeto (default: cwd)")
+  .option("--dry-run", "mostra o plano sem alterar arquivos")
+  .option("--no-merge", "preserva arquivos editados sem tentar 3-way merge")
   .action(async (opts) => {
     await runUpdate(opts);
   });
@@ -81,6 +84,7 @@ program
   .option("-t, --target <dir>", "diretório do projeto (default: cwd)")
   .option("-s, --set <pair...>", "knob do add-on como nome=valor (repetível)")
   .option("-y, --yes", "não interativo; usa defaults dos knobs")
+  .option("--dry-run", "mostra o plano sem alterar arquivos")
   .action(async (addon, opts) => {
     await runAdd(addon, opts);
   });
@@ -90,6 +94,7 @@ program
   .argument("<addon>", "id do add-on (ex.: saas)")
   .description("Remove um add-on aplicado, revertendo injeções e arquivos criados.")
   .option("-t, --target <dir>", "diretório do projeto (default: cwd)")
+  .option("--dry-run", "mostra o plano sem alterar arquivos")
   .action(async (addon, opts) => {
     await runRemove(addon, opts);
   });

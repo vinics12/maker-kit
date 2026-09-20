@@ -69,6 +69,7 @@ describe("maker init (integração)", () => {
     const stubMarkers = /A PREENCHER|STUB|_\(nenhum|a preencher/i;
     const offenders: string[] = [];
     for (const f of files) {
+      if (f.includes("/.maker/bases/")) continue;
       // stubs de memória são onde o projeto autora negócio — permitido lá
       const isMemoryStub = /\/\.specify\/memory\/(project-rules|product-overview)\.md$/.test(f);
       const content = await readFile(f, "utf-8").catch(() => "");
@@ -92,7 +93,7 @@ describe("maker init (integração)", () => {
   it("manifest íntegro (doctor)", async () => {
     const m = await readManifest(target);
     expect(m).not.toBeNull();
-    expect(m!.schemaVersion).toBe(2);
+    expect(m!.schemaVersion).toBe(3);
     expect(m!.agents).toEqual(["claude"]);
     expect(m!.config?.commands.verify).toBe("just verify");
     const r = await verifyManifest(target, m!);
@@ -102,6 +103,13 @@ describe("maker init (integração)", () => {
 });
 
 describe("maker init (preflight de colisões)", () => {
+  it("--dry-run não escreve no alvo", async () => {
+    const target = await mkdtemp(join(tmpdir(), "maker-init-dry-"));
+    await runInit({ target, config: FIXTURE, yes: true, dryRun: true });
+    expect(existsSync(join(target, ".maker"))).toBe(false);
+    process.exitCode = 0;
+  });
+
   it("aborta com todas as colisões e não altera o diretório-alvo", async () => {
     const target = await mkdtemp(join(tmpdir(), "maker-init-collision-"));
     await mkdir(join(target, ".specify/memory"), { recursive: true });
