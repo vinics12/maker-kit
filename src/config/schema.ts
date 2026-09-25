@@ -28,7 +28,7 @@ export const configSchema = z.object({
         .array(z.string())
         .default(["services/**", "functions/**", "api/**"]),
     })
-    .default({}),
+    .prefault({}),
   commands: z
     .object({
       verify: z.string().default("npm run verify"),
@@ -36,7 +36,7 @@ export const configSchema = z.object({
       test: z.string().default("npm test"),
       dev: z.string().default("npm run dev"),
     })
-    .default({}),
+    .prefault({}),
 });
 
 export type MakerConfig = z.infer<typeof configSchema>;

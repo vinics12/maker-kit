@@ -31,13 +31,13 @@ var configSchema = z.object({
     frontendGlobs: z.array(z.string()).default(["apps/*/src/**", "src/**"]),
     /** Globs que o run-spec usa para rotear trabalho de backend/dados. */
     backendGlobs: z.array(z.string()).default(["services/**", "functions/**", "api/**"])
-  }).default({}),
+  }).prefault({}),
   commands: z.object({
     verify: z.string().default("npm run verify"),
     build: z.string().default("npm run build"),
     test: z.string().default("npm test"),
     dev: z.string().default("npm run dev")
-  }).default({})
+  }).prefault({})
 });
 function slugify(input) {
   return input.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").replace(/-{2,}/g, "-");
@@ -1066,7 +1066,7 @@ var addonStateSchema = z4.object({
   id: z4.string(),
   version: z4.string(),
   appliedAt: z4.string(),
-  knobs: z4.record(z4.string()),
+  knobs: z4.record(z4.string(), z4.string()),
   /** Arquivos novos criados pelo add-on (deletáveis na remoção). */
   createdFiles: z4.array(z4.object({ path: z4.string(), hash: z4.string() })),
   /** Arquivos do motor onde o add-on injetou um bloco (por marcador). */
