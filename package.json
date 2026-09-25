@@ -44,10 +44,11 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "audit:security": "pnpm audit --audit-level low",
     "audit:coupling": "node scripts/audit-coupling.mjs",
     "check:dist": "node scripts/check-dist.mjs",
     "package:smoke": "node scripts/package-smoke.mjs",
-    "verify": "pnpm check:dist && pnpm typecheck && pnpm test && pnpm audit:coupling",
+    "verify": "pnpm check:dist && pnpm typecheck && pnpm test && pnpm audit:security && pnpm audit:coupling",
     "extract": "node scripts/extract-templates.mjs",
     "maker": "node dist/cli.js"
   },
