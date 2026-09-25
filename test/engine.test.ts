@@ -15,6 +15,25 @@ describe("config schema", () => {
     expect(c.layout.frontendGlobs.length).toBeGreaterThan(0);
   });
 
+  it("preserva defaults internos em objetos parciais", () => {
+    const c = parseConfig({
+      project: { name: "X" },
+      layout: { frontendGlobs: ["web/**"] },
+      commands: { test: "pnpm test" },
+    });
+
+    expect(c.layout).toEqual({
+      frontendGlobs: ["web/**"],
+      backendGlobs: ["services/**", "functions/**", "api/**"],
+    });
+    expect(c.commands).toEqual({
+      verify: "npm run verify",
+      build: "npm run build",
+      test: "pnpm test",
+      dev: "npm run dev",
+    });
+  });
+
   it("aceita codex e rejeita agentes desconhecidos", () => {
     expect(parseConfig({ agent: "codex", project: { name: "X" } }).agent).toBe("codex");
     expect(() => parseConfig({ agent: "outro", project: { name: "X" } })).toThrow();

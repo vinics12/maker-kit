@@ -8,7 +8,7 @@ export const addonStateSchema = z.object({
   id: z.string(),
   version: z.string(),
   appliedAt: z.string(),
-  knobs: z.record(z.string()),
+  knobs: z.record(z.string(), z.string()),
   /** Arquivos novos criados pelo add-on (deletáveis na remoção). */
   createdFiles: z.array(z.object({ path: z.string(), hash: z.string() })),
   /** Arquivos do motor onde o add-on injetou um bloco (por marcador). */
