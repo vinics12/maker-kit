@@ -5,3 +5,8 @@
 # package.json — declarar a decisão em dois lugares é contraditório sob pnpm 11.
 allowBuilds:
   esbuild: false
+
+# tsup 8 e Vite 7 ainda declaram esbuild ^0.27, cuja linha 0.27.3–0.27.7 tem
+# uma vulnerabilidade de leitura de arquivos no servidor de desenvolvimento no Windows.
+overrides:
+  esbuild: 0.28.1
