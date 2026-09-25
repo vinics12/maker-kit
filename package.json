@@ -53,18 +53,19 @@
   },
   "dependencies": {
     "@clack/prompts": "^0.11.0",
-    "commander": "^12.1.0",
+    "commander": "^13.1.0",
     "fast-glob": "^3.3.2",
     "handlebars": "^4.7.8",
     "node-diff3": "3.2.1",
     "picocolors": "^1.1.1",
     "smol-toml": "^1.8.0",
-    "zod": "^3.23.8"
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
     "tsup": "^8.3.5",
     "typescript": "^5.7.2",
-    "vitest": "^2.1.8"
+    "vite": "^7.3.6",
+    "vitest": "^5.0.1"
   }
 }
