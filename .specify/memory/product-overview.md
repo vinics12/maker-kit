@@ -35,7 +35,9 @@ WSL2).
 ## Roadmap / estado atual
 
 Fase 1 (motor agnóstico + `init/doctor/update`) e Fase 2 (framework de add-ons + `saas`) prontas;
-publicado no npm (v0.2.0). Backlog: add-ons `observability`/`i18n`, `maker list`, `update` com merge
-3-way, `doctor` ciente de add-ons. O `feature-cataloguer` mantém `docs/features/` como registro
-as-built das features prontas — **use-o como fonte de verdade**. A primeira feature integrada via
-dogfooding foi `001-event-stream` (o `maker runs`).
+`maker list`, update com merge 3-way e doctor ciente de add-ons implementados. A distribuição usa
+Release Please: mudanças se acumulam em `main`, e somente o merge deliberado do Release PR publica
+no npm e no GitHub. Backlog atual: add-ons `observability`/`i18n` e perfis opcionais de stack. O
+`feature-cataloguer` mantém `docs/features/` como registro as-built das features prontas — **use-o
+como fonte de verdade**. A primeira feature integrada via dogfooding foi `001-event-stream` (o
+`maker runs`).

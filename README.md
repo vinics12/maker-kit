@@ -323,18 +323,26 @@ pnpm extract -- --from <projeto>   # re-extrai a camada custom de um projeto de 
 
 ### Cortar uma release
 
-Para manter a URL estável (`releases/latest/download/maker.tgz`) funcionando:
+Releases são geradas pelo Release Please a partir dos Conventional Commits em `main`:
+
+1. Commits `fix:` geram patch, `feat:` geram minor e `BREAKING CHANGE`/`!` geram major.
+2. O workflow **Release Please** abre ou atualiza um Release PR com versão e changelog.
+3. O merge desse PR cria a tag `vX.Y.Z` e a GitHub Release.
+4. O workflow **Publish** valida o pacote, publica no npm via OIDC e anexa `maker.tgz` e
+   `maker.tgz.sha256` à release.
+
+O nome fixo `maker.tgz` mantém `releases/latest/download/maker.tgz` estável. Se a publicação falhar,
+reexecute **Publish** para a mesma release; o job não tenta republicar uma versão que já existe no
+npm e substitui os assets pelos artefatos novamente verificados.
+
+Antes de abrir um PR, rode:
 
 ```bash
-# 1. bump da versão em package.json / plugin.json / marketplace.json
-pnpm build && pnpm test                 # dist versionado + suíte verde
-git commit -am "release vX.Y.Z" && git push
-TGZ=$(npm pack); cp "$TGZ" maker.tgz    # tarball já inclui dist
-gh release create vX.Y.Z maker.tgz --title "maker X.Y.Z"   # asset SEMPRE nomeado maker.tgz
-rm -f "$TGZ" maker.tgz
+pnpm verify
+pnpm package:smoke
 ```
 
-O nome fixo `maker.tgz` é o que faz `releases/latest/download/maker.tgz` continuar válido a cada versão.
+`pnpm verify` também falha quando `dist/` não foi regenerado após uma mudança em `src/`.
 
 ## Roadmap
 
@@ -348,9 +356,9 @@ O nome fixo `maker.tgz` é o que faz `releases/latest/download/maker.tgz` contin
 - [ ] **Novos add-ons sobre o mesmo framework:**
   - [ ] `observability` — princípios de logging/erros/eventos com contexto, neutros quanto a sink.
   - [ ] `i18n` — princípios de internacionalização (label maps, sem string hard-coded).
-- [ ] **`maker list`** — listar add-ons disponíveis e quais estão aplicados no projeto (via `.maker/addons/`).
-- [ ] **`maker update` com merge inteligente** — hoje só reescreve arquivos intocados por hash; evoluir
-  para um 3-way merge que preserve edições locais em arquivos também atualizados pelo motor.
-- [ ] **`maker doctor` ciente de add-ons** — reportar add-ons aplicados e reconciliar as injeções.
+- [x] **`maker list`** — listar add-ons disponíveis e quais estão aplicados no projeto (via `.maker/addons/`).
+- [x] **`maker update` com merge inteligente** — 3-way merge que preserva edições locais.
+- [x] **`maker doctor` ciente de add-ons** — reportar add-ons aplicados e reconciliar as injeções.
 - [x] **Publicação no npm** — `npm i -g @vinicius.cerqueira/maker` (v0.2.0 publicada).
+- [x] **Release automatizada** — Release Please, npm Trusted Publishing e tarball com checksum.
 - [ ] **Perfis de backend/stack opcionais** — abstrair o gancho já documentado para além do "clone fiel".

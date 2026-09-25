@@ -94,11 +94,13 @@ política de artefatos** (§4), por isso mantido inteiro (com `tasks.md`, `brief
   (ex.: `feat(001/us4): T401-T403 — agregação L1 rejeição por gate`). Assuntos em PT-BR.
   Tipos: `feat`/`fix`/`docs`/`chore`/`refactor`.
 - **PR**: mergeado via **merge commit** (preserva os commits da feature).
-- **Verify antes do PR**: `pnpm typecheck && pnpm test && pnpm audit:coupling` verdes.
-- **Release** (mantém a URL estável `releases/latest/download/maker.tgz`): bump em
-  `package.json` / `wrapper/.claude-plugin/plugin.json` / `.claude-plugin/marketplace.json` →
-  `pnpm build && pnpm test` → commit → `npm pack` → `gh release create vX.Y.Z maker.tgz`
-  (asset **sempre** nomeado `maker.tgz`). Detalhe no [README](README.md) §"Cortar uma release".
+- **Verify antes do PR**: `pnpm verify && pnpm package:smoke` verdes. O verify recompila em uma área
+  temporária e falha se o `dist/` versionado não corresponde ao fonte; rode `pnpm build` para corrigi-lo.
+- **Release**: não faça bump manual. O Release Please mantém `package.json`, manifests do plugin e
+  `CHANGELOG.md`; ao mergear o Release PR, o workflow de publicação envia o pacote ao npm por OIDC
+  e anexa `maker.tgz` + checksum à GitHub Release. PRs comuns apenas acumulam mudanças em `main`;
+  **somente o merge deliberado do Release PR publica**. Agents não devem fazer esse merge sem pedido
+  humano explícito. Detalhes em [docs/releasing.md](docs/releasing.md).
 
 ---
 
@@ -144,8 +146,8 @@ orquestrador/humano remove no commit do Gate 4.
 
 ## 5. Checklist de PR
 
-- [ ] `pnpm typecheck && pnpm test && pnpm audit:coupling` verdes
-- [ ] `pnpm build` rodado (se mexeu em `src/` — `dist/` versionado atualizado)
+- [ ] `pnpm verify && pnpm package:smoke` verdes
+- [ ] `dist/` versionado e sem diff após o build
 - [ ] `maker agent list` e `maker doctor` íntegros em fixtures Claude e Codex
 - [ ] Branch `NNN-<slug>` + commits `type(NNN/usN): ...`
 - [ ] `docs/features/` atualizado (Tier 3) e Tier 2 promovido ao catálogo
@@ -156,8 +158,9 @@ orquestrador/humano remove no commit do Gate 4.
 
 ## 6. Gaps conhecidos (próximos passos, não bloqueiam contribuição)
 
-Hoje parte das convenções ainda vive em skills de agente + disciplina humana. A CI já executa
-`build` + `typecheck` + `test` + `audit:coupling`; permanece como oportunidade de automação:
+Hoje parte das convenções ainda vive em skills de agente + disciplina humana. A CI executa
+`build` + verificação de `dist/` + `typecheck` + `test` + `audit:coupling` + smoke test do pacote;
+permanece como oportunidade de automação:
 - **Lint/format/commitlint/husky** — nenhum configurado; o único enforcement é `typecheck` + testes +
   `audit:coupling`.
 - Alinhado ao Backlog do [README](README.md#roadmap).

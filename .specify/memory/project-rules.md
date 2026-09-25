@@ -31,10 +31,23 @@ não se aplica (HAS_UI=false, sem backend a subir).
 
 | Papel | Comando |
 |---|---|
-| verify (lint+types+test) | `pnpm typecheck && pnpm test && pnpm audit:coupling` |
+| verify (bundle+types+test+audit) | `pnpm verify` |
 | build | `pnpm build` |
 | test | `pnpm test` |
 | dev | `pnpm dev` |
+
+## Desenvolvimento e release
+
+- `main` permanece estável; branches curtas entram por PR e podem acumular várias melhorias sem
+  gerar versão.
+- O Release Please mantém um único Release PR aberto. **Somente o merge desse PR** cria tag,
+  GitHub Release e publicação npm.
+- Nunca faça bump manual, crie tag/release manualmente ou trate o merge de um PR comum como
+  publicação.
+- Agents não fazem merge do Release PR sem solicitação humana explícita.
+- Não há `develop` permanente. Para integração antecipada, use `integration/<tema>` temporária e
+  remova-a após o PR consolidado para `main`.
+- A referência operacional completa é `docs/releasing.md`.
 
 ## Layout (roteamento de dev)
 

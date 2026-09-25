@@ -38,12 +38,16 @@
   },
   "scripts": {
     "build": "tsup",
-    "prepublishOnly": "tsup",
+    "prepack": "pnpm build",
+    "prepublishOnly": "pnpm verify",
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "audit:coupling": "node scripts/audit-coupling.mjs",
+    "check:dist": "node scripts/check-dist.mjs",
+    "package:smoke": "node scripts/package-smoke.mjs",
+    "verify": "pnpm check:dist && pnpm typecheck && pnpm test && pnpm audit:coupling",
     "extract": "node scripts/extract-templates.mjs",
     "maker": "node dist/cli.js"
   },

@@ -1,0 +1,73 @@
+name: Publish
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to publish or repair (for example, v0.3.0)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: npm
+    permissions:
+      contents: write
+      id-token: write
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        with:
+          version: 11.1.2
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: verify source and tracked bundle
+        run: pnpm verify
+
+      - name: build release tarball
+        run: node scripts/prepare-release.mjs "$RUNNER_TEMP/release" "$RELEASE_TAG"
+
+      - name: smoke test exact release tarball
+        run: node scripts/package-smoke.mjs "$RUNNER_TEMP/release/maker.tgz"
+
+      - name: publish exact tarball to npm with OIDC
+        run: |
+          VERSION="${RELEASE_TAG#v}"
+          if npm view "@vinicius.cerqueira/maker@$VERSION" version >/dev/null 2>&1; then
+            echo "@vinicius.cerqueira/maker@$VERSION already exists; skipping npm publish"
+          else
+            npm publish "$RUNNER_TEMP/release/maker.tgz" --access public
+          fi
+
+      - name: upload tarball and checksum to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "$RELEASE_TAG" \
+            "$RUNNER_TEMP/release/maker.tgz" \
+            "$RUNNER_TEMP/release/maker.tgz.sha256" \
+            --clobber
