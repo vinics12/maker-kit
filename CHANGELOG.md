@@ -4,6 +4,13 @@ Todas as mudanças relevantes deste projeto serão documentadas neste arquivo. A
 geradas automaticamente pelo Release Please a partir dos Conventional Commits mergeados em
 `main`.
 
+## [0.4.1](https://github.com/vinics12/maker-kit/compare/v0.4.0...v0.4.1) (2026-09-25)
+
+
+### Bug Fixes
+
+* **security:** Bloqueia dependências vulneráveis ([#33](https://github.com/vinics12/maker-kit/issues/33)) ([e0138f4](https://github.com/vinics12/maker-kit/commit/e0138f44b1a6c300eb4caea8280ae2d898cc7a69))
+
 ## [0.4.0](https://github.com/vinics12/maker-kit/compare/v0.3.0...v0.4.0) (2026-09-25)
 
 
