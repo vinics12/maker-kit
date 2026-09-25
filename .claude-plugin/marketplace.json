@@ -9,7 +9,7 @@
       "name": "maker",
       "source": "./wrapper",
       "description": "Wrapper de skill do Claude Code para a CLI maker: /maker init | doctor | update | add | remove.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "category": "workflow"
     }
   ]
