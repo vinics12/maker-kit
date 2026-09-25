@@ -5,6 +5,7 @@
       "release-type": "node",
       "package-name": "@vinicius.cerqueira/maker",
       "include-v-in-tag": true,
+      "include-component-in-tag": false,
       "extra-files": [
         {
           "type": "json",
