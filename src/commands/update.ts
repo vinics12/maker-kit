@@ -14,10 +14,19 @@ import { createPlan, formatPlan, inspectTarget, planWrite, type PlannedChange } 
 import { applyChangePlan, assertNoPendingTransactions } from "../changes/transaction.js";
 import { planLegacyAddonAgents, type LegacyAgentReport } from "../agents/migrate.js";
 import { sharedRoleReference } from "../agents/reference.js";
+import { applyResolutions, exportMediation, mediationHint, type MediationCandidate, type MediationCategory } from "./mediation.js";
 
 const CONFIG_UNKNOWN = "depende de config não recuperada";
 
-export interface UpdateOptions { target?: string; dryRun?: boolean; merge?: boolean }
+export interface UpdateOptions {
+  target?: string;
+  dryRun?: boolean;
+  merge?: boolean;
+  /** Exporta o que precisa de mediação (base/local/upstream) sem aplicar o update. */
+  export?: string | true;
+  /** Aplica as propostas escritas sobre uma exportação. */
+  applyResolutions?: string | true;
+}
 
 export async function runUpdate(opts: UpdateOptions): Promise<void> {
   const targetDir = resolve(opts.target ?? process.cwd());
@@ -25,12 +34,18 @@ export async function runUpdate(opts: UpdateOptions): Promise<void> {
   const prior = await readManifest(targetDir);
   if (!prior) throw new Error(`Nenhum install do maker em ${targetDir}.`);
   const { config, recovered } = await resolveConfig(targetDir, prior.config, prior.project);
+  if (opts.applyResolutions) return applyResolutions(targetDir, opts.applyResolutions, config, { dryRun: opts.dryRun });
+  if (opts.export && !recovered) {
+    throw new Error("Config do projeto não recuperada: crie maker.config.json com os valores usados no init antes de exportar a mediação.");
+  }
+  if (opts.export) await assertNoPendingTransactions(targetDir);
   const agents = enabledAgents(prior);
   const staging = await mkdtemp(join(tmpdir(), "maker-update-plan-"));
   const changes: PlannedChange[] = [];
   let reports: LegacyAgentReport[] = [];
   const unresolved: string[] = [];
   const defaulted: string[] = [];
+  const mediation: MediationCandidate[] = [];
   const next: Manifest = structuredClone(prior);
   next.files = { ...prior.files };
   try {
@@ -46,8 +61,16 @@ export async function runUpdate(opts: UpdateOptions): Promise<void> {
       const upstreamHash = sha256(upstream);
       const current = await inspectTarget(targetDir, file.rel);
       const recorded = prior.files[file.rel];
+      const mediate = async (category: MediationCategory, reason: string, baseHash?: string) => {
+        mediation.push({ path: file.rel, source: recorded?.source ?? file.entry.source, engineSource: file.entry.source,
+          category, reason, local: current.content ?? null, base: baseHash ? await readBase(targetDir, baseHash) : null, upstream });
+      };
       if (recorded?.source.startsWith("addon:")) {
         changes.push(status("preserve", file.rel, file.entry.source, current, "arquivo controlado por add-on"));
+        // Só quando o template mudou desde a última reconciliação; a base registrada é a do template anterior.
+        if (current.kind === "file" && recorded.baseHash !== upstreamHash) {
+          await mediate("addon", "template atualizado em arquivo controlado por add-on", recorded.baseHash);
+        }
       } else if (current.kind === "other") {
         changes.push(status("conflict", file.rel, file.entry.source, current, "o caminho não é um arquivo regular"));
       } else if (current.kind === "absent") {
@@ -65,15 +88,19 @@ export async function runUpdate(opts: UpdateOptions): Promise<void> {
         next.files[file.rel] = manifestEntry(file.entry, upstreamHash, upstreamHash);
       } else if (opts.merge === false) {
         changes.push(status("preserve", file.rel, file.entry.source, current, "edição local; merge desabilitado"));
+        await mediate("local-edit", "edição local; merge desabilitado", recorded.baseHash);
       } else if (!recorded.baseHash) {
         changes.push(status("preserve", file.rel, file.entry.source, current, "edição local em manifest legado sem base exata"));
+        await mediate("local-edit", "edição local sem base exata");
       } else {
         const base = await readBase(targetDir, recorded.baseHash);
         const merged = base ? mergeText(current.content!, base, upstream) : null;
         if (!base) {
           changes.push(status("preserve", file.rel, file.entry.source, current, "base histórica ausente; preservado por segurança"));
+          await mediate("local-edit", "base histórica ausente");
         } else if (!merged) {
           changes.push(status("conflict", file.rel, file.entry.source, current, "mudanças locais e upstream na mesma região"));
+          await mediate("conflict", "mudanças locais e upstream na mesma região", recorded.baseHash);
         } else {
           const change = await planWrite({ targetDir, path: file.rel, content: merged, source: file.entry.source, reason: "mudanças locais e upstream mescladas", force: true });
           change.resolution = "merge";
@@ -86,9 +113,12 @@ export async function runUpdate(opts: UpdateOptions): Promise<void> {
         changes.push(await planWrite({ targetDir, path: `.maker/bases/${upstreamHash}`, content: upstream, source: "metadata", reason: `base upstream de ${file.rel}` }));
       }
     }
+    const degraded = reports.filter((report) => report.status === "degraded").map((report) => report.path);
+    await groupLegacyAgents(targetDir, staging, expected, prior, mediation, degraded);
   } finally {
     await rm(staging, { recursive: true, force: true });
   }
+  if (opts.export) return exportMediation(targetDir, opts.export, mediation, config);
   next.schemaVersion = 3;
   next.agents = agents;
   if (next.config || recovered) next.config = config;
@@ -122,6 +152,7 @@ export async function runUpdate(opts: UpdateOptions): Promise<void> {
     if (defaulted.length) console.log(pc.yellow(`  ${defaulted.length} arquivo(s) ausente(s) criado(s) com valores padrão: ${defaulted.join(", ")}`));
     console.log(pc.yellow("Ação recomendada: crie maker.config.json com os valores usados no init e execute maker update --dry-run; os arquivos acima são então renderizados com ela."));
   }
+  if (mediation.length) console.log(pc.yellow(mediationHint(mediation.length)));
   if (opts.dryRun) {
     printAgentReports(reports, "planejado");
     console.log(formatPlan(plan));
@@ -189,6 +220,39 @@ async function configDependentFiles(expected: AppliedFile[], config: MakerConfig
 function sharedRoleOf(path: string): string {
   const role = path.match(/^\.claude\/agents\/([a-z0-9-]+)\.md$/)?.[1];
   return role ? `.maker/workflow/agents/${role}.md` : "";
+}
+
+/**
+ * Agente Claude sem referência ao papel compartilhado: o adapter e o papel são mediados juntos,
+ * para as customizações do corpo legado irem para o papel e o adapter voltar ao formato gerado.
+ */
+async function groupLegacyAgents(targetDir: string, staging: string, expected: AppliedFile[], prior: Manifest,
+  mediation: MediationCandidate[], degraded: string[]): Promise<void> {
+  const engineSources = new Map(expected.map((file) => [file.rel, file.entry.source]));
+  const adapters = new Set(degraded);
+  for (const candidate of mediation) {
+    if (sharedRoleOf(candidate.path) && candidate.local && !sharedRoleReference(candidate.local.toString("utf-8"))) adapters.add(candidate.path);
+  }
+  for (const adapter of [...adapters].sort()) {
+    const shared = sharedRoleOf(adapter);
+    if (!shared || !engineSources.has(adapter) || !engineSources.has(shared)) continue;
+    for (const path of [adapter, shared]) {
+      const existing = mediation.find((candidate) => candidate.path === path);
+      if (existing) {
+        existing.category = "legacy-agent";
+        existing.group = adapter;
+        continue;
+      }
+      const current = await inspectTarget(targetDir, path);
+      if (current.kind === "other") continue;
+      const recorded = prior.files[path];
+      mediation.push({ path, source: recorded?.source ?? engineSources.get(path)!, engineSource: engineSources.get(path)!,
+        category: "legacy-agent", group: adapter,
+        reason: path === adapter ? "agente legado sem referência ao papel compartilhado" : "papel compartilhado do agente legado",
+        local: current.content ?? null, base: recorded?.baseHash ? await readBase(targetDir, recorded.baseHash) : null,
+        upstream: await readFile(join(staging, path)) });
+    }
+  }
 }
 
 function manifestEntry(source: ManifestEntry, hash: string, baseHash: string): ManifestEntry {

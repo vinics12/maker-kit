@@ -62,7 +62,7 @@ export async function validateAgentIntegration(
     if (!/^---\n[\s\S]*?^name:\s*.+$[\s\S]*?^description:\s*.+$[\s\S]*?^---$/m.test(content)) {
       issues.push(`${relativeRoot(provider, "skills")}/${rel}: frontmatter name/description inválido`);
     }
-    if (provider === "codex" && /\/(?:run-spec|run-brainstorm|speckit-[a-z0-9-]+)\b/.test(content)) {
+    if (provider === "codex" && /\/(?:run-spec|run-brainstorm|maker-update|speckit-[a-z0-9-]+)\b/.test(content)) {
       issues.push(`${relativeRoot(provider, "skills")}/${rel}: referência slash incompatível com Codex`);
     }
   }

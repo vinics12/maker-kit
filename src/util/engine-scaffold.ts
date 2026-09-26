@@ -164,7 +164,7 @@ function adaptCodexText(input: string): string {
   return input
     .replace(/\.claude\/skills/g, ".agents/skills")
     .replace(
-      /\/(run-spec|run-brainstorm|speckit-[a-z0-9-]+|fix-on-validation)\b/g,
+      /\/(run-spec|run-brainstorm|maker-update|speckit-[a-z0-9-]+|fix-on-validation)\b/g,
       (_match, name: string) => `$${name}`,
     )
     .replace(/Generated with \[Claude Code\]\([^)]*\)/g, "Generated with maker on Codex")

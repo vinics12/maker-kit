@@ -74,3 +74,31 @@ de add-on e sem base histórica exata também são preservados. O update imprime
 um bloco único de ação recomendada e o total de agentes migrados e degradados. `maker doctor` e
 `maker agent list` distinguem adapter ausente, referência ausente e arquivo compartilhado ausente,
 mostrando o caminho esperado e `maker update --dry-run`.
+
+## Mediação com agente
+
+O merge automático só aplica o que consegue provar seguro. O restante pode ser mediado por um agente
+com a skill `maker-update` (`/maker-update` no Claude Code, `$maker-update` no Codex); o update avisa
+quando há itens assim. O maker continua sendo o único a escrever nos arquivos gerenciados:
+
+1. `maker update --export [dir]` grava em `dir` (padrão `.maker/mediation`) um `mediation.json` e, para
+   cada item, `upstream` (nova versão), `local` (conteúdo atual) e `base` (versão upstream de onde o
+   local partiu, quando conhecida). Nada é aplicado. Entram: conflitos do merge, edições locais sem
+   base exata ou com a base ausente, arquivos de add-on cujo template mudou desde a última
+   reconciliação e agentes legados sem referência ao papel compartilhado — estes em grupo com o papel,
+   para resolver os dois juntos. Sem config recuperável a exportação é recusada, porque as versões
+   upstream sairiam com os valores padrão.
+2. O agente escreve a proposta em `items/<id>/resolved` (e a justificativa em `notes.md`), revisando o
+   diff com o dono. Itens adiados ficam sem proposta.
+3. `maker update --apply-resolutions [dir] --dry-run` valida e mostra o plano; sem `--dry-run`, aplica
+   numa única transação. Toda proposta é rejeitada, sem alterar nada, quando: o arquivo mudou desde a
+   exportação, a versão do maker ou a config mudou, contém marcadores de conflito, está vazia ou não é
+   UTF-8, perde ou desbalanceia blocos de add-on, resolve só parte de um grupo, o adapter do agente
+   legado não mantém a instrução que lê o papel ou fica com blocos de add-on, ou o caminho não é um
+   arquivo gerenciado. A verificação usa o conteúdo atual do projeto e o manifest, não as cópias
+   exportadas.
+
+Cada arquivo aplicado passa a ter como base a versão upstream exportada, então o update seguinte
+mescla normalmente a partir dela. Em agentes legados, o adapter volta ao engine e o papel fica com a
+origem do add-on cujos blocos recebeu, com `injectedTargets` atualizado. A exportação padrão é
+removida quando todos os itens são aplicados.
