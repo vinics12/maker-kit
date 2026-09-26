@@ -48,7 +48,8 @@ export async function runDoctor(opts: DoctorOptions): Promise<void> {
     console.log(pc.green("✓ Install íntegro."));
     return;
   }
-  for (const m of result.missing) console.log(pc.red(`  ausente:    ${m}`));
+  const reported = new Set(integrations.flatMap((integration) => integration.missingAdapters));
+  for (const m of result.missing) if (!reported.has(m)) console.log(pc.red(`  ausente:    ${m}`));
   for (const m of result.modified) console.log(pc.yellow(`  modificado: ${m}`));
   console.log(
     pc.dim(`\n${result.missing.length} ausente(s), ${result.modified.length} modificado(s).`),

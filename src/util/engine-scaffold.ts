@@ -6,6 +6,7 @@ import { render, type RenderContext } from "../render/engine.js";
 import { manifestKey, sha256, type ManifestEntry } from "../render/manifest.js";
 import type { AgentProvider } from "../config/schema.js";
 import { applyTree, templatesDir, type AppliedFile } from "./scaffold.js";
+import { adapterInstruction } from "../agents/reference.js";
 
 const HBS_EXT = ".hbs";
 
@@ -102,11 +103,11 @@ async function applyAgents(
     await mkdir(dirname(absOut), { recursive: true });
     const sharedPath = `.maker/workflow/agents/${parsed.name}.md`;
     const content = provider === "claude"
-      ? `---\n${parsed.frontmatter}\n---\n\nRead \`${sharedPath}\` completely before acting and follow it as your role instructions.\n`
+      ? `---\n${parsed.frontmatter}\n---\n\n${adapterInstruction(sharedPath)}`
       : [
           `name = ${JSON.stringify(parsed.name)}`,
           `description = ${JSON.stringify(adaptCodexText(parsed.description))}`,
-          `developer_instructions = ${JSON.stringify(`Read ${sharedPath} completely before acting and follow it as your role instructions.\n`)}`,
+          `developer_instructions = ${JSON.stringify(adapterInstruction(sharedPath).replace(/`/g, ""))}`,
           "",
         ].join("\n");
     await writeFile(absOut, content, "utf-8");
@@ -125,7 +126,7 @@ async function applySharedAgents(targetDir: string, ctx: RenderContext): Promise
     const parsed = parseFrontmatter(rendered);
     const absOut = join(targetDir, ".maker/workflow/agents", `${parsed.name}.md`);
     await mkdir(dirname(absOut), { recursive: true });
-    await writeFile(absOut, `${adaptSharedAgentText(parsed.body.trim())}\n`, "utf-8");
+    await writeFile(absOut, sharedAgentText(parsed.body), "utf-8");
     applied.push(await appliedEntry(targetDir, absOut, "engine:common"));
   }
   return applied;
@@ -173,6 +174,22 @@ function adaptCodexText(input: string): string {
     .replace(/Claude Code/g, "Codex")
     .replace(/\(Skill tool\)/g, "(skill disponível)")
     .replace(/subagent_type:/g, "agent:");
+}
+
+/** Corpo de papel compartilhado como o engine o grava: sem bordas em branco e sem referências do Claude. */
+export function sharedAgentText(body: string): string {
+  return `${adaptSharedAgentText(body.trim())}\n`;
+}
+
+/**
+ * Papel compartilhado equivalente ao agente Claude completo da 0.2.x (último formato antes dos
+ * adapters). O template histórico é empacotado porque o atual pode evoluir: só essa base fixa
+ * permite reconhecer um corpo legado sem customização depois que o template mudar.
+ */
+export async function legacySharedAgent(ctx: RenderContext, role: string): Promise<string | undefined> {
+  const path = templatesDir(`legacy/0.2.0/agents/${role}.md.hbs`);
+  if (!existsSync(path)) return undefined;
+  return sharedAgentText(parseFrontmatter(render(await readFile(path, "utf-8"), ctx)).body);
 }
 
 function adaptSharedAgentText(input: string): string {

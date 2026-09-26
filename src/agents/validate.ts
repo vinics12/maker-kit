@@ -5,12 +5,16 @@ import fg from "fast-glob";
 import { parse as parseToml } from "smol-toml";
 import { z } from "zod";
 import type { AgentProvider } from "../config/schema.js";
+import { readManifest, type Manifest } from "../render/manifest.js";
+import { sharedRoleReference } from "./reference.js";
 
 export interface AgentValidation {
   provider: AgentProvider;
   skills: number;
   agents: number;
   issues: string[];
+  /** Adapters do manifest ausentes no disco, já descritos em `issues`. */
+  missingAdapters: string[];
 }
 
 const codexAgentSchema = z.object({
@@ -32,6 +36,21 @@ export async function validateAgentIntegration(
     ? await fg(provider === "claude" ? "*.md" : "*.toml", { cwd: agentRoot, onlyFiles: true })
     : [];
   const issues: string[] = [];
+  const missingAdapters: string[] = [];
+  let manifest: Manifest | null = null;
+  try {
+    manifest = await readManifest(targetDir);
+  } catch (error) {
+    const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
+    issues.push(`.maker/manifest.json ilegível (${message}); adapters ausentes não puderam ser verificados`);
+  }
+  const adapterRoot = relativeRoot(provider, "agents");
+  for (const path of Object.keys(manifest?.files ?? {}).sort()) {
+    if (path.startsWith(`${adapterRoot}/`) && !existsSync(join(targetDir, path))) {
+      missingAdapters.push(path);
+      issues.push(`${path}: arquivo de adapter ausente; execute maker update --dry-run para revisar a restauração`);
+    }
+  }
 
   if (!existsSync(join(targetDir, "AGENTS.md"))) issues.push("AGENTS.md ausente");
   if (skillFiles.length === 0) issues.push(`${relativeRoot(provider, "skills")} sem skills`);
@@ -63,9 +82,16 @@ export async function validateAgentIntegration(
       issues.push(`.claude/agents/${rel}: frontmatter inválido`);
     }
 
-    const shared = content.match(/\.maker\/workflow\/agents\/[a-z0-9-]+\.md/)?.[0];
-    if (!shared || !existsSync(join(targetDir, shared))) {
-      issues.push(`${relativeRoot(provider, "agents")}/${rel}: papel compartilhado ausente`);
+    const shared = sharedRoleReference(content);
+    const adapterPath = `${adapterRoot}/${rel}`;
+    if (!shared) {
+      const expected = `.maker/workflow/agents/${rel.replace(/\.(md|toml)$/, "")}.md`;
+      const source = manifest?.files[adapterPath]?.source;
+      issues.push(`${adapterPath}: referência ao papel compartilhado ausente; esperado ${expected}` +
+        (source ? `; origem ${source}` : "") +
+        "; o update preserva conteúdo local/add-on sem migração segura. Execute maker update --dry-run para revisar o reparo; preserve as customizações e não reaplique o add-on apenas para corrigir o adapter");
+    } else if (!existsSync(join(targetDir, shared))) {
+      issues.push(`${adapterPath}: arquivo do papel compartilhado ausente: ${shared}; execute maker update --dry-run para revisar a restauração`);
     }
   }
 
@@ -73,7 +99,7 @@ export async function validateAgentIntegration(
     issues.push("CLAUDE.md ausente");
   }
 
-  return { provider, skills: skillFiles.length, agents: agentFiles.length, issues };
+  return { provider, skills: skillFiles.length, agents: agentFiles.length, issues, missingAdapters };
 }
 
 function relativeRoot(provider: AgentProvider, kind: "skills" | "agents"): string {

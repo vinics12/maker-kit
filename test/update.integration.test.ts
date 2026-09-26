@@ -44,6 +44,27 @@ describe("maker update transacional", () => {
     expect(result).toContain(lines.at(-2)!);
   });
 
+  it("preserva edições já mescladas em updates seguintes", async () => {
+    const target = await initialized("maker-update-remerge-");
+    const path = "AGENTS.md";
+    const upstream = await readFile(join(target, path), "utf-8");
+    const lines = upstream.split("\n");
+    const base = lines.slice(0, -2).join("\n") + "\n";
+    const local = base.replace(lines[0]!, `${lines[0]} local`);
+    const baseHash = sha256(base);
+    await mkdir(join(target, ".maker", "bases"), { recursive: true });
+    await writeFile(join(target, ".maker", "bases", baseHash), base);
+    await writeFile(join(target, path), local);
+    const manifest = (await readManifest(target))!;
+    manifest.files[path] = { ...manifest.files[path]!, hash: baseHash, baseHash };
+    await writeManifest(target, manifest);
+    await runUpdate({ target });
+    const merged = await readFile(join(target, path), "utf-8");
+    expect(merged).toContain(`${lines[0]} local`);
+    await runUpdate({ target });
+    expect(await readFile(join(target, path), "utf-8")).toBe(merged);
+  });
+
   it("conflito preserva arquivos e manifest", async () => {
     const target = await initialized("maker-update-conflict-");
     const path = "AGENTS.md";

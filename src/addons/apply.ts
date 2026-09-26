@@ -7,6 +7,7 @@ import {
   sha256,
   manifestKey,
   type Manifest,
+  type ManifestEntry,
 } from "../render/manifest.js";
 import { addonDir } from "./loader.js";
 import type { AddonManifest } from "./schema.js";
@@ -33,6 +34,24 @@ function addonContext(manifest: Manifest, knobs: Record<string, string>) {
 async function renderFrom(dir: string, rel: string, ctx: object): Promise<string> {
   const raw = await readFile(join(dir, rel), "utf-8");
   return rel.endsWith(".hbs") ? renderRaw(raw, ctx) : raw;
+}
+
+/** Alvo de injeção: mantém a base upstream para que o remove devolva o arquivo ao merge 3-way. */
+function injectedEntry(prior: ManifestEntry | undefined, content: string, id: string): ManifestEntry {
+  return { hash: sha256(content), source: `addon:${id}`, ...(prior?.baseHash ? { baseHash: prior.baseHash } : {}) };
+}
+
+/**
+ * Entrada do engine após remover o bloco. O conteúdo resultante pode ter customizações: com base
+ * upstream, o update seguinte faz merge 3-way; sem ela (states legados), manter o hash anterior faz
+ * o update tratá-lo como edição local e preservá-lo em vez de sobrescrever.
+ */
+function restoredEntry(rel: string, prior: ManifestEntry | undefined, content: string): ManifestEntry {
+  const source = rel.startsWith(".claude/") ? "engine:claude"
+    : rel.startsWith(".codex/") || rel.startsWith(".agents/") ? "engine:codex"
+      : "engine:common";
+  if (!prior?.baseHash) return { hash: prior?.hash ?? sha256(content), source };
+  return { hash: sha256(content), source, baseHash: prior.baseHash };
 }
 
 export async function applyAddon(
@@ -71,7 +90,7 @@ export async function applyAddon(
       beforeHeading: "## Governance",
     });
     changes.push(await planWrite({ targetDir, path: CONSTITUTION, content: next, source: `addon:${addon.id}`, reason: "injetar princípios do add-on", force: true }));
-    manifest.files[CONSTITUTION] = { hash: sha256(next), source: `addon:${addon.id}` };
+    manifest.files[CONSTITUTION] = injectedEntry(manifest.files[CONSTITUTION], next, addon.id);
     injectedTargets.push(CONSTITUTION);
   }
 
@@ -86,7 +105,7 @@ export async function applyAddon(
     const block = (await renderFrom(dir, frag.file, ctx)).trim();
     const next = upsertBlock(await readFile(abs, "utf-8"), addon.id, block);
     changes.push(await planWrite({ targetDir, path: rel, content: next, source: `addon:${addon.id}`, reason: "injetar fragmento do add-on", force: true }));
-    manifest.files[rel] = { hash: sha256(next), source: `addon:${addon.id}` };
+    manifest.files[rel] = injectedEntry(manifest.files[rel], next, addon.id);
     injectedTargets.push(rel);
   }
 
@@ -142,7 +161,7 @@ export async function removeAddon(
     if (!existsSync(abs)) continue;
     const next = stripBlock(await readFile(abs, "utf-8"), id);
     changes.push(await planWrite({ targetDir, path: rel, content: next, source: "engine", reason: "remover bloco do add-on", force: true }));
-    if (manifest) manifest.files[rel] = { hash: sha256(next), source: "engine" };
+    if (manifest) manifest.files[rel] = restoredEntry(rel, manifest.files[rel], next);
     strippedTargets.push(rel);
   }
 
