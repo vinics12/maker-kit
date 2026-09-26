@@ -1514,7 +1514,7 @@ function blockContent(content, id) {
   return content.slice(start + startMarker(id).length, end).replace(/\r\n/g, "\n").trim();
 }
 function isUnedited(current, entry) {
-  return current.hash === entry.hash || current.hash === entry.baseHash;
+  return current.hash === (entry.baseHash ?? entry.hash);
 }
 function sharedIsReplaceable(shared, entry, addonSource, content, upstream) {
   if (shared.kind === "absent") return true;

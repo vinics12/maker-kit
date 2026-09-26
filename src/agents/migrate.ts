@@ -241,8 +241,12 @@ function blockContent(content: string, id: string): string | undefined {
   return content.slice(start + startMarker(id).length, end).replace(/\r\n/g, "\n").trim();
 }
 
+/**
+ * Mesma regra do update: com base registrada, o hash gravado pode ser de um conteúdo mesclado com
+ * customizações; só a base upstream prova que não há edição local.
+ */
 function isUnedited(current: Inspected, entry: ManifestEntry): boolean {
-  return current.hash === entry.hash || current.hash === entry.baseHash;
+  return current.hash === (entry.baseHash ?? entry.hash);
 }
 
 /**

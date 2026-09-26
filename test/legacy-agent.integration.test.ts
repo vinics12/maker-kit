@@ -199,6 +199,10 @@ describe("migração de agentes legados", () => {
     expect(await readFile(join(target, shared))).toEqual(body);
     expect(await readFile(join(target, adapter))).toEqual(adapterBefore);
     expect((await readAddonState(target, "saas"))!.injectedTargets).toContain(adapter);
+    // O merge do update grava o hash do papel customizado; o update seguinte não pode tratá-lo como intacto.
+    await runUpdate({ target });
+    expect(await readFile(join(target, shared))).toEqual(body);
+    expect(await readFile(join(target, adapter))).toEqual(adapterBefore);
   });
 
   it.each(["state", "markers"])("preserva agentes quando %s é inválido", async (invalid) => {
