@@ -184,8 +184,13 @@ $run-spec "feature bem definida"
 maker doctor    # verifica integridade (manifest sha256): arquivos ausentes/modificados
 maker update             # atualiza e mescla mudanças locais/upstream quando possível
 maker update --dry-run   # mostra o plano completo sem escrever
-maker update --no-merge  # preserva todos os arquivos editados localmente
+maker update --no-merge  # preserva edições locais sem tentar merge
 ```
+
+Ao atualizar um add-on legado, `maker update --dry-run` mostra a migração dos agentes Claude
+para papéis compartilhados. O reparo preserva o corpo dos agentes e a constitution; conteúdo
+divergente no destino é sinalizado para revisão. Veja
+[migração de agentes legados](docs/features/transactional-update.md#migração-dos-agentes-legados).
 
 ---
 

@@ -11,6 +11,7 @@ import { applyEngine } from "../util/engine-scaffold.js";
 import { makerVersion } from "../util/version.js";
 import { createPlan, formatPlan, inspectTarget, planWrite, type PlannedChange } from "../changes/plan.js";
 import { applyChangePlan, assertNoPendingTransactions } from "../changes/transaction.js";
+import { planLegacyAddonAgents } from "../agents/migrate.js";
 
 export interface UpdateOptions { target?: string; dryRun?: boolean; merge?: boolean }
 
@@ -23,11 +24,16 @@ export async function runUpdate(opts: UpdateOptions): Promise<void> {
   const agents = enabledAgents(prior);
   const staging = await mkdtemp(join(tmpdir(), "maker-update-plan-"));
   const changes: PlannedChange[] = [];
+  const messages: string[] = [];
   const next: Manifest = structuredClone(prior);
   next.files = { ...prior.files };
   try {
     const expected = await applyEngine(staging, buildContext(config), agents);
+    const migration = await planLegacyAddonAgents(targetDir, staging, expected, next);
+    changes.push(...migration.changes);
+    messages.push(...migration.messages);
     for (const file of expected.sort((a, b) => a.rel.localeCompare(b.rel))) {
+      if (migration.handled.has(file.rel)) continue;
       const upstream = await readFile(join(staging, file.rel));
       const upstreamHash = sha256(upstream);
       const current = await inspectTarget(targetDir, file.rel);
@@ -43,7 +49,7 @@ export async function runUpdate(opts: UpdateOptions): Promise<void> {
       } else if (current.hash === upstreamHash) {
         changes.push(status("preserve", file.rel, file.entry.source, current, "já está atualizado"));
         next.files[file.rel] = manifestEntry(file.entry, upstreamHash, upstreamHash);
-      } else if (!recorded || current.hash === recorded.hash) {
+      } else if (!recorded || current.hash === (recorded.baseHash ?? recorded.hash)) {
         changes.push(await planWrite({ targetDir, path: file.rel, content: upstream, source: file.entry.source, reason: "nova versão upstream", force: true }));
         next.files[file.rel] = manifestEntry(file.entry, upstreamHash, upstreamHash);
       } else if (opts.merge === false) {
@@ -81,6 +87,17 @@ export async function runUpdate(opts: UpdateOptions): Promise<void> {
   }
   changes.push(await planWrite({ targetDir, path: ".maker/manifest.json", content: JSON.stringify(next, null, 2) + "\n", source: "metadata", reason: "publicar manifest atualizado", force: true }));
   const plan = createPlan(targetDir, changes);
+  for (const change of plan.changes) {
+    if (change.action !== "preserve" || !/^\.(claude|codex)\/agents\//.test(change.path) ||
+        messages.some((message) => message.startsWith(`${change.path} [`))) continue;
+    const current = await inspectTarget(targetDir, change.path);
+    if (current.kind === "file" && !/\.maker\/workflow\/agents\/[a-z0-9-]+\.md/.test(current.content!.toString("utf-8"))) {
+      const role = change.path.split("/").at(-1)!.replace(/\.(md|toml)$/, "");
+      messages.push(`${change.path}: preservado (${change.reason}); integração continuará degradada: ` +
+        `referência ausente a .maker/workflow/agents/${role}.md. Revise o conteúdo local antes de converter o adapter.`);
+    }
+  }
+  for (const message of messages) console.log(pc.yellow(message));
   if (opts.dryRun) {
     console.log(formatPlan(plan));
     if (plan.changes.some((change) => change.action === "conflict")) process.exitCode = 1;

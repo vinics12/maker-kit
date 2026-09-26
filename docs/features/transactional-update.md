@@ -13,5 +13,29 @@ base anterior, o conteúdo local e a nova versão upstream. Mudanças independen
 conflitos preservam o conteúdo local, bloqueiam toda a aplicação e retornam exit code diferente de
 zero. O Maker não grava marcadores de conflito.
 
-Use `maker update --no-merge` para manter a política conservadora anterior. Arquivos binários,
-states legados sem base exata e caminhos controlados por add-ons também são preservados.
+Use `maker update --no-merge` para não mesclar edições locais com mudanças upstream. Arquivos
+binários, bases históricas ausentes e caminhos controlados por add-ons sem migração segura são
+preservados.
+
+## Migração dos agentes legados
+
+Ao atualizar instalações anteriores aos papéis compartilhados, `maker update` migra agentes Claude
+controlados por add-on quando reconhece o frontmatter, um único bloco completo do add-on e seu
+alvo no state. O corpo inteiro, incluindo customizações dentro e fora do bloco, passa para
+`.maker/workflow/agents/<role>.md`; o adapter mantém o frontmatter e referencia esse papel.
+O destino precisa estar ausente, conter o template atual sem edições ou já conter exatamente o
+corpo legado sob a mesma origem de add-on. Isso também repara instalações que já passaram pela 0.4.0.
+
+A migração altera somente os alvos correspondentes em `injectedTargets`, junto com os hashes e
+bases do manifest. Constitution, knobs, versão e data de aplicação do add-on são preservados.
+O corpo legado é conservado integralmente, sem regenerar suas instruções a partir do catálogo.
+O novo caminho permite que Claude e Codex compartilhem as regras e que `maker remove` remova os
+blocos nos destinos corretos. A operação participa da mesma transação do update e aparece no
+`--dry-run`; `--no-merge` continua permitindo essa transferência sem mesclar conteúdos.
+
+Quando o destino diverge ou os metadados/blocos são ambíguos, o adapter é preservado e o update
+avisa, antes da aplicação, que a integração continuará degradada. Agentes legados editados sem
+origem de add-on e sem base histórica exata também são preservados. Revise o corpo legado, o papel
+compartilhado indicado e os alvos do state antes de migrar manualmente; reaplicar o add-on pode
+substituir customizações. `maker doctor` e `maker agent list` distinguem adapter ausente, referência
+ausente e arquivo compartilhado ausente, mostrando o caminho esperado e `maker update --dry-run`.
