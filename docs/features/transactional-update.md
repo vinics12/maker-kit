@@ -13,6 +13,9 @@ base anterior, o conteúdo local e a nova versão upstream. Mudanças independen
 conflitos preservam o conteúdo local, bloqueiam toda a aplicação e retornam exit code diferente de
 zero. O Maker não grava marcadores de conflito.
 
+Um arquivo já mesclado é comparado com sua base upstream, não com o hash gravado após o merge: as
+edições locais incorporadas continuam sendo mescladas nos updates seguintes em vez de sobrescritas.
+
 Use `maker update --no-merge` para não mesclar edições locais com mudanças upstream. Arquivos
 binários, bases históricas ausentes e caminhos controlados por add-ons sem migração segura são
 preservados.
@@ -23,8 +26,14 @@ Ao atualizar instalações anteriores aos papéis compartilhados, `maker update`
 controlados por add-on quando reconhece o frontmatter, um único bloco completo do add-on e seu
 alvo no state. O corpo inteiro, incluindo customizações dentro e fora do bloco, passa para
 `.maker/workflow/agents/<role>.md`; o adapter mantém o frontmatter e referencia esse papel.
-O destino precisa estar ausente, conter o template atual sem edições ou já conter exatamente o
-corpo legado sob a mesma origem de add-on. Isso também repara instalações que já passaram pela 0.4.0.
+O destino precisa estar ausente, conter um template do engine sem edições locais (o atual ou o
+registrado no manifest, mesmo que de uma versão anterior) ou já conter exatamente o corpo legado sob
+a mesma origem de add-on. Isso também repara instalações que já passaram pela 0.4.0.
+
+Após a migração, o papel compartilhado passa a ser controlado pelo add-on, como qualquer alvo de
+injeção: updates seguintes o preservam e não aplicam mudanças upstream do template desse papel.
+Para voltar a recebê-las, use `maker remove <addon>` e `maker add <addon>`, revisando antes as
+customizações do corpo migrado.
 
 A migração altera somente os alvos correspondentes em `injectedTargets`, junto com os hashes e
 bases do manifest. Constitution, knobs, versão e data de aplicação do add-on são preservados.

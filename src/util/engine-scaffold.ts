@@ -6,6 +6,7 @@ import { render, type RenderContext } from "../render/engine.js";
 import { manifestKey, sha256, type ManifestEntry } from "../render/manifest.js";
 import type { AgentProvider } from "../config/schema.js";
 import { applyTree, templatesDir, type AppliedFile } from "./scaffold.js";
+import { adapterInstruction } from "../agents/reference.js";
 
 const HBS_EXT = ".hbs";
 
@@ -102,11 +103,11 @@ async function applyAgents(
     await mkdir(dirname(absOut), { recursive: true });
     const sharedPath = `.maker/workflow/agents/${parsed.name}.md`;
     const content = provider === "claude"
-      ? `---\n${parsed.frontmatter}\n---\n\nRead \`${sharedPath}\` completely before acting and follow it as your role instructions.\n`
+      ? `---\n${parsed.frontmatter}\n---\n\n${adapterInstruction(sharedPath)}`
       : [
           `name = ${JSON.stringify(parsed.name)}`,
           `description = ${JSON.stringify(adaptCodexText(parsed.description))}`,
-          `developer_instructions = ${JSON.stringify(`Read ${sharedPath} completely before acting and follow it as your role instructions.\n`)}`,
+          `developer_instructions = ${JSON.stringify(adapterInstruction(sharedPath).replace(/`/g, ""))}`,
           "",
         ].join("\n");
     await writeFile(absOut, content, "utf-8");

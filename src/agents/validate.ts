@@ -5,7 +5,8 @@ import fg from "fast-glob";
 import { parse as parseToml } from "smol-toml";
 import { z } from "zod";
 import type { AgentProvider } from "../config/schema.js";
-import { readManifest } from "../render/manifest.js";
+import { readManifest, type Manifest } from "../render/manifest.js";
+import { sharedRoleReference } from "./reference.js";
 
 export interface AgentValidation {
   provider: AgentProvider;
@@ -33,7 +34,13 @@ export async function validateAgentIntegration(
     ? await fg(provider === "claude" ? "*.md" : "*.toml", { cwd: agentRoot, onlyFiles: true })
     : [];
   const issues: string[] = [];
-  const manifest = await readManifest(targetDir);
+  let manifest: Manifest | null = null;
+  try {
+    manifest = await readManifest(targetDir);
+  } catch (error) {
+    const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
+    issues.push(`.maker/manifest.json ilegível (${message}); adapters ausentes não puderam ser verificados`);
+  }
   const adapterRoot = relativeRoot(provider, "agents");
   for (const path of Object.keys(manifest?.files ?? {}).sort()) {
     if (path.startsWith(`${adapterRoot}/`) && !existsSync(join(targetDir, path))) {
@@ -71,7 +78,7 @@ export async function validateAgentIntegration(
       issues.push(`.claude/agents/${rel}: frontmatter inválido`);
     }
 
-    const shared = content.match(/\.maker\/workflow\/agents\/[a-z0-9-]+\.md/)?.[0];
+    const shared = sharedRoleReference(content);
     const adapterPath = `${adapterRoot}/${rel}`;
     if (!shared) {
       const expected = `.maker/workflow/agents/${rel.replace(/\.(md|toml)$/, "")}.md`;

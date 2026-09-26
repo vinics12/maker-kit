@@ -119,6 +119,37 @@ describe("migração de agentes legados", () => {
     expect(process.exitCode).not.toBe(1);
   });
 
+  it("migra quando o papel compartilhado intacto é de um template anterior", async () => {
+    const target = await legacy("0.4.0");
+    const shared = ".maker/workflow/agents/architect.md";
+    const previous = (await readFile(join(target, shared), "utf-8")) + "\nLinha de um template anterior.\n";
+    await writeFile(join(target, shared), previous);
+    const manifest = (await readManifest(target))!;
+    manifest.files[shared] = { ...manifest.files[shared]!, hash: sha256(previous), baseHash: sha256(previous) };
+    await writeManifest(target, manifest);
+    const body = (await readFile(join(target, ".claude/agents/architect.md"), "utf-8")).replace(/^---\n[\s\S]*?\n---\n/, "");
+    await runUpdate({ target });
+    expect(await readFile(join(target, shared), "utf-8")).toBe(body);
+    expect((await validateAgentIntegration(target, "claude")).issues).toEqual([]);
+  });
+
+  it("migra agente legado que apenas menciona o caminho do papel no corpo", async () => {
+    const target = await legacy("0.4.0");
+    const adapter = ".claude/agents/architect.md";
+    await appendFile(join(target, adapter), "Consulte também .maker/workflow/agents/architect.md.\n");
+    await runUpdate({ target });
+    expect(await readFile(join(target, adapter), "utf-8")).toContain("Read `.maker/workflow/agents/architect.md` completely");
+    expect(await readFile(join(target, ".maker/workflow/agents/architect.md"), "utf-8")).toContain("Consulte também");
+  });
+
+  it("reporta manifest ilegível sem interromper a validação", async () => {
+    const target = await legacy("0.4.0");
+    await writeFile(join(target, ".maker/manifest.json"), "{broken");
+    const issues = (await validateAgentIntegration(target, "claude")).issues.join("\n");
+    expect(issues).toContain(".maker/manifest.json ilegível");
+    expect(issues).toContain("referência ao papel compartilhado ausente");
+  });
+
   it("dry-run descreve migração sem alterar arquivos ou timestamps", async () => {
     const target = await legacy("0.4.0");
     const before = await snapshot(target);

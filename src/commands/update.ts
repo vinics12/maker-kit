@@ -12,6 +12,7 @@ import { makerVersion } from "../util/version.js";
 import { createPlan, formatPlan, inspectTarget, planWrite, type PlannedChange } from "../changes/plan.js";
 import { applyChangePlan, assertNoPendingTransactions } from "../changes/transaction.js";
 import { planLegacyAddonAgents } from "../agents/migrate.js";
+import { sharedRoleReference } from "../agents/reference.js";
 
 export interface UpdateOptions { target?: string; dryRun?: boolean; merge?: boolean }
 
@@ -91,7 +92,7 @@ export async function runUpdate(opts: UpdateOptions): Promise<void> {
     if (change.action !== "preserve" || !/^\.(claude|codex)\/agents\//.test(change.path) ||
         messages.some((message) => message.startsWith(`${change.path} [`))) continue;
     const current = await inspectTarget(targetDir, change.path);
-    if (current.kind === "file" && !/\.maker\/workflow\/agents\/[a-z0-9-]+\.md/.test(current.content!.toString("utf-8"))) {
+    if (current.kind === "file" && !sharedRoleReference(current.content!.toString("utf-8"))) {
       const role = change.path.split("/").at(-1)!.replace(/\.(md|toml)$/, "");
       messages.push(`${change.path}: preservado (${change.reason}); integração continuará degradada: ` +
         `referência ausente a .maker/workflow/agents/${role}.md. Revise o conteúdo local antes de converter o adapter.`);
