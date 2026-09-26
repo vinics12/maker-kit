@@ -13,6 +13,8 @@ export interface AgentValidation {
   skills: number;
   agents: number;
   issues: string[];
+  /** Adapters do manifest ausentes no disco, já descritos em `issues`. */
+  missingAdapters: string[];
 }
 
 const codexAgentSchema = z.object({
@@ -34,6 +36,7 @@ export async function validateAgentIntegration(
     ? await fg(provider === "claude" ? "*.md" : "*.toml", { cwd: agentRoot, onlyFiles: true })
     : [];
   const issues: string[] = [];
+  const missingAdapters: string[] = [];
   let manifest: Manifest | null = null;
   try {
     manifest = await readManifest(targetDir);
@@ -44,6 +47,7 @@ export async function validateAgentIntegration(
   const adapterRoot = relativeRoot(provider, "agents");
   for (const path of Object.keys(manifest?.files ?? {}).sort()) {
     if (path.startsWith(`${adapterRoot}/`) && !existsSync(join(targetDir, path))) {
+      missingAdapters.push(path);
       issues.push(`${path}: arquivo de adapter ausente; execute maker update --dry-run para revisar a restauração`);
     }
   }
@@ -95,7 +99,7 @@ export async function validateAgentIntegration(
     issues.push("CLAUDE.md ausente");
   }
 
-  return { provider, skills: skillFiles.length, agents: agentFiles.length, issues };
+  return { provider, skills: skillFiles.length, agents: agentFiles.length, issues, missingAdapters };
 }
 
 function relativeRoot(provider: AgentProvider, kind: "skills" | "agents"): string {

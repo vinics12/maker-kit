@@ -188,8 +188,9 @@ maker update --no-merge  # preserva edições locais sem tentar merge
 ```
 
 Ao atualizar um add-on legado, `maker update --dry-run` mostra a migração dos agentes Claude
-para papéis compartilhados. O reparo preserva o corpo dos agentes e a constitution; conteúdo
-divergente no destino é sinalizado para revisão. Veja
+para papéis compartilhados. Agentes sem customização recebem o template atual com o bloco do
+add-on; corpos personalizados são preservados, com aviso, e conteúdo divergente no destino é
+sinalizado para revisão. Com `--no-merge` a migração só é listada. Veja
 [migração de agentes legados](docs/features/transactional-update.md#migração-dos-agentes-legados).
 
 ---

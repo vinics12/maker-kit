@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { appendFile, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { appendFile, cp, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runInit } from "../src/commands/init.js";
@@ -10,7 +10,7 @@ import { validateAgentIntegration } from "../src/agents/validate.js";
 import { planLegacyAddonAgents } from "../src/agents/migrate.js";
 import { buildContext, render } from "../src/render/engine.js";
 import { readManifest, sha256, writeManifest, verifyManifest } from "../src/render/manifest.js";
-import { applyEngine } from "../src/util/engine-scaffold.js";
+import { applyEngine, sharedAgentText } from "../src/util/engine-scaffold.js";
 import { applyAddon, removeAddon } from "../src/addons/apply.js";
 import { loadAddon } from "../src/addons/loader.js";
 import { upsertBlock } from "../src/addons/inject.js";
@@ -19,6 +19,8 @@ import { applyChangePlan } from "../src/changes/transaction.js";
 import { createPlan } from "../src/changes/plan.js";
 
 const config = join(__dirname, "../fixtures/example.config.json");
+const project020 = join(__dirname, "../fixtures/legacy-0.2.0/project");
+const knobs = { tenantColumn: "org_id", brandVarPrefix: "--tema-", roles: "owner,staff" };
 const roles = ["architect", "code-reviewer"];
 const constitution = ".specify/memory/constitution.md";
 const statePath = ".maker/addons/saas.json";
@@ -34,10 +36,10 @@ afterEach(async () => {
   await Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
 
-async function legacy(version: "0.2.0" | "0.4.0") {
+async function legacy(version: "0.2.0" | "0.4.0", customized = true) {
   const target = await temporary();
   await runInit({ target, config, yes: true });
-  await applyAddon(target, await loadAddon("saas"), { tenantColumn: "org_id", brandVarPrefix: "--tema-", roles: "owner,staff" });
+  await applyAddon(target, await loadAddon("saas"), knobs);
   const manifest = (await readManifest(target))!;
   const state = (await readAddonState(target, "saas"))!;
   const staging = await temporary();
@@ -45,11 +47,11 @@ async function legacy(version: "0.2.0" | "0.4.0") {
   for (const role of roles) {
     const adapterPath = `.claude/agents/${role}.md`;
     const sharedPath = `.maker/workflow/agents/${role}.md`;
-    const template = await readFile(join(__dirname, `../fixtures/legacy-0.2.0/${role}.md.hbs`), "utf-8");
+    const template = await readFile(join(__dirname, `../templates/legacy/0.2.0/agents/${role}.md.hbs`), "utf-8");
     const agent = upsertBlock(render(template, buildContext(manifest.config!)).replace("model: opus", "model: modelo-local"), "saas", `regra SaaS autoral ${role}`);
     await writeFile(join(target, adapterPath), agent);
     manifest.files[adapterPath] = { source: "addon:saas", hash: sha256(agent) };
-    await appendFile(join(target, adapterPath), "\nCustomização fora do bloco.\n");
+    if (customized) await appendFile(join(target, adapterPath), "\nCustomização fora do bloco.\n");
     const stock = await readFile(join(staging, sharedPath));
     await writeFile(join(target, sharedPath), stock);
     manifest.files[sharedPath] = { source: "engine:common", hash: sha256(stock), baseHash: sha256(stock) };
@@ -70,6 +72,26 @@ async function legacy(version: "0.2.0" | "0.4.0") {
     createdFiles: state.createdFiles.map((file) => ({ ...file, customNote: "preservar" })),
   }));
   return target;
+}
+
+/** Instalação real da 0.2.0 (snapshot em fixtures/legacy-0.2.0/project). */
+async function project(withConfig = true) {
+  const target = await temporary();
+  await cp(project020, target, { recursive: true });
+  if (!withConfig) await rm(join(target, "maker.config.json"));
+  return target;
+}
+
+/** Instalação nova da versão atual com o mesmo add-on, para comparação byte a byte. */
+async function fresh() {
+  const target = await temporary();
+  await runInit({ target, config, yes: true });
+  await applyAddon(target, await loadAddon("saas"), knobs);
+  return target;
+}
+
+function output(log: { mock: { calls: unknown[][] } }): string {
+  return log.mock.calls.flat().join("\n");
 }
 
 async function snapshot(root: string, prefix = ""): Promise<Record<string, string>> {
@@ -99,7 +121,7 @@ describe("migração de agentes legados", () => {
     expect({ ...afterState, injectedTargets: [] }).toEqual({ ...beforeState, injectedTargets: [] });
     for (const role of roles) {
       expect(await readFile(join(target, `.claude/agents/${role}.md`), "utf-8")).toContain("model: modelo-local");
-      expect(await readFile(join(target, `.maker/workflow/agents/${role}.md`), "utf-8")).toBe(bodies.get(role));
+      expect(await readFile(join(target, `.maker/workflow/agents/${role}.md`), "utf-8")).toBe(sharedAgentText(bodies.get(role)!));
       expect(afterState.injectedTargets).toContain(`.maker/workflow/agents/${role}.md`);
       expect(afterState.injectedTargets).not.toContain(`.claude/agents/${role}.md`);
     }
@@ -129,7 +151,7 @@ describe("migração de agentes legados", () => {
     await writeManifest(target, manifest);
     const body = (await readFile(join(target, ".claude/agents/architect.md"), "utf-8")).replace(/^---\n[\s\S]*?\n---\n/, "");
     await runUpdate({ target });
-    expect(await readFile(join(target, shared), "utf-8")).toBe(body);
+    expect(await readFile(join(target, shared), "utf-8")).toBe(sharedAgentText(body));
     expect((await validateAgentIntegration(target, "claude")).issues).toEqual([]);
   });
 
@@ -156,7 +178,7 @@ describe("migração de agentes legados", () => {
     const metadata = await stat(join(target, statePath));
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     await runUpdate({ target, dryRun: true });
-    expect(log.mock.calls.flat().join("\n")).toContain("migrar conteúdo preservado");
+    expect(output(log)).toContain("migrar   .claude/agents/architect.md → .maker/workflow/agents/architect.md");
     expect(await snapshot(target)).toEqual(before);
     expect((await stat(join(target, statePath))).mtimeMs).toBe(metadata.mtimeMs);
   });
@@ -171,8 +193,9 @@ describe("migração de agentes legados", () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     await runUpdate({ target });
     const output = log.mock.calls.flat().join("\n");
-    expect(output).toContain("integração continuará degradada");
+    expect(output).toContain("degradado .claude/agents/architect.md: papel compartilhado");
     expect(output).toContain("já possui conteúdo local");
+    expect(output).toContain("1 agente(s) migrado(s), 1 permanece(m) degradado(s).");
     expect(await readFile(join(target, shared))).toEqual(body);
     expect(await readFile(join(target, adapter))).toEqual(adapterBefore);
     expect((await readAddonState(target, "saas"))!.injectedTargets).toContain(adapter);
@@ -212,7 +235,7 @@ describe("migração de agentes legados", () => {
     const manifest = (await readManifest(target))!;
     const staging = await temporary();
     const expected = await applyEngine(staging, buildContext(manifest.config!), ["claude"]);
-    const migration = await planLegacyAddonAgents(target, staging, expected, manifest);
+    const migration = await planLegacyAddonAgents(target, staging, expected, manifest, { ctx: buildContext(manifest.config!) });
     const before = await snapshot(target);
     const plan = createPlan(target, migration.changes);
     const actions = plan.changes.filter((change) => ["create", "update", "remove"].includes(change.action));
@@ -232,8 +255,8 @@ describe("migração de agentes legados", () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     await runUpdate({ target });
     const output = log.mock.calls.flat().join("\n");
-    expect(output).toContain("e2e-runner.md: preservado");
-    expect(output).toContain("referência ausente a .maker/workflow/agents/e2e-runner.md");
+    expect(output).toContain("degradado .claude/agents/e2e-runner.md");
+    expect(output).toContain("sem referência ao papel compartilhado");
     expect(await readFile(join(target, path), "utf-8")).toBe(legacyContent);
   });
 
@@ -242,10 +265,211 @@ describe("migração de agentes legados", () => {
     const manifest = (await readManifest(target))!;
     const staging = await temporary();
     const expected = await applyEngine(staging, buildContext(manifest.config!), ["claude"]);
-    const migration = await planLegacyAddonAgents(target, staging, expected, manifest);
+    const migration = await planLegacyAddonAgents(target, staging, expected, manifest, { ctx: buildContext(manifest.config!) });
     await appendFile(join(target, statePath), "\n");
     const before = await snapshot(target);
     await expect(applyChangePlan(createPlan(target, migration.changes))).rejects.toThrow("mudou depois do planejamento");
+    expect(await snapshot(target)).toEqual(before);
+  });
+});
+
+describe("migração de agentes legados: template, remove e reaplicação", () => {
+  it.each(["0.2.0", "0.4.0"] as const)("papel sem customização (%s) fica igual ao de uma instalação nova com o add-on", async (version) => {
+    const target = await legacy(version, false);
+    const reference = await fresh();
+    await runUpdate({ target });
+    for (const role of roles) {
+      const path = `.maker/workflow/agents/${role}.md`;
+      // O helper injeta um bloco sintético; fora dele o papel tem que ser idêntico ao da instalação nova.
+      const expected = upsertBlock(await readFile(join(reference, path), "utf-8"), "saas", `regra SaaS autoral ${role}`);
+      expect(await readFile(join(target, path), "utf-8")).toBe(expected);
+      expect(await readFile(join(target, `.claude/agents/${role}.md`), "utf-8"))
+        .toBe((await readFile(join(reference, `.claude/agents/${role}.md`), "utf-8")).replace("model: opus", "model: modelo-local"));
+    }
+  });
+
+  it("aplica o template atual quando ele difere do legado e só congela o corpo personalizado, com aviso", async () => {
+    const target = await legacy("0.4.0", false);
+    await appendFile(join(target, ".claude/agents/code-reviewer.md"), "Regra local do revisor.\n");
+    const manifest = (await readManifest(target))!;
+    const staging = await temporary();
+    const expected = await applyEngine(staging, buildContext(manifest.config!), ["claude"]);
+    for (const role of roles) await appendFile(join(staging, `.maker/workflow/agents/${role}.md`), "\nNovidade do template.\n");
+    const migration = await planLegacyAddonAgents(target, staging, expected, manifest, { ctx: buildContext(manifest.config!) });
+    await applyChangePlan(createPlan(target, migration.changes));
+    const architect = await readFile(join(target, ".maker/workflow/agents/architect.md"), "utf-8");
+    expect(architect).toContain("Novidade do template.");
+    expect(architect).toContain("<!-- maker:addon:saas:start -->");
+    const reviewer = await readFile(join(target, ".maker/workflow/agents/code-reviewer.md"), "utf-8");
+    expect(reviewer).not.toContain("Novidade do template.");
+    expect(reviewer).toContain("Regra local do revisor.");
+    const byPath = new Map(migration.reports.map((report) => [report.path, report]));
+    expect(byPath.get(".claude/agents/architect.md")!.reason).toContain("template atual");
+    expect(byPath.get(".claude/agents/code-reviewer.md")!.reason).toContain("sob controle do add-on, sem updates do template");
+  });
+
+  it("maker remove seguido de update preserva customizações migradas e da constitution", async () => {
+    const target = await legacy("0.4.0");
+    await appendFile(join(target, constitution), "\nPrincípio autoral\n");
+    await runUpdate({ target });
+    await removeAddon(target, "saas");
+    const manifest = (await readManifest(target))!;
+    expect(manifest.files[".maker/workflow/agents/architect.md"]).toMatchObject({ source: "engine:common", baseHash: expect.any(String) });
+    await runUpdate({ target });
+    for (const role of roles) {
+      const body = await readFile(join(target, `.maker/workflow/agents/${role}.md`), "utf-8");
+      expect(body).toContain("Customização fora do bloco.");
+      expect(body).not.toContain("<!-- maker:addon:saas:start -->");
+    }
+    expect(await readFile(join(target, constitution), "utf-8")).toContain("Princípio autoral");
+    await runUpdate({ target });
+    expect(await readFile(join(target, ".maker/workflow/agents/architect.md"), "utf-8")).toContain("Customização fora do bloco.");
+  });
+
+  it("repara adapter de add-on reaplicado depois de um update sem migração", async () => {
+    const target = await project();
+    await runUpdate({ target, merge: false });
+    expect((await validateAgentIntegration(target, "claude")).issues.join("\n")).toContain("referência ao papel compartilhado ausente");
+    await applyAddon(target, await loadAddon("saas"), knobs);
+    const state = await readFile(join(target, statePath));
+    const shared = await snapshot(join(target, ".maker/workflow/agents"));
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runUpdate({ target });
+    expect(output(log)).toContain("(só o adapter)");
+    expect(output(log)).toContain("2 agente(s) migrado(s), 0 permanece(m) degradado(s).");
+    expect(await readFile(join(target, statePath))).toEqual(state);
+    expect(await snapshot(join(target, ".maker/workflow/agents"))).toEqual(shared);
+    const manifest = (await readManifest(target))!;
+    for (const role of roles) {
+      expect(manifest.files[`.claude/agents/${role}.md`]!.source).toBe("engine:claude");
+      expect(await readFile(join(target, `.claude/agents/${role}.md`), "utf-8")).toContain(`Read \`.maker/workflow/agents/${role}.md\``);
+    }
+    expect((await validateAgentIntegration(target, "claude")).issues).toEqual([]);
+  });
+
+  it("preserva e orienta quando o agente de add-on reaplicado tem customização", async () => {
+    const target = await project();
+    await runUpdate({ target, merge: false });
+    await applyAddon(target, await loadAddon("saas"), knobs);
+    const adapter = ".claude/agents/architect.md";
+    await appendFile(join(target, adapter), "\nRegra local legada.\n");
+    const before = await readFile(join(target, adapter));
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runUpdate({ target });
+    expect(output(log)).toContain("degradado .claude/agents/architect.md: o corpo legado tem customizações ausentes de .maker/workflow/agents/architect.md");
+    expect(output(log)).toContain("mova as customizações de .claude/agents/architect.md para .maker/workflow/agents/architect.md");
+    expect(await readFile(join(target, adapter))).toEqual(before);
+    const legacyBody = before.toString("utf-8").replace("\nRegra local legada.\n", "");
+    await writeFile(join(target, adapter), legacyBody);
+    await runUpdate({ target });
+    expect((await validateAgentIntegration(target, "claude")).issues).toEqual([]);
+  });
+
+  it("preserva agente cujo frontmatter restringe tools sem Read", async () => {
+    const target = await legacy("0.4.0");
+    const adapter = ".claude/agents/architect.md";
+    const restricted = (await readFile(join(target, adapter), "utf-8")).replace(/^tools: .*$/m, 'tools: ["Write", "Bash"]');
+    await writeFile(join(target, adapter), restricted);
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runUpdate({ target });
+    expect(output(log)).toContain("restringe tools sem Read");
+    expect(output(log)).toContain("inclua Read em tools: de .claude/agents/architect.md");
+    expect(await readFile(join(target, adapter), "utf-8")).toBe(restricted);
+    expect(await readFile(join(target, ".claude/agents/code-reviewer.md"), "utf-8")).toContain("Read `.maker/workflow/agents/code-reviewer.md`");
+  });
+
+  it("--no-merge apenas lista a migração pendente", async () => {
+    const target = await legacy("0.4.0");
+    const agents = await snapshot(join(target, ".claude/agents"));
+    const state = await readFile(join(target, statePath));
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runUpdate({ target, merge: false });
+    expect(output(log)).toContain("pendente .claude/agents/architect.md → .maker/workflow/agents/architect.md");
+    expect(output(log)).toContain("execute maker update sem --no-merge");
+    expect(await snapshot(join(target, ".claude/agents"))).toEqual(agents);
+    expect(await readFile(join(target, statePath))).toEqual(state);
+  });
+
+  it("não anuncia migração quando o plano tem conflito", async () => {
+    const target = await legacy("0.4.0");
+    await rm(join(target, "CLAUDE.md"));
+    await mkdir(join(target, "CLAUDE.md"));
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    await expect(runUpdate({ target })).rejects.toThrow("nenhuma alteração foi feita");
+    expect(output(log)).not.toContain(".claude/agents/architect.md");
+    expect(await readFile(join(target, ".claude/agents/architect.md"), "utf-8")).not.toContain("Read `.maker");
+  });
+
+  it("doctor reporta uma única vez o adapter ausente", async () => {
+    const target = await legacy("0.4.0");
+    await runUpdate({ target });
+    await rm(join(target, ".claude/agents/dev.md"));
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runDoctor({ target });
+    expect(output(log).match(/\.claude\/agents\/dev\.md/g)).toHaveLength(1);
+    expect(output(log)).toContain("1 ausente(s)");
+  });
+});
+
+describe("instalação real 0.2.0", () => {
+  it("migra os agentes do snapshot 0.2.0 como uma instalação nova", async () => {
+    const target = await project();
+    const reference = await fresh();
+    await runUpdate({ target });
+    for (const role of roles) {
+      for (const path of [`.maker/workflow/agents/${role}.md`, `.claude/agents/${role}.md`]) {
+        expect(await readFile(join(target, path), "utf-8")).toBe(await readFile(join(reference, path), "utf-8"));
+      }
+    }
+    expect(await readFile(join(target, ".claude/skills/run-spec/SKILL.md"), "utf-8")).toContain("just dev");
+    expect((await validateAgentIntegration(target, "claude")).issues).toEqual([]);
+    const state = (await readAddonState(target, "saas"))!;
+    expect(state.injectedTargets).toEqual([constitution, ".maker/workflow/agents/code-reviewer.md", ".maker/workflow/agents/architect.md"]);
+  });
+
+  it("maker remove não expõe a constitution 0.2.0 sem base à sobrescrita do update", async () => {
+    const target = await project();
+    await appendFile(join(target, constitution), "\nPrincípio autoral\n");
+    await runUpdate({ target });
+    await removeAddon(target, "saas");
+    await runUpdate({ target });
+    const content = await readFile(join(target, constitution), "utf-8");
+    expect(content).toContain("Princípio autoral");
+    expect(content).not.toContain("<!-- maker:addon:saas:start -->");
+  });
+
+  it("sem config recuperável preserva arquivos dependentes dela e avisa", async () => {
+    const target = await project(false);
+    const skill = ".claude/skills/run-spec/SKILL.md";
+    const before = await readFile(join(target, skill));
+    expect(before.toString("utf-8")).toContain("just dev");
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runUpdate({ target });
+    expect(await readFile(join(target, skill))).toEqual(before);
+    expect(output(log)).toContain("Config do projeto não recuperada");
+    expect(output(log)).toContain(`preservado(s): .claude/agents/dev.md, ${skill}`);
+    expect(await readFile(join(target, ".claude/agents/dev.md"), "utf-8")).toContain("just verify");
+    expect(output(log)).toContain("crie maker.config.json");
+    // O revisor legado depende de comandos desconhecidos: é preservado integralmente, com aviso.
+    expect(await readFile(join(target, ".maker/workflow/agents/code-reviewer.md"), "utf-8")).toContain("just verify");
+    expect(output(log)).toContain("config não recuperada); copiado como está; o papel fica sob controle do add-on");
+    await cp(join(project020, "maker.config.json"), join(target, "maker.config.json"));
+    await runUpdate({ target });
+    expect(await readFile(join(target, skill), "utf-8")).toBe(await readFile(join(await fresh(), skill), "utf-8"));
+    expect((await readManifest(target))!.files[skill]).toMatchObject({ hash: sha256(before), baseHash: sha256(before) });
+    expect(await readFile(join(target, ".maker/workflow/agents/dev.md"), "utf-8")).toContain("just verify");
+    expect((await validateAgentIntegration(target, "claude")).issues).toEqual([]);
+  });
+
+  it.each([false, true])("segundo update seguido não altera nada (add-on: %s)", async (fromLegacy) => {
+    const target = fromLegacy ? await project() : await fresh();
+    await runUpdate({ target });
+    const before = await snapshot(target);
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runUpdate({ target, dryRun: true });
+    const effective = output(log).split("\n").filter((line) => /^(create|update|remove|merge)\s/.test(line));
+    expect(effective).toEqual([]);
+    await runUpdate({ target });
     expect(await snapshot(target)).toEqual(before);
   });
 });

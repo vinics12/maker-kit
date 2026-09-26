@@ -383,8 +383,7 @@ async function applySharedAgents(targetDir, ctx) {
     const parsed = parseFrontmatter(rendered);
     const absOut = join5(targetDir, ".maker/workflow/agents", `${parsed.name}.md`);
     await mkdir3(dirname3(absOut), { recursive: true });
-    await writeFile3(absOut, `${adaptSharedAgentText(parsed.body.trim())}
-`, "utf-8");
+    await writeFile3(absOut, sharedAgentText(parsed.body), "utf-8");
     applied.push(await appliedEntry(targetDir, absOut, "engine:common"));
   }
   return applied;
@@ -417,6 +416,15 @@ function adaptCodexText(input) {
     /\/(run-spec|run-brainstorm|speckit-[a-z0-9-]+|fix-on-validation)\b/g,
     (_match, name) => `$${name}`
   ).replace(/Generated with \[Claude Code\]\([^)]*\)/g, "Generated with maker on Codex").replace(/CLAUDE\.md\/Auto Memory/g, "AGENTS.md/mem\xF3ria do projeto").replace(/Claude Preview/g, "automa\xE7\xE3o de browser dispon\xEDvel").replace(/Chrome MCP/g, "automa\xE7\xE3o de browser dispon\xEDvel").replace(/Claude Code/g, "Codex").replace(/\(Skill tool\)/g, "(skill dispon\xEDvel)").replace(/subagent_type:/g, "agent:");
+}
+function sharedAgentText(body) {
+  return `${adaptSharedAgentText(body.trim())}
+`;
+}
+async function legacySharedAgent(ctx, role) {
+  const path = templatesDir(`legacy/0.2.0/agents/${role}.md.hbs`);
+  if (!existsSync4(path)) return void 0;
+  return sharedAgentText(parseFrontmatter(render(await readFile4(path, "utf-8"), ctx)).body);
 }
 function adaptSharedAgentText(input) {
   return input.replace(/Claude Preview/g, "automa\xE7\xE3o de browser dispon\xEDvel").replace(/Chrome MCP/g, "automa\xE7\xE3o de browser dispon\xEDvel").replace(/mcp__Claude_Preview__[a-z0-9_]+/gi, "uma ferramenta de browser dispon\xEDvel").replace(/mcp__claude-in-chrome__[a-z0-9_]+/gi, "uma ferramenta de browser dispon\xEDvel").replace(/\.claude\/launch\.json/g, "a configura\xE7\xE3o de execu\xE7\xE3o do agente").replace(/Claude Code/g, "a CLI ag\xEAntica");
@@ -902,6 +910,7 @@ async function validateAgentIntegration(targetDir, provider) {
   const skillFiles = existsSync5(skillRoot) ? await fg3("**/SKILL.md", { cwd: skillRoot, onlyFiles: true }) : [];
   const agentFiles = existsSync5(agentRoot) ? await fg3(provider === "claude" ? "*.md" : "*.toml", { cwd: agentRoot, onlyFiles: true }) : [];
   const issues = [];
+  const missingAdapters = [];
   let manifest = null;
   try {
     manifest = await readManifest(targetDir);
@@ -912,6 +921,7 @@ async function validateAgentIntegration(targetDir, provider) {
   const adapterRoot = relativeRoot(provider, "agents");
   for (const path of Object.keys(manifest?.files ?? {}).sort()) {
     if (path.startsWith(`${adapterRoot}/`) && !existsSync5(join9(targetDir, path))) {
+      missingAdapters.push(path);
       issues.push(`${path}: arquivo de adapter ausente; execute maker update --dry-run para revisar a restaura\xE7\xE3o`);
     }
   }
@@ -955,7 +965,7 @@ async function validateAgentIntegration(targetDir, provider) {
   if (provider === "claude" && !existsSync5(join9(targetDir, "CLAUDE.md"))) {
     issues.push("CLAUDE.md ausente");
   }
-  return { provider, skills: skillFiles.length, agents: agentFiles.length, issues };
+  return { provider, skills: skillFiles.length, agents: agentFiles.length, issues, missingAdapters };
 }
 function relativeRoot(provider, kind) {
   if (provider === "claude") return kind === "skills" ? ".claude/skills" : ".claude/agents";
@@ -1248,7 +1258,8 @@ async function runDoctor(opts) {
     console.log(pc2.green("\u2713 Install \xEDntegro."));
     return;
   }
-  for (const m of result.missing) console.log(pc2.red(`  ausente:    ${m}`));
+  const reported = new Set(integrations.flatMap((integration) => integration.missingAdapters));
+  for (const m of result.missing) if (!reported.has(m)) console.log(pc2.red(`  ausente:    ${m}`));
   for (const m of result.modified) console.log(pc2.yellow(`  modificado: ${m}`));
   console.log(
     pc2.dim(`
@@ -1268,10 +1279,11 @@ import { mergeDiff3 } from "node-diff3";
 // src/agents/migrate.ts
 import { readFile as readFile12 } from "fs/promises";
 import { join as join13 } from "path";
-async function planLegacyAddonAgents(targetDir, staging, expected, manifest) {
+var MANUAL_ACTION = "mova as customiza\xE7\xF5es do corpo legado para o papel compartilhado, remova-as do agente legado e execute maker update --dry-run; n\xE3o reaplique o add-on sobre conte\xFAdo personalizado";
+async function planLegacyAddonAgents(targetDir, staging, expected, manifest, options) {
   const changes = [];
   const handled = /* @__PURE__ */ new Set();
-  const messages = [];
+  const reports = [];
   const states = /* @__PURE__ */ new Map();
   const outputs = new Set(expected.map((file) => file.rel));
   for (const file of expected) {
@@ -1282,80 +1294,131 @@ async function planLegacyAddonAgents(targetDir, staging, expected, manifest) {
     if (current.kind !== "file" || sharedRoleReference(current.content.toString("utf-8"))) continue;
     const sharedPath = `.maker/workflow/agents/${role}.md`;
     const id = entry.source.slice("addon:".length);
-    const upstream = outputs.has(sharedPath) ? await readFile12(join13(staging, sharedPath)) : void 0;
-    const agent2 = upstream ? parseLegacyAgent(current.content, role) : void 0;
-    let loaded;
-    let reason;
-    if (!agent2) {
-      reason = "formato do agente legado n\xE3o reconhecido";
-    } else {
-      const result = await loadState(targetDir, id, states);
-      if (typeof result === "string") reason = result;
-      else if (!confirmsInjectionTarget(result.state, id, file.rel)) reason = "state do add-on n\xE3o confirma o alvo de inje\xE7\xE3o legado";
-      else if (!hasSingleAddonBlock(agent2.body, id)) reason = "blocos de add-on incompletos, duplicados ou de m\xFAltiplas origens";
-      else loaded = result;
-    }
-    const shared = await inspectTarget(targetDir, sharedPath);
-    if (!reason && !sharedIsReplaceable(shared, manifest.files[sharedPath], entry.source, agent2.body, upstream)) {
-      reason = `papel compartilhado ${sharedPath} j\xE1 possui conte\xFAdo local ou n\xE3o gerenciado`;
-    }
-    if (reason || !agent2 || !loaded || !upstream) {
-      reason ??= "migra\xE7\xE3o n\xE3o confirmada";
-      messages.push(`${file.rel} [${entry.source}]: preservado; integra\xE7\xE3o continuar\xE1 degradada: ${reason}. Revise a migra\xE7\xE3o do corpo e dos blocos para ${sharedPath} e os injectedTargets do state; n\xE3o reaplique o add-on sobre conte\xFAdo personalizado.`);
+    const report = (status2, reason2, action) => reports.push({ path: file.rel, sharedPath, status: status2, reason: reason2, action });
+    const preserve = (reason2, action = MANUAL_ACTION) => {
+      report("degraded", reason2, action);
       handled.add(file.rel);
       changes.push({
         path: file.rel,
         action: "preserve",
         source: entry.source,
-        reason,
+        reason: reason2,
+        expectedKind: current.kind,
+        expectedHash: current.hash
+      });
+    };
+    const upstream = outputs.has(sharedPath) ? await readFile12(join13(staging, sharedPath)) : void 0;
+    const agent2 = upstream ? parseLegacyAgent(current.content, role) : void 0;
+    if (!agent2 || !upstream) {
+      preserve("formato do agente legado n\xE3o reconhecido");
+      continue;
+    }
+    const loaded = await loadState(targetDir, id, states);
+    if (typeof loaded === "string") {
+      preserve(loaded);
+      continue;
+    }
+    if (!hasSingleAddonBlock(agent2.body, id)) {
+      preserve("blocos de add-on incompletos, duplicados ou de m\xFAltiplas origens");
+      continue;
+    }
+    if (!allowsRead(agent2.frontmatter)) {
+      preserve(
+        "o frontmatter restringe tools sem Read; o adapter n\xE3o conseguiria ler o papel compartilhado",
+        `inclua Read em tools: de ${file.rel} e execute maker update --dry-run`
+      );
+      continue;
+    }
+    const shared = await inspectTarget(targetDir, sharedPath);
+    const sharedEntry = manifest.files[sharedPath];
+    const legacyTemplate = await legacySharedAgent(options.ctx, role);
+    const block = blockContent(agent2.body, id);
+    const templates = [upstream.toString("utf-8"), legacyTemplate];
+    if (shared.kind === "file" && sharedEntry?.source.startsWith("engine") && isUnedited(shared, sharedEntry)) {
+      templates.push(shared.content.toString("utf-8"));
+    }
+    const pristine = templates.includes(sharedAgentText(stripBlock(agent2.body, id)));
+    const adapter = `${agent2.frontmatter.replace(/\r\n/g, "\n")}
+${adapterInstruction(sharedPath)}`;
+    const adapterUpstream = await readFile12(join13(staging, file.rel));
+    if (confirmsInjectionTarget(loaded.state, id, file.rel)) {
+      const content = pristine ? upsertBlock(upstream.toString("utf-8"), id, block) : sharedAgentText(agent2.body);
+      if (!sharedIsReplaceable(shared, sharedEntry, entry.source, content, upstream)) {
+        preserve(`papel compartilhado ${sharedPath} j\xE1 possui conte\xFAdo local ou n\xE3o gerenciado`);
+        continue;
+      }
+      const base2 = pristine ? upstream : Buffer.from(legacyTemplate ?? upstream.toString("utf-8"));
+      const reason2 = pristine ? "corpo sem customiza\xE7\xE3o; papel recebe o template atual com o bloco do add-on" : `${options.configKnown === false ? "corpo difere do template com a config padr\xE3o (config n\xE3o recuperada)" : "corpo personalizado"}; copiado como est\xE1; o papel fica sob controle do add-on, sem updates do template`;
+      if (options.migrate === false) {
+        report("pending", reason2);
+        handled.add(file.rel);
+        changes.push({
+          path: file.rel,
+          action: "preserve",
+          source: entry.source,
+          reason: "migra\xE7\xE3o pendente; merge desabilitado",
+          expectedKind: current.kind,
+          expectedHash: current.hash
+        });
+        continue;
+      }
+      changes.push({
+        ...await planWrite({
+          targetDir,
+          path: sharedPath,
+          content,
+          source: entry.source,
+          reason: `migrar agente legado: ${reason2}`,
+          force: true
+        }),
+        expectedHash: shared.hash,
+        expectedKind: shared.kind
+      });
+      changes.push(...await planAdapter(targetDir, file, current, adapter, adapterUpstream, manifest));
+      changes.push(await planBase(targetDir, base2));
+      manifest.files[sharedPath] = { hash: sha256(content), source: entry.source, baseHash: sha256(base2) };
+      loaded.state.injectedTargets = loaded.state.injectedTargets.map((path) => path === file.rel ? sharedPath : path).filter((path, index, paths) => path !== sharedPath || paths.indexOf(path) === index);
+      loaded.changed = true;
+      handled.add(file.rel);
+      handled.add(sharedPath);
+      report("migrated", reason2);
+      continue;
+    }
+    if (!reappliedOnShared(loaded.state, id, file.rel, sharedPath) || sharedEntry?.source !== entry.source || shared.kind !== "file" || !hasSingleAddonBlock(shared.content.toString("utf-8"), id)) {
+      preserve("state do add-on n\xE3o confirma o alvo de inje\xE7\xE3o legado");
+      continue;
+    }
+    if (!pristine) {
+      preserve(
+        `o corpo legado tem customiza\xE7\xF5es ausentes de ${sharedPath}`,
+        `mova as customiza\xE7\xF5es de ${file.rel} para ${sharedPath}, remova-as do agente legado e execute maker update --dry-run`
+      );
+      continue;
+    }
+    if (block !== blockContent(shared.content.toString("utf-8"), id)) {
+      preserve(
+        `o bloco do add-on no agente legado difere do bloco em ${sharedPath}`,
+        `leve as edi\xE7\xF5es do bloco de ${file.rel} para ${sharedPath}, iguale os dois blocos e execute maker update --dry-run`
+      );
+      continue;
+    }
+    const reason = "add-on j\xE1 reaplicado no papel compartilhado; agente legado sem customiza\xE7\xE3o";
+    if (options.migrate === false) {
+      report("pending", reason);
+      handled.add(file.rel);
+      changes.push({
+        path: file.rel,
+        action: "preserve",
+        source: entry.source,
+        reason: "migra\xE7\xE3o pendente; merge desabilitado",
         expectedKind: current.kind,
         expectedHash: current.hash
       });
       continue;
     }
-    const adapter = `${agent2.frontmatter.replace(/\r\n/g, "\n")}
-${adapterInstruction(sharedPath)}`;
-    const adapterUpstream = await readFile12(join13(staging, file.rel));
-    changes.push({
-      ...await planWrite({
-        targetDir,
-        path: sharedPath,
-        content: agent2.body,
-        source: entry.source,
-        reason: "migrar corpo e blocos personalizados do agente legado",
-        force: true
-      }),
-      expectedHash: shared.hash,
-      expectedKind: shared.kind
-    });
-    changes.push({
-      ...await planWrite({
-        targetDir,
-        path: file.rel,
-        content: adapter,
-        source: file.entry.source,
-        reason: "converter agente legado em adapter do papel compartilhado",
-        force: true
-      }),
-      expectedHash: current.hash,
-      expectedKind: current.kind
-    });
-    for (const base2 of [upstream, adapterUpstream]) {
-      changes.push(await planWrite({
-        targetDir,
-        path: `.maker/bases/${sha256(base2)}`,
-        content: base2,
-        source: "metadata",
-        reason: "base upstream do agente migrado"
-      }));
-    }
-    manifest.files[sharedPath] = { hash: sha256(agent2.body), source: entry.source, baseHash: sha256(upstream) };
-    manifest.files[file.rel] = { hash: sha256(adapter), source: file.entry.source, baseHash: sha256(adapterUpstream) };
-    loaded.state.injectedTargets = loaded.state.injectedTargets.map((path) => path === file.rel ? sharedPath : path).filter((path, index, paths) => path !== sharedPath || paths.indexOf(path) === index);
-    loaded.changed = true;
+    changes.push(...await planAdapter(targetDir, file, current, adapter, adapterUpstream, manifest));
     handled.add(file.rel);
-    handled.add(sharedPath);
-    messages.push(`${file.rel} [${entry.source}]: migrar conte\xFAdo preservado para ${sharedPath} e regenerar adapter.`);
+    report("adapter", reason);
   }
   for (const [id, loaded] of states) {
     if (typeof loaded === "string" || !loaded.changed) continue;
@@ -1372,7 +1435,34 @@ ${adapterInstruction(sharedPath)}`;
       expectedKind: "file"
     });
   }
-  return { changes, handled, messages };
+  return { changes, handled, reports };
+}
+async function planAdapter(targetDir, file, current, adapter, upstream, manifest) {
+  manifest.files[file.rel] = { hash: sha256(adapter), source: file.entry.source, baseHash: sha256(upstream) };
+  return [
+    {
+      ...await planWrite({
+        targetDir,
+        path: file.rel,
+        content: adapter,
+        source: file.entry.source,
+        reason: "converter agente legado em adapter do papel compartilhado",
+        force: true
+      }),
+      expectedHash: current.hash,
+      expectedKind: current.kind
+    },
+    await planBase(targetDir, upstream)
+  ];
+}
+function planBase(targetDir, content) {
+  return planWrite({
+    targetDir,
+    path: `.maker/bases/${sha256(content)}`,
+    content,
+    source: "metadata",
+    reason: "base upstream do agente migrado"
+  });
 }
 function parseLegacyAgent(raw, role) {
   const content = raw.toString("utf-8");
@@ -1382,6 +1472,13 @@ function parseLegacyAgent(raw, role) {
   const name = frontmatter.match(/^name:\s*["']?([a-z0-9-]+)["']?\s*$/m)?.[1];
   if (name !== role || !/^description:\s*\S/m.test(frontmatter)) return void 0;
   return { frontmatter, body };
+}
+function allowsRead(frontmatter) {
+  const match = frontmatter.match(/^tools:[ \t]*(.*)\r?\n((?:[ \t]+-.*\r?\n)*)/m);
+  if (!match) return true;
+  const inline = match[1].trim().replace(/^\[|\]$/g, "");
+  const items = (inline ? inline.split(",") : match[2].split("\n").map((line) => line.replace(/^\s*-/, ""))).map((item) => item.trim().replace(/^["']|["']$/g, ""));
+  return items.some((item) => item === "Read" || item === "*");
 }
 async function loadState(targetDir, id, cache) {
   const cached = cache.get(id);
@@ -1403,19 +1500,32 @@ async function loadState(targetDir, id, cache) {
 function confirmsInjectionTarget(state, id, path) {
   return state.id === id && state.injectedTargets.includes(path) && !state.createdFiles.some((item) => item.path === path);
 }
+function reappliedOnShared(state, id, path, sharedPath) {
+  return state.id === id && state.injectedTargets.includes(sharedPath) && !state.injectedTargets.includes(path) && !state.createdFiles.some((item) => item.path === path || item.path === sharedPath);
+}
 function hasSingleAddonBlock(body, id) {
   const markers = [...body.matchAll(/<!-- maker:addon:([^\s:]+):(start|end) -->/g)];
   return markers.length === 2 && markers[0][1] === id && markers[0][2] === "start" && markers[1][1] === id && markers[1][2] === "end" && body.includes(startMarker(id)) && body.includes(endMarker(id));
 }
-function sharedIsReplaceable(shared, entry, addonSource, body, upstream) {
+function blockContent(content, id) {
+  const start = content.indexOf(startMarker(id));
+  const end = content.indexOf(endMarker(id));
+  if (start < 0 || end < start) return void 0;
+  return content.slice(start + startMarker(id).length, end).replace(/\r\n/g, "\n").trim();
+}
+function isUnedited(current, entry) {
+  return current.hash === entry.hash || current.hash === entry.baseHash;
+}
+function sharedIsReplaceable(shared, entry, addonSource, content, upstream) {
   if (shared.kind === "absent") return true;
   if (shared.kind !== "file" || !entry) return false;
-  if (entry.source === addonSource) return shared.content.equals(Buffer.from(body));
+  if (entry.source === addonSource) return shared.content.equals(Buffer.from(content));
   if (!entry.source.startsWith("engine")) return false;
-  return shared.content.equals(upstream) || shared.hash === entry.hash || shared.hash === entry.baseHash;
+  return shared.content.equals(upstream) || isUnedited(shared, entry);
 }
 
 // src/commands/update.ts
+var CONFIG_UNKNOWN = "depende de config n\xE3o recuperada";
 async function runUpdate(opts) {
   const targetDir = resolve4(opts.target ?? process.cwd());
   if (opts.dryRun) await assertNoPendingTransactions(targetDir);
@@ -1425,21 +1535,24 @@ async function runUpdate(opts) {
   const agents = enabledAgents(prior);
   const staging = await mkdtemp2(join14(tmpdir2(), "maker-update-plan-"));
   const changes = [];
-  const messages = [];
+  let reports = [];
+  const unresolved = [];
+  const defaulted = [];
   const next = structuredClone(prior);
   next.files = { ...prior.files };
   try {
-    const expected = await applyEngine(staging, buildContext(config), agents);
-    const migration = await planLegacyAddonAgents(targetDir, staging, expected, next);
+    const ctx = buildContext(config);
+    const expected = await applyEngine(staging, ctx, agents);
+    const migration = await planLegacyAddonAgents(targetDir, staging, expected, next, { ctx, migrate: opts.merge !== false, configKnown: recovered });
     changes.push(...migration.changes);
-    messages.push(...migration.messages);
+    reports = migration.reports;
+    const configDependent = recovered ? /* @__PURE__ */ new Set() : await configDependentFiles(expected, config, agents);
     for (const file of expected.sort((a, b) => a.rel.localeCompare(b.rel))) {
       if (migration.handled.has(file.rel)) continue;
       const upstream = await readFile13(join14(staging, file.rel));
       const upstreamHash = sha256(upstream);
       const current = await inspectTarget(targetDir, file.rel);
       const recorded = prior.files[file.rel];
-      changes.push(await planWrite({ targetDir, path: `.maker/bases/${upstreamHash}`, content: upstream, source: "metadata", reason: `base upstream de ${file.rel}` }));
       if (recorded?.source.startsWith("addon:")) {
         changes.push(status("preserve", file.rel, file.entry.source, current, "arquivo controlado por add-on"));
       } else if (current.kind === "other") {
@@ -1447,9 +1560,13 @@ async function runUpdate(opts) {
       } else if (current.kind === "absent") {
         changes.push(await planWrite({ targetDir, path: file.rel, content: upstream, source: file.entry.source, reason: "arquivo gerenciado ausente" }));
         next.files[file.rel] = manifestEntry(file.entry, upstreamHash, upstreamHash);
+        if (configDependent.has(file.rel)) defaulted.push(file.rel);
       } else if (current.hash === upstreamHash) {
         changes.push(status("preserve", file.rel, file.entry.source, current, "j\xE1 est\xE1 atualizado"));
         next.files[file.rel] = manifestEntry(file.entry, upstreamHash, upstreamHash);
+      } else if (configDependent.has(file.rel) || configDependent.has(sharedRoleOf(file.rel))) {
+        changes.push(status("preserve", file.rel, file.entry.source, current, CONFIG_UNKNOWN));
+        unresolved.push(file.rel);
       } else if (!recorded || current.hash === (recorded.baseHash ?? recorded.hash)) {
         changes.push(await planWrite({ targetDir, path: file.rel, content: upstream, source: file.entry.source, reason: "nova vers\xE3o upstream", force: true }));
         next.files[file.rel] = manifestEntry(file.entry, upstreamHash, upstreamHash);
@@ -1471,6 +1588,9 @@ async function runUpdate(opts) {
           next.files[file.rel] = manifestEntry(file.entry, sha256(merged2), upstreamHash);
         }
       }
+      if (next.files[file.rel]?.baseHash === upstreamHash) {
+        changes.push(await planWrite({ targetDir, path: `.maker/bases/${upstreamHash}`, content: upstream, source: "metadata", reason: `base upstream de ${file.rel}` }));
+      }
     }
   } finally {
     await rm4(staging, { recursive: true, force: true });
@@ -1488,26 +1608,83 @@ async function runUpdate(opts) {
   }
   changes.push(await planWrite({ targetDir, path: ".maker/manifest.json", content: JSON.stringify(next, null, 2) + "\n", source: "metadata", reason: "publicar manifest atualizado", force: true }));
   const plan = createPlan(targetDir, changes);
+  const reported = new Set(reports.map((report) => report.path));
   for (const change of plan.changes) {
-    if (change.action !== "preserve" || !/^\.(claude|codex)\/agents\//.test(change.path) || messages.some((message) => message.startsWith(`${change.path} [`))) continue;
+    if (change.action !== "preserve" || !/^\.(claude|codex)\/agents\//.test(change.path) || reported.has(change.path)) continue;
     const current = await inspectTarget(targetDir, change.path);
     if (current.kind === "file" && !sharedRoleReference(current.content.toString("utf-8"))) {
       const role = change.path.split("/").at(-1).replace(/\.(md|toml)$/, "");
-      messages.push(`${change.path}: preservado (${change.reason}); integra\xE7\xE3o continuar\xE1 degradada: refer\xEAncia ausente a .maker/workflow/agents/${role}.md. Revise o conte\xFAdo local antes de converter o adapter.`);
+      reports.push({
+        path: change.path,
+        sharedPath: `.maker/workflow/agents/${role}.md`,
+        status: "degraded",
+        reason: `${change.reason}; sem refer\xEAncia ao papel compartilhado`,
+        action: change.reason === CONFIG_UNKNOWN ? "crie maker.config.json com os valores usados no init e execute maker update --dry-run" : "revise o conte\xFAdo local, leve-o para o papel compartilhado e restaure o adapter gerado (maker update --dry-run mostra o plano)"
+      });
     }
   }
-  for (const message of messages) console.log(pc3.yellow(message));
+  if (unresolved.length || defaulted.length) {
+    console.log(pc3.yellow("Config do projeto n\xE3o recuperada (manifest sem config e sem maker.config.json):"));
+    if (unresolved.length) console.log(pc3.yellow(`  ${unresolved.length} arquivo(s) existente(s) que dependem dela preservado(s): ${unresolved.join(", ")}`));
+    if (defaulted.length) console.log(pc3.yellow(`  ${defaulted.length} arquivo(s) ausente(s) criado(s) com valores padr\xE3o: ${defaulted.join(", ")}`));
+    console.log(pc3.yellow("A\xE7\xE3o recomendada: crie maker.config.json com os valores usados no init e execute maker update --dry-run; os arquivos acima s\xE3o ent\xE3o renderizados com ela."));
+  }
   if (opts.dryRun) {
+    printAgentReports(reports, "planejado");
     console.log(formatPlan(plan));
     if (plan.changes.some((change) => change.action === "conflict")) process.exitCode = 1;
     return;
   }
   await applyChangePlan(plan);
+  printAgentReports(reports, "aplicado");
   const merged = plan.changes.filter((change) => change.resolution === "merge").length;
-  const updated = plan.changes.filter((change) => (change.action === "update" || change.action === "create") && !change.path.startsWith(".maker/") && change.resolution !== "merge").length;
-  const preserved = plan.changes.filter((change) => change.action === "preserve" && !change.path.startsWith(".maker/") && change.reason !== "j\xE1 est\xE1 atualizado").length;
+  const updated = plan.changes.filter((change) => (change.action === "update" || change.action === "create") && change.source !== "metadata" && change.resolution !== "merge").length;
+  const preserved = plan.changes.filter((change) => change.action === "preserve" && change.source !== "metadata" && change.reason !== "j\xE1 est\xE1 atualizado").length;
   console.log(pc3.green(`\u2713 ${updated} arquivo(s) atualizado(s), ${merged} mesclado(s).`));
   if (preserved) console.log(pc3.yellow(`${preserved} preservado(s) por seguran\xE7a.`));
+  if (reports.length) {
+    const migrated = reports.filter((report) => report.status === "migrated" || report.status === "adapter").length;
+    const degraded = reports.length - migrated;
+    console.log((degraded ? pc3.yellow : pc3.green)(`${migrated} agente(s) migrado(s), ${degraded} permanece(m) degradado(s).`));
+  }
+}
+function printAgentReports(reports, phase) {
+  if (!reports.length) return;
+  console.log(pc3.bold(`Agentes legados (${phase}):`));
+  for (const report of reports) {
+    if (report.status === "migrated" || report.status === "adapter") {
+      const verb = phase === "planejado" ? "migrar" : "migrado";
+      const target = report.status === "migrated" ? ` \u2192 ${report.sharedPath}` : " (s\xF3 o adapter)";
+      console.log(pc3.cyan(`  ${verb}   ${report.path}${target}: ${report.reason}`));
+    } else if (report.status === "pending") {
+      console.log(pc3.dim(`  pendente ${report.path} \u2192 ${report.sharedPath}: ${report.reason}; n\xE3o migrado com --no-merge`));
+    } else {
+      console.log(pc3.yellow(`  degradado ${report.path}: ${report.reason}`));
+    }
+  }
+  const actions = [...new Set(reports.flatMap((report) => report.action ? [report.action] : []))];
+  if (reports.some((report) => report.status === "pending")) actions.push("execute maker update sem --no-merge para migrar os agentes pendentes");
+  if (!actions.length) return;
+  console.log(pc3.yellow("A\xE7\xE3o recomendada para os agentes que continuam sem refer\xEAncia ao papel compartilhado:"));
+  for (const action of actions) console.log(pc3.yellow(`  - ${action}`));
+}
+async function configDependentFiles(expected, config, agents) {
+  const staging = await mkdtemp2(join14(tmpdir2(), "maker-update-config-"));
+  try {
+    const sentinel = parseConfig({
+      ...config,
+      layout: { frontendGlobs: ["maker-sentinel-frontend/**"], backendGlobs: ["maker-sentinel-backend/**"] },
+      commands: { verify: "maker-sentinel verify", build: "maker-sentinel build", test: "maker-sentinel test", dev: "maker-sentinel dev" }
+    });
+    const probe = new Map((await applyEngine(staging, buildContext(sentinel), agents)).map((file) => [file.rel, file.entry.hash]));
+    return new Set(expected.filter((file) => probe.get(file.rel) !== file.entry.hash).map((file) => file.rel));
+  } finally {
+    await rm4(staging, { recursive: true, force: true });
+  }
+}
+function sharedRoleOf(path) {
+  const role = path.match(/^\.claude\/agents\/([a-z0-9-]+)\.md$/)?.[1];
+  return role ? `.maker/workflow/agents/${role}.md` : "";
 }
 function manifestEntry(source, hash, baseHash) {
   return { ...source, hash, baseHash };
@@ -1577,6 +1754,14 @@ async function renderFrom(dir, rel, ctx) {
   const raw = await readFile14(join15(dir, rel), "utf-8");
   return rel.endsWith(".hbs") ? renderRaw(raw, ctx) : raw;
 }
+function injectedEntry(prior, content, id) {
+  return { hash: sha256(content), source: `addon:${id}`, ...prior?.baseHash ? { baseHash: prior.baseHash } : {} };
+}
+function restoredEntry(rel, prior, content) {
+  const source = rel.startsWith(".claude/") ? "engine:claude" : rel.startsWith(".codex/") || rel.startsWith(".agents/") ? "engine:codex" : "engine:common";
+  if (!prior?.baseHash) return { hash: prior?.hash ?? sha256(content), source };
+  return { hash: sha256(content), source, baseHash: prior.baseHash };
+}
 async function applyAddon(targetDir, addon, knobs, options = {}) {
   if (options.dryRun) await assertNoPendingTransactions(targetDir);
   const currentManifest = await readManifest(targetDir);
@@ -1603,7 +1788,7 @@ async function applyAddon(targetDir, addon, knobs, options = {}) {
       beforeHeading: "## Governance"
     });
     changes.push(await planWrite({ targetDir, path: CONSTITUTION, content: next, source: `addon:${addon.id}`, reason: "injetar princ\xEDpios do add-on", force: true }));
-    manifest.files[CONSTITUTION] = { hash: sha256(next), source: `addon:${addon.id}` };
+    manifest.files[CONSTITUTION] = injectedEntry(manifest.files[CONSTITUTION], next, addon.id);
     injectedTargets.push(CONSTITUTION);
   }
   for (const frag of addon.agentFragments) {
@@ -1616,7 +1801,7 @@ async function applyAddon(targetDir, addon, knobs, options = {}) {
     const block = (await renderFrom(dir, frag.file, ctx)).trim();
     const next = upsertBlock(await readFile14(abs, "utf-8"), addon.id, block);
     changes.push(await planWrite({ targetDir, path: rel, content: next, source: `addon:${addon.id}`, reason: "injetar fragmento do add-on", force: true }));
-    manifest.files[rel] = { hash: sha256(next), source: `addon:${addon.id}` };
+    manifest.files[rel] = injectedEntry(manifest.files[rel], next, addon.id);
     injectedTargets.push(rel);
   }
   for (const f of addon.files) {
@@ -1661,7 +1846,7 @@ async function removeAddon(targetDir, id, options = {}) {
     if (!existsSync10(abs)) continue;
     const next = stripBlock(await readFile14(abs, "utf-8"), id);
     changes.push(await planWrite({ targetDir, path: rel, content: next, source: "engine", reason: "remover bloco do add-on", force: true }));
-    if (manifest) manifest.files[rel] = { hash: sha256(next), source: "engine" };
+    if (manifest) manifest.files[rel] = restoredEntry(rel, manifest.files[rel], next);
     strippedTargets.push(rel);
   }
   for (const f of state.createdFiles) {

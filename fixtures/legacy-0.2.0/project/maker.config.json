@@ -1,0 +1,16 @@
+{
+  "project": {
+    "name": "Nimbus Ledger",
+    "slug": "nimbus-ledger"
+  },
+  "layout": {
+    "frontendGlobs": ["web/src/**", "mobile/src/**"],
+    "backendGlobs": ["server/**", "worker/**"]
+  },
+  "commands": {
+    "verify": "just verify",
+    "build": "just build",
+    "test": "just test",
+    "dev": "just dev"
+  }
+}
