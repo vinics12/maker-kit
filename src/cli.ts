@@ -67,6 +67,7 @@ program
   .option("--no-merge", "preserva arquivos editados sem tentar 3-way merge")
   .option("--export [dir]", "exporta base/local/upstream do que precisa de mediação (default: .maker/mediation), sem aplicar")
   .option("--apply-resolutions [dir]", "valida e aplica as propostas escritas em items/<id>/resolved de uma exportação")
+  .option("--accept-dropped", "com --apply-resolutions: aceita propostas que descartam linhas customizadas (só com aprovação do dono)")
   .action(async (opts) => {
     await runUpdate(opts);
   });

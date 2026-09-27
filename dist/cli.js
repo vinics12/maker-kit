@@ -1534,6 +1534,10 @@ function reinjectBlocks(path, template, local) {
   for (const [id, block] of addonBlocks(local)) result = injectBlock(path, result, id, block);
   return result;
 }
+function afterBlockRemoval(path, template) {
+  const probe = "maker-probe";
+  return stripBlock(injectBlock(path, template, probe, probe), probe);
+}
 function addonContext(manifest, knobs) {
   return {
     project: manifest.project,
@@ -1678,6 +1682,7 @@ import { mkdir as mkdir6, readFile as readFile15, readdir as readdir4, rm as rm5
 import { join as join16, resolve as resolve3 } from "path";
 import pc2 from "picocolors";
 import { z as z5 } from "zod";
+import { diffComm } from "node-diff3";
 var DEFAULT_MEDIATION_DIR = ".maker/mediation";
 var INDEX = "mediation.json";
 var itemSchema = z5.object({
@@ -1696,6 +1701,8 @@ var indexSchema = z5.object({
   format: z5.literal(1),
   makerVersion: z5.string(),
   configHash: z5.string(),
+  /** Modo do update na exportação: o apply recalcula os candidatos no mesmo modo. */
+  merge: z5.boolean().optional(),
   items: z5.array(itemSchema)
 });
 var ADDON_MARKER = /<!-- maker:addon:([a-z0-9-]+):(start|end) -->/g;
@@ -1724,7 +1731,15 @@ async function proposalsIn(dir) {
   }
   return found;
 }
-async function exportMediation(targetDir, dirOption, candidates, config) {
+async function exportedMergeMode(targetDir, dirOption) {
+  try {
+    const dir = resolve3(targetDir, dirOption === true ? DEFAULT_MEDIATION_DIR : dirOption);
+    return indexSchema.parse(JSON.parse(await readFile15(join16(dir, INDEX), "utf-8"))).merge;
+  } catch {
+    return void 0;
+  }
+}
+async function exportMediation(targetDir, dirOption, candidates, config, mode = { merge: true }) {
   const dir = resolve3(targetDir, dirOption === true ? DEFAULT_MEDIATION_DIR : dirOption);
   if (existsSync11(dir)) {
     const entries = await readdir4(dir);
@@ -1764,7 +1779,7 @@ async function exportMediation(targetDir, dirOption, candidates, config) {
       upstreamHash: sha256(candidate.upstream)
     });
   }
-  const index = { format: 1, makerVersion: makerVersion(), configHash: configHash(config), items };
+  const index = { format: 1, makerVersion: makerVersion(), configHash: configHash(config), merge: mode.merge, items };
   await writeFile6(join16(dir, INDEX), JSON.stringify(index, null, 2) + "\n");
   await writeFile6(join16(dir, "README.md"), [
     "# Media\xE7\xE3o de update do maker",
@@ -1827,6 +1842,7 @@ async function applyResolutions(targetDir, dirOption, currentConfig, candidates,
     groups.set(key, [...groups.get(key) ?? [], item]);
   }
   const selected = [];
+  const dropped = /* @__PURE__ */ new Map();
   for (const [key, members] of groups) {
     const done = members.filter((item) => resolved.has(item.id));
     if (!done.length) continue;
@@ -1857,7 +1873,20 @@ async function applyResolutions(targetDir, dirOption, currentConfig, candidates,
         if (markers(text3).size) errors.push(`${item.path}: blocos de add-on devem ir para o papel compartilhado, n\xE3o para o adapter`);
       }
     }
+    const kept = new Set(members.flatMap((item) => contentLines(resolved.get(item.id).toString("utf-8"))));
+    const lost = members.flatMap((item) => customizedLines(matched.get(item.id))).filter((line) => !kept.has(line));
+    if (lost.length) dropped.set(paths, [...new Set(lost)]);
     selected.push(...members);
+  }
+  for (const [paths, lines] of dropped) {
+    const listed = lines.slice(0, 20).map((line) => `
+    - ${line}`).join("") + (lines.length > 20 ? `
+    \u2026 e mais ${lines.length - 20}` : "");
+    const message = `${paths}: a proposta descarta ${lines.length} linha(s) customizada(s):${listed}`;
+    if (opts.acceptDropped) console.log(pc2.yellow(`! ${message}
+  aceito com --accept-dropped.`));
+    else errors.push(`${message}
+  mantenha-as, ou reaplique com --accept-dropped se o dono aprovou a remo\xE7\xE3o`);
   }
   if (errors.length) {
     for (const error of errors) console.error(pc2.red(`\u2717 ${error}`));
@@ -1939,6 +1968,7 @@ async function applyResolutions(targetDir, dirOption, currentConfig, candidates,
   }));
   const plan = createPlan(targetDir, changes);
   if (opts.dryRun) {
+    for (const item of selected) printDiff(item.path, matched.get(item.id).local?.toString("utf-8") ?? "", resolved.get(item.id).toString("utf-8"));
     console.log(formatPlan(plan));
     return;
   }
@@ -1974,6 +2004,23 @@ function validateText(content) {
   if (CONFLICT_MARKER.test(text3)) return "cont\xE9m marcadores de conflito";
   return void 0;
 }
+function contentLines(text3) {
+  return text3.split(/\r?\n/).map((line) => line.trim()).filter((line) => line && !/^<!-- maker:addon:[a-z0-9-]+:(start|end) -->$/.test(line));
+}
+function customizedLines(candidate) {
+  if (!candidate.local) return [];
+  const reference = new Set(contentLines((candidate.base ?? candidate.upstream).toString("utf-8")));
+  return contentLines(candidate.local.toString("utf-8")).filter((line) => !reference.has(line));
+}
+function printDiff(path, local, proposal) {
+  const chunks = diffComm(local.split("\n"), proposal.split("\n"));
+  const changed = chunks.filter((chunk) => !chunk.common);
+  console.log(pc2.bold(`--- ${path} (local) \u2192 proposta: ${changed.length ? `${changed.length} trecho(s) alterado(s)` : "sem mudan\xE7as"}`));
+  for (const chunk of changed) {
+    for (const line of chunk.buffer1 ?? []) console.log(pc2.red(`- ${line}`));
+    for (const line of chunk.buffer2 ?? []) console.log(pc2.green(`+ ${line}`));
+  }
+}
 function markers(text3) {
   return new Set([...text3.matchAll(ADDON_MARKER)].map((match) => `${match[1]}:${match[2]}`));
 }
@@ -2007,17 +2054,21 @@ function resolvedSource(item, content) {
 var CONFIG_UNKNOWN = "depende de config n\xE3o recuperada";
 var UP_TO_DATE_ADDON = "j\xE1 est\xE1 atualizado (template atual com os blocos de add-on)";
 var CONFIG_ACTION = "crie maker.config.json com os valores usados no init e execute maker update --dry-run";
+var PENDING_EXIT_CODE = 2;
 async function runUpdate(opts) {
   const targetDir = resolve4(opts.target ?? process.cwd());
   if (opts.export && opts.applyResolutions) throw new Error("Use --export ou --apply-resolutions, n\xE3o os dois juntos.");
   if (opts.dryRun || opts.export) await assertNoPendingTransactions(targetDir);
-  const planning = await planUpdate(targetDir, { merge: opts.merge });
+  const merge = opts.applyResolutions ? await exportedMergeMode(targetDir, opts.applyResolutions) ?? opts.merge : opts.merge;
+  const planning = await planUpdate(targetDir, { merge });
   const { plan, reports, mediation, unresolved, defaulted, config, recovered } = planning;
   if ((opts.export || opts.applyResolutions) && !recovered) {
     throw new Error("Config do projeto n\xE3o recuperada: crie maker.config.json com os valores usados no init antes de mediar o update.");
   }
-  if (opts.applyResolutions) return applyResolutions(targetDir, opts.applyResolutions, config, mediation, { dryRun: opts.dryRun });
-  if (opts.export) return exportMediation(targetDir, opts.export, mediation, config);
+  if (opts.applyResolutions) {
+    return applyResolutions(targetDir, opts.applyResolutions, config, mediation, { dryRun: opts.dryRun, acceptDropped: opts.acceptDropped });
+  }
+  if (opts.export) return exportMediation(targetDir, opts.export, mediation, config, { merge: merge !== false });
   if (unresolved.length || defaulted.length) {
     console.log(pc3.yellow("Config do projeto n\xE3o recuperada (manifest sem config e sem maker.config.json):"));
     if (unresolved.length) console.log(pc3.yellow(`  ${unresolved.length} arquivo(s) existente(s) que dependem dela preservado(s): ${unresolved.join(", ")}`));
@@ -2025,20 +2076,23 @@ async function runUpdate(opts) {
     console.log(pc3.yellow("A\xE7\xE3o recomendada: crie maker.config.json com os valores usados no init e execute maker update --dry-run; os arquivos acima s\xE3o ent\xE3o renderizados com ela."));
   }
   const conflicted = plan.changes.some((change) => change.action === "conflict");
-  if (mediation.length) {
-    console.log(pc3.yellow(mediationHint(mediation.length, {
-      configKnown: recovered,
-      skillInstalled: skillInstalled(targetDir),
-      updateBlocked: conflicted && !opts.dryRun
-    })));
-  }
+  const degradedAgents = reports.filter((report) => report.status === "degraded").length;
+  const hint = () => mediation.length && console.log(pc3.yellow(mediationHint(mediation.length, {
+    configKnown: recovered,
+    skillInstalled: skillInstalled(targetDir),
+    updateBlocked: conflicted && !opts.dryRun
+  })));
   if (opts.dryRun) {
+    hint();
     printAgentReports(reports, "planejado");
     console.log(formatPlan(plan));
     if (conflicted) process.exitCode = 1;
+    else if (mediation.length || degradedAgents) process.exitCode = PENDING_EXIT_CODE;
     return;
   }
+  if (conflicted) hint();
   await applyChangePlan(plan);
+  hint();
   printAgentReports(reports, "aplicado");
   const merged = plan.changes.filter((change) => change.resolution === "merge").length;
   const updated = plan.changes.filter((change) => (change.action === "update" || change.action === "create") && change.source !== "metadata" && change.resolution !== "merge").length;
@@ -2049,6 +2103,10 @@ async function runUpdate(opts) {
     const migrated = reports.filter((report) => report.status === "migrated" || report.status === "adapter").length;
     const degraded = reports.length - migrated;
     console.log((degraded ? pc3.yellow : pc3.green)(`${migrated} agente(s) migrado(s), ${degraded} permanece(m) degradado(s).`));
+  }
+  if (mediation.length || degradedAgents) {
+    console.log(pc3.yellow(`Update aplicado com pend\xEAncias (exit code ${PENDING_EXIT_CODE}): resolva a media\xE7\xE3o e os agentes degradados acima.`));
+    process.exitCode = PENDING_EXIT_CODE;
   }
 }
 async function planUpdate(targetDir, opts = {}) {
@@ -2114,7 +2172,8 @@ async function planUpdate(targetDir, opts = {}) {
             await mediate("addon", "template novo em arquivo controlado por add-on; merge desabilitado", recorded.baseHash);
           } else {
             const base2 = recorded.baseHash ? await readBase(targetDir, recorded.baseHash) : null;
-            const merged = base2 ? mergeText(current.content, base2, upstream) : null;
+            const reinjected = base2 && sameText(reinjectBlocks(file.rel, base2.toString("utf-8"), local), local) ? Buffer.from(reinjectBlocks(file.rel, upstream.toString("utf-8"), local)) : null;
+            const merged = reinjected ?? (base2 ? mergeText(current.content, base2, upstream) : null);
             if (merged && sameBlocks(local, merged.toString("utf-8"))) {
               changes.push(mergeChange(await planWrite({
                 targetDir,
@@ -2144,7 +2203,7 @@ async function planUpdate(targetDir, opts = {}) {
       } else if (configDependent.has(file.rel) || configDependent.has(sharedRoleOf(file.rel))) {
         preserve(CONFIG_UNKNOWN);
         unresolved.push(file.rel);
-      } else if (!recorded || !recorded.edited && current.hash === (recorded.baseHash ?? recorded.hash)) {
+      } else if (!recorded || !recorded.edited && current.hash === (recorded.baseHash ?? recorded.hash) || recorded.edited && await matchesRemovedTemplate(file.rel, current.content, upstream, recovered ? ctx : void 0)) {
         changes.push(await planWrite({ targetDir, path: file.rel, content: upstream, source: file.entry.source, reason: "nova vers\xE3o upstream", force: true }));
         next.files[file.rel] = manifestEntry(file.entry, upstreamHash, upstreamHash);
       } else if (opts.merge === false) {
@@ -2206,6 +2265,13 @@ async function planUpdate(targetDir, opts = {}) {
   }
   return { plan, reports, mediation, unresolved, defaulted, config, recovered };
 }
+async function matchesRemovedTemplate(path, content, upstream, ctx) {
+  if (!ctx) return false;
+  const role = path.match(/^\.claude\/agents\/([a-z0-9-]+)\.md$/)?.[1];
+  const templates = [upstream.toString("utf-8"), ...role ? [await legacyAgent(ctx, role)] : []].filter((t) => !!t);
+  const text3 = content.toString("utf-8");
+  return templates.some((template) => sameText(text3, afterBlockRemoval(path, template)) || sameText(text3, template));
+}
 function mergeChange(change) {
   if (change.action !== "preserve") change.resolution = "merge";
   return change;
@@ -2245,16 +2311,23 @@ function printAgentReports(reports, phase) {
 async function configDependentFiles(expected, config, agents, installedAt) {
   const staging = await mkdtemp3(join17(tmpdir3(), "maker-update-config-"));
   try {
-    const sentinel = parseConfig({
-      ...config,
-      layout: { frontendGlobs: ["maker-sentinel-frontend/**"], backendGlobs: ["maker-sentinel-backend/**"] },
-      commands: { verify: "maker-sentinel verify", build: "maker-sentinel build", test: "maker-sentinel test", dev: "maker-sentinel dev" }
-    });
-    const probe = new Map((await applyEngine(staging, buildContext(sentinel, installedAt), agents)).map((file) => [file.rel, file.entry.hash]));
+    const probe = new Map((await applyEngine(staging, buildContext(sentinelConfig(config), installedAt), agents)).map((file) => [file.rel, file.entry.hash]));
     return new Set(expected.filter((file) => probe.get(file.rel) !== file.entry.hash).map((file) => file.rel));
   } finally {
     await rm6(staging, { recursive: true, force: true });
   }
+}
+function sentinelConfig(config) {
+  const replace = (value, path) => {
+    if (typeof value === "string") return `maker-sentinel-${path}`;
+    if (Array.isArray(value)) return value.length ? value.map((item, index) => replace(item, `${path}-${index}`)) : [`maker-sentinel-${path}`];
+    if (value && typeof value === "object") {
+      return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, replace(item, path ? `${path}-${key}` : key)]));
+    }
+    return value;
+  };
+  const { project, agent: agent2, ...rest } = config;
+  return parseConfig({ ...replace(rest, ""), project, agent: agent2 });
 }
 function sharedRoleOf(path) {
   const role = path.match(/^\.claude\/agents\/([a-z0-9-]+)\.md$/)?.[1];
@@ -2369,10 +2442,12 @@ async function runDoctor(opts) {
     }
   }
   const pending = await pendingMediation(targetDir);
-  if (pending) {
-    console.log(pc4.yellow(`${pending} arquivo(s) aguardam media\xE7\xE3o do update: use a skill maker-update ou maker update --export.`));
+  if ("error" in pending) {
+    console.log(pc4.red(`  n\xE3o foi poss\xEDvel planejar o update: ${pending.error}`));
+  } else if (pending.count) {
+    console.log(pc4.yellow(mediationHint(pending.count, pending.state).replace("precisam de media\xE7\xE3o", "aguardam media\xE7\xE3o do update")));
   }
-  if (result.ok && integrations.every((integration) => integration.issues.length === 0) && addons.ok) {
+  if (result.ok && integrations.every((integration) => integration.issues.length === 0) && addons.ok && !("error" in pending)) {
     console.log(pc4.green("\u2713 Install \xEDntegro."));
     return;
   }
@@ -2387,9 +2462,17 @@ ${result.missing.length} ausente(s), ${result.modified.length} modificado(s).`)
 }
 async function pendingMediation(targetDir) {
   try {
-    return (await planUpdate(targetDir)).mediation.length;
-  } catch {
-    return 0;
+    const planning = await planUpdate(targetDir);
+    return {
+      count: planning.mediation.length,
+      state: {
+        configKnown: planning.recovered,
+        skillInstalled: skillInstalled(targetDir),
+        updateBlocked: planning.plan.changes.some((change) => change.action === "conflict")
+      }
+    };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message.split("\n")[0] : String(error) };
   }
 }
 
@@ -2817,7 +2900,7 @@ agent.command("list").description("Lista integra\xE7\xF5es dispon\xEDveis, habil
 program.command("doctor").description("Verifica a integridade de um install contra o manifest.").option("-t, --target <dir>", "diret\xF3rio do projeto (default: cwd)").action(async (opts) => {
   await runDoctor(opts);
 });
-program.command("update").description("Atualiza arquivos do motor n\xE3o modificados localmente.").option("-t, --target <dir>", "diret\xF3rio do projeto (default: cwd)").option("--dry-run", "mostra o plano sem alterar arquivos").option("--no-merge", "preserva arquivos editados sem tentar 3-way merge").option("--export [dir]", "exporta base/local/upstream do que precisa de media\xE7\xE3o (default: .maker/mediation), sem aplicar").option("--apply-resolutions [dir]", "valida e aplica as propostas escritas em items/<id>/resolved de uma exporta\xE7\xE3o").action(async (opts) => {
+program.command("update").description("Atualiza arquivos do motor n\xE3o modificados localmente.").option("-t, --target <dir>", "diret\xF3rio do projeto (default: cwd)").option("--dry-run", "mostra o plano sem alterar arquivos").option("--no-merge", "preserva arquivos editados sem tentar 3-way merge").option("--export [dir]", "exporta base/local/upstream do que precisa de media\xE7\xE3o (default: .maker/mediation), sem aplicar").option("--apply-resolutions [dir]", "valida e aplica as propostas escritas em items/<id>/resolved de uma exporta\xE7\xE3o").option("--accept-dropped", "com --apply-resolutions: aceita propostas que descartam linhas customizadas (s\xF3 com aprova\xE7\xE3o do dono)").action(async (opts) => {
   await runUpdate(opts);
 });
 program.command("list").description("Lista add-ons dispon\xEDveis e seu estado no projeto.").option("-t, --target <dir>", "diret\xF3rio do projeto (default: cwd)").action(async (opts) => {

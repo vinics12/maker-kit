@@ -4,7 +4,8 @@ import { readManifest, verifyManifest } from "../render/manifest.js";
 import { enabledAgents } from "../render/manifest.js";
 import { validateAgentIntegration } from "../agents/validate.js";
 import { inspectAddons } from "../addons/doctor.js";
-import { planUpdate } from "./update.js";
+import { planUpdate, skillInstalled } from "./update.js";
+import { mediationHint } from "./mediation.js";
 
 export interface DoctorOptions {
   target?: string;
@@ -45,13 +46,15 @@ export async function runDoctor(opts: DoctorOptions): Promise<void> {
     }
   }
 
-  // Informativo: mediação pendente não degrada o install, mas o update não a resolve sozinho.
+  // Mediação pendente é informativa (não degrada o install); falhar ao planejar o update, não.
   const pending = await pendingMediation(targetDir);
-  if (pending) {
-    console.log(pc.yellow(`${pending} arquivo(s) aguardam mediação do update: use a skill maker-update ou maker update --export.`));
+  if ("error" in pending) {
+    console.log(pc.red(`  não foi possível planejar o update: ${pending.error}`));
+  } else if (pending.count) {
+    console.log(pc.yellow(mediationHint(pending.count, pending.state).replace("precisam de mediação", "aguardam mediação do update")));
   }
 
-  if (result.ok && integrations.every((integration) => integration.issues.length === 0) && addons.ok) {
+  if (result.ok && integrations.every((integration) => integration.issues.length === 0) && addons.ok && !("error" in pending)) {
     console.log(pc.green("✓ Install íntegro."));
     return;
   }
@@ -64,10 +67,19 @@ export async function runDoctor(opts: DoctorOptions): Promise<void> {
   process.exitCode = 1;
 }
 
-async function pendingMediation(targetDir: string): Promise<number> {
+async function pendingMediation(targetDir: string): Promise<
+  { count: number; state: Parameters<typeof mediationHint>[1] } | { error: string }> {
   try {
-    return (await planUpdate(targetDir)).mediation.length;
-  } catch {
-    return 0;
+    const planning = await planUpdate(targetDir);
+    return {
+      count: planning.mediation.length,
+      state: {
+        configKnown: planning.recovered,
+        skillInstalled: skillInstalled(targetDir),
+        updateBlocked: planning.plan.changes.some((change) => change.action === "conflict"),
+      },
+    };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message.split("\n")[0]! : String(error) };
   }
 }

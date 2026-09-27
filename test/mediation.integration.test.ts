@@ -4,7 +4,10 @@ import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/pro
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runInit } from "../src/commands/init.js";
-import { runUpdate } from "../src/commands/update.js";
+import { PENDING_EXIT_CODE, runUpdate, sentinelConfig } from "../src/commands/update.js";
+import { runDoctor } from "../src/commands/doctor.js";
+import { parseConfig } from "../src/config/schema.js";
+import { upsertBlock } from "../src/addons/inject.js";
 import { DEFAULT_MEDIATION_DIR, mediationHint } from "../src/commands/mediation.js";
 import { readManifest, sha256, writeManifest } from "../src/render/manifest.js";
 import { applyAddon } from "../src/addons/apply.js";
@@ -104,11 +107,16 @@ describe("mediação de update", () => {
     expect(existsSync(join(itemDir, "base"))).toBe(true);
     expect(await readFile(join(target, "AGENTS.md"), "utf-8")).toBe(local);
 
+    // A proposta troca a linha "LOCAL" do dono pela do template: sem aprovação explícita, é recusada.
     const proposal = upstream + "\nRegra local do dono.\n";
     await writeFile(join(itemDir, "resolved"), proposal);
-    await runUpdate({ target, applyResolutions: true, dryRun: true });
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(runUpdate({ target, applyResolutions: true, dryRun: true })).rejects.toThrow("Propostas de mediação rejeitadas");
+    expect(error.mock.calls.flat().join("\n")).toMatch(/descarta 1 linha\(s\) customizada\(s\):\n +- LOCAL/);
+    await runUpdate({ target, applyResolutions: true, dryRun: true, acceptDropped: true });
+    expect(log.mock.calls.flat().join("\n")).toContain("- LOCAL");
     expect(await readFile(join(target, "AGENTS.md"), "utf-8")).toBe(local);
-    await runUpdate({ target, applyResolutions: true });
+    await runUpdate({ target, applyResolutions: true, acceptDropped: true });
     expect(await readFile(join(target, "AGENTS.md"), "utf-8")).toBe(proposal);
     expect(existsSync(dir)).toBe(false);
     const manifest = (await readManifest(target))!;
@@ -184,7 +192,8 @@ describe("mediação de update", () => {
 
     const proposal = current.replace("Linha do dono.", "Linha do dono, revisada com o template novo.");
     await writeFile(join(itemDir, "resolved"), proposal);
-    await runUpdate({ target, applyResolutions: true });
+    await reject(proposal, "descarta 1 linha(s) customizada(s)");
+    await runUpdate({ target, applyResolutions: true, acceptDropped: true });
     expect(await readFile(join(target, constitution), "utf-8")).toBe(proposal);
     const entry = (await readManifest(target))!.files[constitution]!;
     expect(entry.source).toBe("addon:saas");
@@ -230,6 +239,82 @@ describe("mediação de update", () => {
     await rm(join(first.dir, "items", first.items[0]!.id, "notes.md"));
     const second = await exported(target);
     expect(second.items.map((item) => item.id)).toEqual(first.items.map((item) => item.id));
+  });
+
+  it("template que muda no fim de um papel com bloco de add-on é aplicado sem mediação", async () => {
+    const target = await addonInstall();
+    const role = ".maker/workflow/agents/architect.md";
+    const current = await readFile(join(target, role), "utf-8");
+    const upstream = await upstreamOf(target, role);
+    const block = current.match(/<!-- maker:addon:saas:start -->\n([\s\S]*?)\n<!-- maker:addon:saas:end -->/)![1]!;
+    // Versão anterior do template sem a última linha; o bloco foi anexado no fim, como faz o maker add.
+    const lines = upstream.trimEnd().split("\n");
+    const previous = lines.slice(0, -1).join("\n") + "\n";
+    const local = upsertBlock(previous, "saas", block);
+    const baseHash = sha256(Buffer.from(previous));
+    await writeFile(join(target, ".maker", "bases", baseHash), previous);
+    await writeFile(join(target, role), local);
+    const manifest = (await readManifest(target))!;
+    manifest.files[role] = { ...manifest.files[role]!, hash: sha256(Buffer.from(local)), baseHash };
+    await writeManifest(target, manifest);
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runUpdate({ target });
+    expect(log.mock.calls.flat().join("\n")).not.toContain("precisam de mediação");
+    expect(await readFile(join(target, role), "utf-8")).toBe(upsertBlock(upstream, "saas", block));
+    expect(process.exitCode ?? 0).toBe(0);
+  });
+
+  it("aplica exportação feita com --no-merge no mesmo modo", async () => {
+    const target = await initialized();
+    const { local } = await conflicted(target);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    await runUpdate({ target, export: true, merge: false });
+    const dir = join(target, DEFAULT_MEDIATION_DIR);
+    const items: Item[] = JSON.parse(await readFile(join(dir, "mediation.json"), "utf-8")).items;
+    const item = items.find((entry) => entry.path === "AGENTS.md")!;
+    expect(item.category).toBe("local-edit");
+    await writeFile(join(dir, "items", item.id, "resolved"), local);
+    await runUpdate({ target, applyResolutions: true });
+    expect(existsSync(dir)).toBe(false);
+  });
+
+  it("update com mediação pendente sai com exit code próprio", async () => {
+    const target = await initialized();
+    await appendFile(join(target, "AGENTS.md"), "\nRegra local sem base.\n");
+    const manifest = (await readManifest(target))!;
+    manifest.files["AGENTS.md"] = { hash: "0".repeat(64), source: manifest.files["AGENTS.md"]!.source };
+    await writeManifest(target, manifest);
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runUpdate({ target, dryRun: true });
+    expect(process.exitCode).toBe(PENDING_EXIT_CODE);
+    process.exitCode = 0;
+    await runUpdate({ target });
+    expect(process.exitCode).toBe(PENDING_EXIT_CODE);
+    expect(log.mock.calls.flat().join("\n")).toContain("Update aplicado com pendências");
+    expect(await readFile(join(target, "AGENTS.md"), "utf-8")).toContain("Regra local sem base.");
+  });
+
+  it("doctor não declara íntegro quando não consegue planejar o update", async () => {
+    const target = await initialized();
+    const manifest = (await readManifest(target))!;
+    (manifest.config!.layout as { frontendGlobs: unknown }).frontendGlobs = "não é lista";
+    await writeManifest(target, manifest);
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runDoctor({ target });
+    const output = log.mock.calls.flat().join("\n");
+    expect(output).toContain("não foi possível planejar o update");
+    expect(output).not.toContain("Install íntegro");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("sentinela de config cobre todas as folhas de texto, exceto projeto e agente", () => {
+    const config = parseConfig({ project: { name: "Nimbus" }, commands: { dev: "just dev" } });
+    const sentinel = sentinelConfig(config);
+    expect(sentinel.project).toEqual(config.project);
+    expect(sentinel.agent).toBe(config.agent);
+    const leaves = JSON.stringify({ layout: sentinel.layout, commands: sentinel.commands }).match(/"[^"]*"/g)!
+      .filter((value) => !["\"layout\"", "\"commands\"", "\"frontendGlobs\"", "\"backendGlobs\"", "\"verify\"", "\"build\"", "\"test\"", "\"dev\""].includes(value));
+    expect(leaves.every((value) => value.startsWith("\"maker-sentinel-"))).toBe(true);
   });
 
   it("só sugere caminhos disponíveis no aviso de mediação", () => {

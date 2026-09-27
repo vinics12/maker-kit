@@ -15,9 +15,9 @@ import { createPlan, formatPlan, inspectTarget, planWrite, type ChangePlan, type
 import { applyChangePlan, assertNoPendingTransactions } from "../changes/transaction.js";
 import { planLegacyAddonAgents, type LegacyAgentReport } from "../agents/migrate.js";
 import { sharedRoleReference } from "../agents/reference.js";
-import { reinjectBlocks } from "../addons/apply.js";
+import { afterBlockRemoval, reinjectBlocks } from "../addons/apply.js";
 import { addonBlocks, sameText } from "../addons/inject.js";
-import { applyResolutions, exportMediation, mediationHint, type MediationCandidate, type MediationCategory } from "./mediation.js";
+import { applyResolutions, exportMediation, exportedMergeMode, mediationHint, type MediationCandidate, type MediationCategory } from "./mediation.js";
 
 const CONFIG_UNKNOWN = "depende de config não recuperada";
 /** Alvo de add-on já no template atual: conta como atualizado, não como preservado por segurança. */
@@ -32,7 +32,12 @@ export interface UpdateOptions {
   export?: string | true;
   /** Aplica as propostas escritas sobre uma exportação. */
   applyResolutions?: string | true;
+  /** Aceita propostas que descartam linhas customizadas (só com aprovação explícita do dono). */
+  acceptDropped?: boolean;
 }
+
+/** Exit code do update aplicado (ou do dry-run) quando sobra trabalho que ele não resolve sozinho. */
+export const PENDING_EXIT_CODE = 2;
 
 /** Resultado do planejamento, sem escrever nada: usado pelo update, pela mediação e pelo doctor. */
 export interface UpdatePlanning {
@@ -49,14 +54,18 @@ export async function runUpdate(opts: UpdateOptions): Promise<void> {
   const targetDir = resolve(opts.target ?? process.cwd());
   if (opts.export && opts.applyResolutions) throw new Error("Use --export ou --apply-resolutions, não os dois juntos.");
   if (opts.dryRun || opts.export) await assertNoPendingTransactions(targetDir);
-  const planning = await planUpdate(targetDir, { merge: opts.merge });
+  // As propostas são validadas contra os candidatos do mesmo modo (--no-merge ou não) da exportação.
+  const merge = opts.applyResolutions ? (await exportedMergeMode(targetDir, opts.applyResolutions)) ?? opts.merge : opts.merge;
+  const planning = await planUpdate(targetDir, { merge });
   const { plan, reports, mediation, unresolved, defaulted, config, recovered } = planning;
   if ((opts.export || opts.applyResolutions) && !recovered) {
     throw new Error("Config do projeto não recuperada: crie maker.config.json com os valores usados no init antes de mediar o update.");
   }
   // A mediação usa os candidatos recalculados agora, não o que o índice exportado declara.
-  if (opts.applyResolutions) return applyResolutions(targetDir, opts.applyResolutions, config, mediation, { dryRun: opts.dryRun });
-  if (opts.export) return exportMediation(targetDir, opts.export, mediation, config);
+  if (opts.applyResolutions) {
+    return applyResolutions(targetDir, opts.applyResolutions, config, mediation, { dryRun: opts.dryRun, acceptDropped: opts.acceptDropped });
+  }
+  if (opts.export) return exportMediation(targetDir, opts.export, mediation, config, { merge: merge !== false });
 
   if (unresolved.length || defaulted.length) {
     // A 0.2.x não persistia a config: sem maker.config.json no projeto não há fonte fiel.
@@ -66,18 +75,23 @@ export async function runUpdate(opts: UpdateOptions): Promise<void> {
     console.log(pc.yellow("Ação recomendada: crie maker.config.json com os valores usados no init e execute maker update --dry-run; os arquivos acima são então renderizados com ela."));
   }
   const conflicted = plan.changes.some((change) => change.action === "conflict");
-  if (mediation.length) {
-    console.log(pc.yellow(mediationHint(mediation.length, {
-      configKnown: recovered, skillInstalled: skillInstalled(targetDir), updateBlocked: conflicted && !opts.dryRun })));
-  }
+  const degradedAgents = reports.filter((report) => report.status === "degraded").length;
+  const hint = () => mediation.length && console.log(pc.yellow(mediationHint(mediation.length, {
+    configKnown: recovered, skillInstalled: skillInstalled(targetDir), updateBlocked: conflicted && !opts.dryRun })));
   if (opts.dryRun) {
+    hint();
     printAgentReports(reports, "planejado");
     console.log(formatPlan(plan));
     if (conflicted) process.exitCode = 1;
+    else if (mediation.length || degradedAgents) process.exitCode = PENDING_EXIT_CODE;
     return;
   }
+  // Com conflito a transação é recusada: o aviso vem antes, e só pode sugerir o que já existe.
+  if (conflicted) hint();
   // Aplica antes de relatar: com conflito a transação é recusada e nenhuma migração acontece.
   await applyChangePlan(plan);
+  // Depois de aplicar, a skill maker-update já está instalada.
+  hint();
   printAgentReports(reports, "aplicado");
   const merged = plan.changes.filter((change) => change.resolution === "merge").length;
   const updated = plan.changes.filter((change) => (change.action === "update" || change.action === "create") && change.source !== "metadata" && change.resolution !== "merge").length;
@@ -88,6 +102,10 @@ export async function runUpdate(opts: UpdateOptions): Promise<void> {
     const migrated = reports.filter((report) => report.status === "migrated" || report.status === "adapter").length;
     const degraded = reports.length - migrated;
     console.log((degraded ? pc.yellow : pc.green)(`${migrated} agente(s) migrado(s), ${degraded} permanece(m) degradado(s).`));
+  }
+  if (mediation.length || degradedAgents) {
+    console.log(pc.yellow(`Update aplicado com pendências (exit code ${PENDING_EXIT_CODE}): resolva a mediação e os agentes degradados acima.`));
+    process.exitCode = PENDING_EXIT_CODE;
   }
 }
 
@@ -144,7 +162,11 @@ export async function planUpdate(targetDir: string, opts: { merge?: boolean } = 
             await mediate("addon", "template novo em arquivo controlado por add-on; merge desabilitado", recorded.baseHash);
           } else {
             const base = recorded.baseHash ? await readBase(targetDir, recorded.baseHash) : null;
-            const merged = base ? mergeText(current.content!, base, upstream) : null;
+            // Sem customização além dos blocos: reinjeta-os no template novo. O diff3 acusaria conflito
+            // quando o template muda na mesma região onde o bloco foi inserido (ex.: fim do papel).
+            const reinjected = base && sameText(reinjectBlocks(file.rel, base.toString("utf-8"), local), local)
+              ? Buffer.from(reinjectBlocks(file.rel, upstream.toString("utf-8"), local)) : null;
+            const merged = reinjected ?? (base ? mergeText(current.content!, base, upstream) : null);
             if (merged && sameBlocks(local, merged.toString("utf-8"))) {
               changes.push(mergeChange(await planWrite({ targetDir, path: file.rel, content: merged, source: recorded.source,
                 reason: "template novo mesclado preservando os blocos de add-on", force: true })));
@@ -169,7 +191,8 @@ export async function planUpdate(targetDir: string, opts: { merge?: boolean } = 
       } else if (configDependent.has(file.rel) || configDependent.has(sharedRoleOf(file.rel))) {
         preserve(CONFIG_UNKNOWN);
         unresolved.push(file.rel);
-      } else if (!recorded || (!recorded.edited && current.hash === (recorded.baseHash ?? recorded.hash))) {
+      } else if (!recorded || (!recorded.edited && current.hash === (recorded.baseHash ?? recorded.hash)) ||
+          (recorded.edited && await matchesRemovedTemplate(file.rel, current.content!, upstream, recovered ? ctx : undefined))) {
         changes.push(await planWrite({ targetDir, path: file.rel, content: upstream, source: file.entry.source, reason: "nova versão upstream", force: true }));
         next.files[file.rel] = manifestEntry(file.entry, upstreamHash, upstreamHash);
       } else if (opts.merge === false) {
@@ -233,6 +256,18 @@ export async function planUpdate(targetDir: string, opts: { merge?: boolean } = 
   return { plan, reports, mediation, unresolved, defaulted, config, recovered };
 }
 
+/**
+ * Arquivo marcado como editado por um `remove` feito sem config: com a config disponível, é reavaliado
+ * contra os templates conhecidos como o `remove` os deixaria; sem customização, recebe o upstream.
+ */
+async function matchesRemovedTemplate(path: string, content: Buffer, upstream: Buffer, ctx?: RenderContext): Promise<boolean> {
+  if (!ctx) return false;
+  const role = path.match(/^\.claude\/agents\/([a-z0-9-]+)\.md$/)?.[1];
+  const templates = [upstream.toString("utf-8"), ...(role ? [await legacyAgent(ctx, role)] : [])].filter((t): t is string => !!t);
+  const text = content.toString("utf-8");
+  return templates.some((template) => sameText(text, afterBlockRemoval(path, template)) || sameText(text, template));
+}
+
 /** Merge cujo resultado já é o conteúdo atual não é anunciado como mesclado. */
 function mergeChange(change: PlannedChange): PlannedChange {
   if (change.action !== "preserve") change.resolution = "merge";
@@ -251,7 +286,7 @@ function sameBlocks(before: string, after: string): boolean {
   return a.size === b.size && [...a].every(([id, content]) => b.get(id) === content);
 }
 
-function skillInstalled(targetDir: string): boolean {
+export function skillInstalled(targetDir: string): boolean {
   return existsSync(join(targetDir, ".claude/skills/maker-update/SKILL.md")) ||
     existsSync(join(targetDir, ".agents/skills/maker-update/SKILL.md"));
 }
@@ -280,19 +315,33 @@ function printAgentReports(reports: LegacyAgentReport[], phase: "planejado" | "a
 
 /**
  * Sem config registrada (manifests 0.2.x, que não a persistiam), os padrões só são fiéis para
- * arquivos que não dependem dela: renderiza com valores sentinela e compara.
+ * arquivos que não dependem dela: renderiza também com valores sentinela e compara.
  */
 async function configDependentFiles(expected: AppliedFile[], config: MakerConfig, agents: AgentProvider[], installedAt: string): Promise<Set<string>> {
   const staging = await mkdtemp(join(tmpdir(), "maker-update-config-"));
   try {
-    const sentinel = parseConfig({ ...config,
-      layout: { frontendGlobs: ["maker-sentinel-frontend/**"], backendGlobs: ["maker-sentinel-backend/**"] },
-      commands: { verify: "maker-sentinel verify", build: "maker-sentinel build", test: "maker-sentinel test", dev: "maker-sentinel dev" } });
-    const probe = new Map((await applyEngine(staging, buildContext(sentinel, installedAt), agents)).map((file) => [file.rel, file.entry.hash]));
+    const probe = new Map((await applyEngine(staging, buildContext(sentinelConfig(config), installedAt), agents)).map((file) => [file.rel, file.entry.hash]));
     return new Set(expected.filter((file) => probe.get(file.rel) !== file.entry.hash).map((file) => file.rel));
   } finally {
     await rm(staging, { recursive: true, force: true });
   }
+}
+
+/**
+ * Troca toda folha de texto da config por um sentinela, para que campos novos do schema entrem na
+ * detecção sem manutenção. `project` (conhecido pelo manifest) e `agent` (enum) ficam como estão.
+ */
+export function sentinelConfig(config: MakerConfig): MakerConfig {
+  const replace = (value: unknown, path: string): unknown => {
+    if (typeof value === "string") return `maker-sentinel-${path}`;
+    if (Array.isArray(value)) return value.length ? value.map((item, index) => replace(item, `${path}-${index}`)) : [`maker-sentinel-${path}`];
+    if (value && typeof value === "object") {
+      return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, replace(item, path ? `${path}-${key}` : key)]));
+    }
+    return value;
+  };
+  const { project, agent, ...rest } = config;
+  return parseConfig({ ...(replace(rest, "") as object), project, agent });
 }
 
 /**

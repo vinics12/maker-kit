@@ -514,6 +514,19 @@ describe("instalação real 0.2.0", () => {
     expect(output(log)).toContain("precisam de mediação");
   });
 
+  it("maker remove sem config é reavaliado quando a config aparece, sem mediação", async () => {
+    const target = await project(false);
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    await removeAddon(target, "saas");
+    expect((await readManifest(target))!.files[constitution]!.edited).toBe(true);
+    await cp(join(project020, "maker.config.json"), join(target, "maker.config.json"));
+    await runUpdate({ target });
+    expect(output(log)).not.toContain("precisam de mediação");
+    expect((await validateAgentIntegration(target, "claude")).issues).toEqual([]);
+    const manifest = (await readManifest(target))!;
+    expect(Object.values(manifest.files).some((entry) => entry.edited)).toBe(false);
+  });
+
   it("alvo de add-on 0.2.0 sem base e sem customização adota a base sem pedir mediação", async () => {
     const target = await project();
     const log = vi.spyOn(console, "log").mockImplementation(() => {});

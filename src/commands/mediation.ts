@@ -3,6 +3,7 @@ import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import pc from "picocolors";
 import { z } from "zod";
+import { diffComm } from "node-diff3";
 import { addonStateSchema, type AddonState } from "../addons/state.js";
 import { sharedRoleReference } from "../agents/reference.js";
 import { addonBlocks } from "../addons/inject.js";
@@ -53,6 +54,8 @@ const indexSchema = z.object({
   format: z.literal(1),
   makerVersion: z.string(),
   configHash: z.string(),
+  /** Modo do update na exportação: o apply recalcula os candidatos no mesmo modo. */
+  merge: z.boolean().optional(),
   items: z.array(itemSchema),
 });
 type MediationItem = z.infer<typeof itemSchema>;
@@ -90,11 +93,22 @@ async function proposalsIn(dir: string): Promise<string[]> {
   return found;
 }
 
+/** Modo `--no-merge` registrado numa exportação, se houver uma legível em `dirOption`. */
+export async function exportedMergeMode(targetDir: string, dirOption: string | true): Promise<boolean | undefined> {
+  try {
+    const dir = resolve(targetDir, dirOption === true ? DEFAULT_MEDIATION_DIR : dirOption);
+    return indexSchema.parse(JSON.parse(await readFile(join(dir, INDEX), "utf-8"))).merge;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function exportMediation(
   targetDir: string,
   dirOption: string | true,
   candidates: MediationCandidate[],
   config: unknown,
+  mode: { merge: boolean } = { merge: true },
 ): Promise<void> {
   const dir = resolve(targetDir, dirOption === true ? DEFAULT_MEDIATION_DIR : dirOption);
   if (existsSync(dir)) {
@@ -131,7 +145,7 @@ export async function exportMediation(
       upstreamHash: sha256(candidate.upstream),
     });
   }
-  const index = { format: 1 as const, makerVersion: makerVersion(), configHash: configHash(config), items };
+  const index = { format: 1 as const, makerVersion: makerVersion(), configHash: configHash(config), merge: mode.merge, items };
   await writeFile(join(dir, INDEX), JSON.stringify(index, null, 2) + "\n");
   await writeFile(join(dir, "README.md"), [
     "# Mediação de update do maker",
@@ -152,7 +166,11 @@ export async function exportMediation(
   console.log(pc.yellow(`Escreva items/<id>/resolved e aplique com maker update --apply-resolutions${dirOption === true ? "" : ` ${shown}`}.`));
 }
 
-export interface ApplyResolutionsOptions { dryRun?: boolean }
+export interface ApplyResolutionsOptions {
+  dryRun?: boolean;
+  /** Aceita propostas que descartam linhas customizadas pelo dono (exige aprovação explícita dele). */
+  acceptDropped?: boolean;
+}
 
 /**
  * `candidates` é o que o maker exportaria agora. Cada proposta só é aceita para um item que ainda
@@ -211,6 +229,7 @@ export async function applyResolutions(
     groups.set(key, [...(groups.get(key) ?? []), item]);
   }
   const selected: MediationItem[] = [];
+  const dropped = new Map<string, string[]>();
   for (const [key, members] of groups) {
     const done = members.filter((item) => resolved.has(item.id));
     if (!done.length) continue;
@@ -242,7 +261,18 @@ export async function applyResolutions(
         if (markers(text).size) errors.push(`${item.path}: blocos de add-on devem ir para o papel compartilhado, não para o adapter`);
       }
     }
+    // Linhas que o dono acrescentou ou mudou (local sem equivalente na base) precisam estar em alguma
+    // proposta do grupo; descartá-las exige a aprovação explícita do dono (--accept-dropped).
+    const kept = new Set(members.flatMap((item) => contentLines(resolved.get(item.id)!.toString("utf-8"))));
+    const lost = members.flatMap((item) => customizedLines(matched.get(item.id)!)).filter((line) => !kept.has(line));
+    if (lost.length) dropped.set(paths, [...new Set(lost)]);
     selected.push(...members);
+  }
+  for (const [paths, lines] of dropped) {
+    const listed = lines.slice(0, 20).map((line) => `\n    - ${line}`).join("") + (lines.length > 20 ? `\n    … e mais ${lines.length - 20}` : "");
+    const message = `${paths}: a proposta descarta ${lines.length} linha(s) customizada(s):${listed}`;
+    if (opts.acceptDropped) console.log(pc.yellow(`! ${message}\n  aceito com --accept-dropped.`));
+    else errors.push(`${message}\n  mantenha-as, ou reaplique com --accept-dropped se o dono aprovou a remoção`);
   }
   if (errors.length) {
     for (const error of errors) console.error(pc.red(`✗ ${error}`));
@@ -299,6 +329,7 @@ export async function applyResolutions(
     source: "metadata", reason: "registrar propostas mediadas", force: true }));
   const plan = createPlan(targetDir, changes);
   if (opts.dryRun) {
+    for (const item of selected) printDiff(item.path, matched.get(item.id)!.local?.toString("utf-8") ?? "", resolved.get(item.id)!.toString("utf-8"));
     console.log(formatPlan(plan));
     return;
   }
@@ -337,6 +368,29 @@ function validateText(content: Buffer): string | undefined {
   if (!text.trim()) return "vazia";
   if (CONFLICT_MARKER.test(text)) return "contém marcadores de conflito";
   return undefined;
+}
+
+/** Linhas com conteúdo, sem bordas e sem marcadores de add-on (checados à parte). */
+function contentLines(text: string): string[] {
+  return text.split(/\r?\n/).map((line) => line.trim()).filter((line) => line && !/^<!-- maker:addon:[a-z0-9-]+:(start|end) -->$/.test(line));
+}
+
+/** Linhas do local ausentes da base (ou, sem base, do upstream): o que o dono acrescentou ou mudou. */
+function customizedLines(candidate: MediationCandidate): string[] {
+  if (!candidate.local) return [];
+  const reference = new Set(contentLines((candidate.base ?? candidate.upstream).toString("utf-8")));
+  return contentLines(candidate.local.toString("utf-8")).filter((line) => !reference.has(line));
+}
+
+/** Diff local → proposta, só com as linhas alteradas, para revisão no --dry-run. */
+function printDiff(path: string, local: string, proposal: string): void {
+  const chunks = diffComm(local.split("\n"), proposal.split("\n"));
+  const changed = chunks.filter((chunk) => !chunk.common);
+  console.log(pc.bold(`--- ${path} (local) → proposta: ${changed.length ? `${changed.length} trecho(s) alterado(s)` : "sem mudanças"}`));
+  for (const chunk of changed) {
+    for (const line of chunk.buffer1 ?? []) console.log(pc.red(`- ${line}`));
+    for (const line of chunk.buffer2 ?? []) console.log(pc.green(`+ ${line}`));
+  }
 }
 
 function markers(text: string): Set<string> {

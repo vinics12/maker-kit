@@ -40,6 +40,12 @@ export function reinjectBlocks(path: string, template: string, local: string): s
   return result;
 }
 
+/** Como o `remove` deixa um template que recebeu um bloco: sem o placeholder e com o espaçamento de stripBlock. */
+export function afterBlockRemoval(path: string, template: string): string {
+  const probe = "maker-probe";
+  return stripBlock(injectBlock(path, template, probe, probe), probe);
+}
+
 function addonContext(manifest: Manifest, knobs: Record<string, string>) {
   return {
     project: manifest.project,
