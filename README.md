@@ -202,6 +202,9 @@ add-on; corpos personalizados são preservados, com aviso, e conteúdo divergent
 sinalizado para revisão. Com `--no-merge` a migração só é listada. Veja
 [migração de agentes legados](docs/features/transactional-update.md#migração-dos-agentes-legados).
 
+Vindo da 0.2.x ou 0.4.x? Siga o [guia de migração](docs/MIGRATION.md): diagnóstico, um caminho por
+sintoma (agentes degradados, add-on reaplicado, config ausente, conflitos) e a checklist final.
+
 ---
 
 ## O que é instalado no projeto-alvo
