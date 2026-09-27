@@ -77,7 +77,7 @@ async function knownTemplates(rel: string, upstream: Awaited<ReturnType<typeof r
   if (!upstream) return [];
   const templates = upstream.files.has(rel) ? [upstream.files.get(rel)!.toString("utf-8")] : [];
   const role = rel.match(/^\.claude\/agents\/([a-z0-9-]+)\.md$/)?.[1];
-  const legacy = role ? await legacyAgent(buildContext(upstream.config), role) : undefined;
+  const legacy = role ? await legacyAgent(buildContext(upstream.config, upstream.installedAt), role) : undefined;
   if (legacy) templates.push(legacy);
   return templates;
 }

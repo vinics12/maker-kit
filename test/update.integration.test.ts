@@ -70,6 +70,26 @@ describe("maker update transacional", () => {
     log.mockRestore();
   });
 
+  it("update em outro dia não reescreve arquivos intactos pela data de geração", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-01-01T12:00:00Z"));
+      const target = await initialized("maker-update-day-");
+      const constitution = join(target, ".specify/memory/constitution.md");
+      const before = await readFile(constitution, "utf-8");
+      expect(before).toContain("maker em 2026-01-01");
+      vi.setSystemTime(new Date("2026-03-15T12:00:00Z"));
+      const log = vi.spyOn(console, "log").mockImplementation(() => {});
+      await runUpdate({ target, dryRun: true });
+      expect(log.mock.calls.flat().join("\n")).not.toMatch(/^(create|update|remove|merge)\s/m);
+      await runUpdate({ target });
+      expect(await readFile(constitution, "utf-8")).toBe(before);
+      log.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("conflito preserva arquivos e manifest", async () => {
     const target = await initialized("maker-update-conflict-");
     const path = "AGENTS.md";

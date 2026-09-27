@@ -103,9 +103,9 @@ export async function planUpdate(targetDir: string, opts: { merge?: boolean } = 
   const next: Manifest = structuredClone(prior);
   next.files = { ...prior.files };
   try {
-    const ctx = buildContext(config);
+    const ctx = buildContext(config, prior.installedAt);
     const expected = await applyEngine(staging, ctx, agents);
-    const configDependent = recovered ? new Set<string>() : await configDependentFiles(expected, config, agents);
+    const configDependent = recovered ? new Set<string>() : await configDependentFiles(expected, config, agents, prior.installedAt);
     const migration = await planLegacyAddonAgents(targetDir, staging, expected, next,
       { ctx, migrate: opts.merge !== false, configKnown: recovered, configDependent });
     changes.push(...migration.changes);
@@ -278,13 +278,13 @@ function printAgentReports(reports: LegacyAgentReport[], phase: "planejado" | "a
  * Sem config registrada (manifests 0.2.x, que não a persistiam), os padrões só são fiéis para
  * arquivos que não dependem dela: renderiza com valores sentinela e compara.
  */
-async function configDependentFiles(expected: AppliedFile[], config: MakerConfig, agents: AgentProvider[]): Promise<Set<string>> {
+async function configDependentFiles(expected: AppliedFile[], config: MakerConfig, agents: AgentProvider[], installedAt: string): Promise<Set<string>> {
   const staging = await mkdtemp(join(tmpdir(), "maker-update-config-"));
   try {
     const sentinel = parseConfig({ ...config,
       layout: { frontendGlobs: ["maker-sentinel-frontend/**"], backendGlobs: ["maker-sentinel-backend/**"] },
       commands: { verify: "maker-sentinel verify", build: "maker-sentinel build", test: "maker-sentinel test", dev: "maker-sentinel dev" } });
-    const probe = new Map((await applyEngine(staging, buildContext(sentinel), agents)).map((file) => [file.rel, file.entry.hash]));
+    const probe = new Map((await applyEngine(staging, buildContext(sentinel, installedAt), agents)).map((file) => [file.rel, file.entry.hash]));
     return new Set(expected.filter((file) => probe.get(file.rel) !== file.entry.hash).map((file) => file.rel));
   } finally {
     await rm(staging, { recursive: true, force: true });

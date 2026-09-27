@@ -148,13 +148,13 @@ async function loadConfig(opts) {
 
 // src/render/engine.ts
 import Handlebars from "handlebars";
-function buildContext(config) {
+function buildContext(config, installedAt) {
   return {
     project: { ...config.project, slug: config.project.slug },
     layout: config.layout,
     commands: config.commands,
     agent: config.agent,
-    generatedAt: (/* @__PURE__ */ new Date()).toISOString().slice(0, 10)
+    generatedAt: (installedAt ?? (/* @__PURE__ */ new Date()).toISOString()).slice(0, 10)
   };
 }
 var hb = Handlebars.create();
@@ -701,7 +701,7 @@ async function runInit(opts) {
     ...loadedConfig,
     agent: opts.agent ?? priorManifest?.config?.agent ?? agents[0]
   });
-  const ctx = buildContext(config);
+  const ctx = buildContext(config, priorManifest?.installedAt);
   const collisions = await findInitCollisions(targetDir, ctx, agents);
   if (collisions.length && !opts.force && !opts.dryRun) {
     throw new Error(
@@ -1259,10 +1259,10 @@ async function renderUpstream(targetDir, manifest) {
   if (!recovered) return null;
   const staging = await mkdtemp2(join13(tmpdir2(), "maker-upstream-"));
   try {
-    const expected = await applyEngine(staging, buildContext(config), enabledAgents(manifest));
+    const expected = await applyEngine(staging, buildContext(config, manifest.installedAt), enabledAgents(manifest));
     const files = /* @__PURE__ */ new Map();
     for (const file of expected) files.set(file.rel, await readFile12(join13(staging, file.rel)));
-    return { files, config };
+    return { files, config, installedAt: manifest.installedAt };
   } finally {
     await rm4(staging, { recursive: true, force: true });
   }
@@ -1557,7 +1557,7 @@ async function knownTemplates(rel, upstream) {
   if (!upstream) return [];
   const templates = upstream.files.has(rel) ? [upstream.files.get(rel).toString("utf-8")] : [];
   const role = rel.match(/^\.claude\/agents\/([a-z0-9-]+)\.md$/)?.[1];
-  const legacy = role ? await legacyAgent(buildContext(upstream.config), role) : void 0;
+  const legacy = role ? await legacyAgent(buildContext(upstream.config, upstream.installedAt), role) : void 0;
   if (legacy) templates.push(legacy);
   return templates;
 }
@@ -2064,9 +2064,9 @@ async function planUpdate(targetDir, opts = {}) {
   const next = structuredClone(prior);
   next.files = { ...prior.files };
   try {
-    const ctx = buildContext(config);
+    const ctx = buildContext(config, prior.installedAt);
     const expected = await applyEngine(staging, ctx, agents);
-    const configDependent = recovered ? /* @__PURE__ */ new Set() : await configDependentFiles(expected, config, agents);
+    const configDependent = recovered ? /* @__PURE__ */ new Set() : await configDependentFiles(expected, config, agents, prior.installedAt);
     const migration = await planLegacyAddonAgents(
       targetDir,
       staging,
@@ -2241,7 +2241,7 @@ function printAgentReports(reports, phase) {
   console.log(pc3.yellow("A\xE7\xE3o recomendada para os agentes que continuam sem refer\xEAncia ao papel compartilhado:"));
   for (const action of actions) console.log(pc3.yellow(`  - ${action}`));
 }
-async function configDependentFiles(expected, config, agents) {
+async function configDependentFiles(expected, config, agents, installedAt) {
   const staging = await mkdtemp3(join17(tmpdir3(), "maker-update-config-"));
   try {
     const sentinel = parseConfig({
@@ -2249,7 +2249,7 @@ async function configDependentFiles(expected, config, agents) {
       layout: { frontendGlobs: ["maker-sentinel-frontend/**"], backendGlobs: ["maker-sentinel-backend/**"] },
       commands: { verify: "maker-sentinel verify", build: "maker-sentinel build", test: "maker-sentinel test", dev: "maker-sentinel dev" }
     });
-    const probe = new Map((await applyEngine(staging, buildContext(sentinel), agents)).map((file) => [file.rel, file.entry.hash]));
+    const probe = new Map((await applyEngine(staging, buildContext(sentinel, installedAt), agents)).map((file) => [file.rel, file.entry.hash]));
     return new Set(expected.filter((file) => probe.get(file.rel) !== file.entry.hash).map((file) => file.rel));
   } finally {
     await rm6(staging, { recursive: true, force: true });
@@ -2741,9 +2741,9 @@ async function runAgentAdd(providerInput, opts) {
     targetDir,
     provider,
     manifest.files,
-    buildContext(config)
+    buildContext(config, manifest.installedAt)
   );
-  const applied = await applyAgentProvider(targetDir, buildContext(config), provider);
+  const applied = await applyAgentProvider(targetDir, buildContext(config, manifest.installedAt), provider);
   for (const file of applied) manifest.files[file.rel] = file.entry;
   manifest.schemaVersion = 3;
   manifest.config = config;

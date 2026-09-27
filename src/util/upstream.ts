@@ -16,15 +16,15 @@ export async function resolveConfig(targetDir: string, stored: MakerConfig | und
 }
 
 /** Arquivos que o engine gera hoje para o install, ou null quando a config não é recuperável. */
-export async function renderUpstream(targetDir: string, manifest: Manifest): Promise<{ files: Map<string, Buffer>; config: MakerConfig } | null> {
+export async function renderUpstream(targetDir: string, manifest: Manifest): Promise<{ files: Map<string, Buffer>; config: MakerConfig; installedAt: string } | null> {
   const { config, recovered } = await resolveConfig(targetDir, manifest.config, manifest.project);
   if (!recovered) return null;
   const staging = await mkdtemp(join(tmpdir(), "maker-upstream-"));
   try {
-    const expected = await applyEngine(staging, buildContext(config), enabledAgents(manifest));
+    const expected = await applyEngine(staging, buildContext(config, manifest.installedAt), enabledAgents(manifest));
     const files = new Map<string, Buffer>();
     for (const file of expected) files.set(file.rel, await readFile(join(staging, file.rel)));
-    return { files, config };
+    return { files, config, installedAt: manifest.installedAt };
   } finally {
     await rm(staging, { recursive: true, force: true });
   }
