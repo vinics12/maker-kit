@@ -188,6 +188,7 @@ describe("mediação de update", () => {
     };
     await reject(await readFile(join(itemDir, "upstream"), "utf-8"), "bloco do add-on saas removido");
     await reject(current.replace(block[0], "<!-- maker:addon:saas:start -->\n<!-- maker:addon:saas:end -->"), "conteúdo do bloco do add-on saas alterado");
+    await reject(current.replace(block[1]!, `${block[1]} `), "conteúdo do bloco do add-on saas alterado");
     await reject(`${current}\n<!-- maker:addon:evil:start -->\nregra\n<!-- maker:addon:evil:end -->\n`, "bloco do add-on evil não existia");
 
     const proposal = current.replace("Linha do dono.", "Linha do dono, revisada com o template novo.");

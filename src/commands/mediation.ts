@@ -283,7 +283,7 @@ export async function applyResolutions(
     const after = blocksOf(members.map((item) => resolved.get(item.id)!.toString("utf-8")));
     for (const [id, content] of before) {
       if (!after.has(id)) errors.push(`${paths}: bloco do add-on ${id} removido; mantenha-o intacto`);
-      else if (after.get(id)!.trim() !== content.trim()) errors.push(`${paths}: conteúdo do bloco do add-on ${id} alterado; mantenha-o byte a byte`);
+      else if (after.get(id) !== content) errors.push(`${paths}: conteúdo do bloco do add-on ${id} alterado; mantenha-o byte a byte`);
     }
     for (const id of after.keys()) {
       if (!before.has(id)) errors.push(`${paths}: bloco do add-on ${id} não existia; blocos só são criados por maker add`);

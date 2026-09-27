@@ -111,7 +111,8 @@ agentes pendentes migram.
 
 O merge 3-way resolve sozinho quando você e o template mudaram regiões diferentes. Sobra para
 mediação: mesma região alterada pelos dois, arquivos sem base exata que diferem do template e
-agentes legados customizados. Um `conflict` bloqueia o update inteiro até ser resolvido.
+agentes legados degradados que não puderam migrar automaticamente. Agentes legados customizados
+com destino seguro migram no próprio update. Um `conflict` bloqueia o update inteiro até ser resolvido.
 
 **Com um agente (recomendado).** Abra o projeto no Claude Code e rode `/maker-update` (no Codex,
 `$maker-update`). Se a skill ainda não está instalada porque o update foi bloqueado por conflito,

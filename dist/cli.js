@@ -1731,6 +1731,28 @@ async function proposalsIn(dir) {
   }
   return found;
 }
+async function foreignFiles(dir, ids) {
+  const allowed = /* @__PURE__ */ new Set([INDEX, "README.md", "items"]);
+  const foreign = [];
+  for (const entry of await readdir4(dir, { withFileTypes: true })) {
+    if (!allowed.has(entry.name) || entry.isSymbolicLink()) foreign.push(entry.name);
+  }
+  const itemsDir = join16(dir, "items");
+  if (!existsSync11(itemsDir)) return foreign;
+  const known = new Set(ids);
+  for (const item of await readdir4(itemsDir, { withFileTypes: true })) {
+    if (!known.has(item.name) || !item.isDirectory()) {
+      foreign.push(`items/${item.name}`);
+      continue;
+    }
+    for (const file of await readdir4(join16(itemsDir, item.name), { withFileTypes: true })) {
+      if (!["upstream", "local", "base", "resolved", "notes.md"].includes(file.name) || !file.isFile()) {
+        foreign.push(`items/${item.name}/${file.name}`);
+      }
+    }
+  }
+  return foreign;
+}
 async function exportedMergeMode(targetDir, dirOption) {
   try {
     const dir = resolve3(targetDir, dirOption === true ? DEFAULT_MEDIATION_DIR : dirOption);
@@ -1749,6 +1771,11 @@ async function exportMediation(targetDir, dirOption, candidates, config, mode = 
     const pending = await proposalsIn(dir);
     if (pending.length) {
       throw new Error(`${dir} tem propostas em andamento (${pending.join(", ")}); aplique-as com maker update --apply-resolutions ou mova-as antes de exportar de novo.`);
+    }
+    if (entries.includes(INDEX)) {
+      const previous = indexSchema.parse(JSON.parse(await readFile15(join16(dir, INDEX), "utf-8")));
+      const foreign = await foreignFiles(dir, previous.items.map((item) => item.id));
+      if (foreign.length) throw new Error(`${dir} cont\xE9m arquivos alheios (${foreign.join(", ")}); mova-os antes de exportar de novo.`);
     }
     await rm5(dir, { recursive: true, force: true });
   }
@@ -1804,6 +1831,8 @@ async function applyResolutions(targetDir, dirOption, currentConfig, candidates,
   const byPath = new Map(candidates.map((candidate) => [candidate.path, candidate]));
   const dir = resolve3(targetDir, dirOption === true ? DEFAULT_MEDIATION_DIR : dirOption);
   const index = indexSchema.parse(JSON.parse(await readFile15(join16(dir, INDEX), "utf-8")));
+  const foreign = await foreignFiles(dir, index.items.map((item) => item.id));
+  if (foreign.length) throw new Error(`${dir} cont\xE9m arquivos alheios (${foreign.join(", ")}); mova-os antes de aplicar as propostas.`);
   if (index.makerVersion !== makerVersion()) {
     throw new Error(`Exporta\xE7\xE3o feita com o maker ${index.makerVersion}; exporte de novo com o ${makerVersion()} (maker update --export).`);
   }
@@ -1846,6 +1875,14 @@ async function applyResolutions(targetDir, dirOption, currentConfig, candidates,
   for (const [key, members] of groups) {
     const done = members.filter((item) => resolved.has(item.id));
     if (!done.length) continue;
+    if (members[0].group) {
+      const expected = candidates.filter((candidate) => candidate.group === members[0].group).map((candidate) => candidate.path);
+      const listed = new Set(members.map((item) => item.path));
+      if (expected.length !== members.length || expected.some((path) => !listed.has(path))) {
+        errors.push(`grupo ${key}: o \xEDndice n\xE3o cont\xE9m todos os itens atuais; exporte de novo`);
+        continue;
+      }
+    }
     if (done.length !== members.length) {
       errors.push(`grupo ${key}: resolva todos os itens juntos (${members.map((item) => item.path).join(", ")})`);
       continue;
@@ -1856,7 +1893,7 @@ async function applyResolutions(targetDir, dirOption, currentConfig, candidates,
     const after = blocksOf(members.map((item) => resolved.get(item.id).toString("utf-8")));
     for (const [id, content] of before) {
       if (!after.has(id)) errors.push(`${paths}: bloco do add-on ${id} removido; mantenha-o intacto`);
-      else if (after.get(id).trim() !== content.trim()) errors.push(`${paths}: conte\xFAdo do bloco do add-on ${id} alterado; mantenha-o byte a byte`);
+      else if (after.get(id) !== content) errors.push(`${paths}: conte\xFAdo do bloco do add-on ${id} alterado; mantenha-o byte a byte`);
     }
     for (const id of after.keys()) {
       if (!before.has(id)) errors.push(`${paths}: bloco do add-on ${id} n\xE3o existia; blocos s\xF3 s\xE3o criados por maker add`);
