@@ -343,4 +343,25 @@ describe("mediação de update", () => {
     await expect(runUpdate({ target, export: "notas" })).rejects.toThrow("não é uma exportação do maker");
     expect(await readFile(join(dir, "importante.md"), "utf-8")).toBe("não apagar\n");
   });
+
+  it("não apaga arquivos alheios colocados numa exportação ao reexportar", async () => {
+    const target = await initialized();
+    await conflicted(target);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const { dir } = await exported(target);
+    await writeFile(join(dir, "anotacoes-do-dono.md"), "não apagar\n");
+    await expect(runUpdate({ target, export: true })).rejects.toThrow("arquivos alheios");
+    expect(await readFile(join(dir, "anotacoes-do-dono.md"), "utf-8")).toBe("não apagar\n");
+  });
+
+  it("não apaga arquivos alheios da exportação ao aplicar a última proposta", async () => {
+    const target = await initialized();
+    await conflicted(target);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const { dir, items } = await exported(target);
+    await writeFile(join(dir, "anotacoes-do-dono.md"), "não apagar\n");
+    await writeFile(join(dir, "items", items[0]!.id, "resolved"), await readFile(join(dir, "items", items[0]!.id, "local")));
+    await expect(runUpdate({ target, applyResolutions: true })).rejects.toThrow("arquivos alheios");
+    expect(await readFile(join(dir, "anotacoes-do-dono.md"), "utf-8")).toBe("não apagar\n");
+  });
 });

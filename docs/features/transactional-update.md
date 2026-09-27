@@ -132,6 +132,8 @@ mescla normalmente a partir dela. Em agentes legados, o adapter volta ao engine 
 origem do add-on cujos blocos recebeu, com `injectedTargets` atualizado. Itens aplicados saem da
 exportação, que é removida quando não sobra nenhum. Os ids são estáveis por caminho, e `--export`
 recusa sobrescrever uma exportação com propostas (`resolved`/`notes.md`) ainda não aplicadas.
+Reexportar ou aplicar também recusa o diretório quando ele contém arquivos alheios à exportação;
+mova esses arquivos antes de continuar.
 Mantenha o diretório fora do versionamento (por exemplo, `.maker/mediation/` no `.gitignore`).
 `maker doctor` informa quantos arquivos aguardam mediação, sem tratar isso como install degradado,
 com a mesma orientação contextual do update; se não conseguir planejar o update (ex.: config

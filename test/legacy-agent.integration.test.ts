@@ -589,4 +589,27 @@ describe("instalação real 0.2.0", () => {
     expect(body).not.toContain("maker:addon:saas");
     expect(body).toContain("regra nova no papel compartilhado");
   });
+
+  it("rejeita índice adulterado que omite o adapter de um grupo legado", async () => {
+    const target = await legacy("0.4.0");
+    const adapter = ".claude/agents/architect.md";
+    const shared = ".maker/workflow/agents/architect.md";
+    await appendFile(join(target, shared), "regra nova no papel compartilhado\n");
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await runUpdate({ target, export: true });
+    const dir = join(target, DEFAULT_MEDIATION_DIR);
+    const indexPath = join(dir, "mediation.json");
+    const index = JSON.parse(await readFile(indexPath, "utf-8"));
+    const sharedItem = index.items.find((item: { path: string }) => item.path === shared);
+    expect(index.items.some((item: { path: string }) => item.path === adapter)).toBe(true);
+    const adapterItem = index.items.find((item: { path: string }) => item.path === adapter);
+    index.items = [sharedItem];
+    await writeFile(indexPath, JSON.stringify(index));
+    await rm(join(dir, "items", adapterItem.id), { recursive: true });
+    await writeFile(join(dir, "items", sharedItem.id, "resolved"), await readFile(join(dir, "items", sharedItem.id, "local")));
+    const before = await readFile(join(target, ".maker/manifest.json"));
+    await expect(runUpdate({ target, applyResolutions: true })).rejects.toThrow("Propostas de mediação rejeitadas");
+    expect(await readFile(join(target, ".maker/manifest.json"))).toEqual(before);
+  });
 });

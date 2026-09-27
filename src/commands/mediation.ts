@@ -93,6 +93,30 @@ async function proposalsIn(dir: string): Promise<string[]> {
   return found;
 }
 
+/** A exportação só pode remover arquivos que ela própria criou. */
+async function foreignFiles(dir: string, ids: string[]): Promise<string[]> {
+  const allowed = new Set([INDEX, "README.md", "items"]);
+  const foreign: string[] = [];
+  for (const entry of await readdir(dir, { withFileTypes: true })) {
+    if (!allowed.has(entry.name) || entry.isSymbolicLink()) foreign.push(entry.name);
+  }
+  const itemsDir = join(dir, "items");
+  if (!existsSync(itemsDir)) return foreign;
+  const known = new Set(ids);
+  for (const item of await readdir(itemsDir, { withFileTypes: true })) {
+    if (!known.has(item.name) || !item.isDirectory()) {
+      foreign.push(`items/${item.name}`);
+      continue;
+    }
+    for (const file of await readdir(join(itemsDir, item.name), { withFileTypes: true })) {
+      if (!["upstream", "local", "base", "resolved", "notes.md"].includes(file.name) || !file.isFile()) {
+        foreign.push(`items/${item.name}/${file.name}`);
+      }
+    }
+  }
+  return foreign;
+}
+
 /** Modo `--no-merge` registrado numa exportação, se houver uma legível em `dirOption`. */
 export async function exportedMergeMode(targetDir: string, dirOption: string | true): Promise<boolean | undefined> {
   try {
@@ -120,6 +144,11 @@ export async function exportMediation(
     if (pending.length) {
       throw new Error(`${dir} tem propostas em andamento (${pending.join(", ")}); aplique-as com maker update --apply-resolutions ` +
         "ou mova-as antes de exportar de novo.");
+    }
+    if (entries.includes(INDEX)) {
+      const previous = indexSchema.parse(JSON.parse(await readFile(join(dir, INDEX), "utf-8")));
+      const foreign = await foreignFiles(dir, previous.items.map((item) => item.id));
+      if (foreign.length) throw new Error(`${dir} contém arquivos alheios (${foreign.join(", ")}); mova-os antes de exportar de novo.`);
     }
     await rm(dir, { recursive: true, force: true });
   }
@@ -188,6 +217,8 @@ export async function applyResolutions(
   const byPath = new Map(candidates.map((candidate) => [candidate.path, candidate]));
   const dir = resolve(targetDir, dirOption === true ? DEFAULT_MEDIATION_DIR : dirOption);
   const index = indexSchema.parse(JSON.parse(await readFile(join(dir, INDEX), "utf-8")));
+  const foreign = await foreignFiles(dir, index.items.map((item) => item.id));
+  if (foreign.length) throw new Error(`${dir} contém arquivos alheios (${foreign.join(", ")}); mova-os antes de aplicar as propostas.`);
   if (index.makerVersion !== makerVersion()) {
     throw new Error(`Exportação feita com o maker ${index.makerVersion}; exporte de novo com o ${makerVersion()} (maker update --export).`);
   }
@@ -233,6 +264,14 @@ export async function applyResolutions(
   for (const [key, members] of groups) {
     const done = members.filter((item) => resolved.has(item.id));
     if (!done.length) continue;
+    if (members[0]!.group) {
+      const expected = candidates.filter((candidate) => candidate.group === members[0]!.group).map((candidate) => candidate.path);
+      const listed = new Set(members.map((item) => item.path));
+      if (expected.length !== members.length || expected.some((path) => !listed.has(path))) {
+        errors.push(`grupo ${key}: o índice não contém todos os itens atuais; exporte de novo`);
+        continue;
+      }
+    }
     if (done.length !== members.length) {
       errors.push(`grupo ${key}: resolva todos os itens juntos (${members.map((item) => item.path).join(", ")})`);
       continue;
