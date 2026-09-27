@@ -7,6 +7,7 @@ import { diffComm } from "node-diff3";
 import { addonStateSchema, type AddonState } from "../addons/state.js";
 import { sharedRoleReference } from "../agents/reference.js";
 import { addonBlocks } from "../addons/inject.js";
+import { moveInjectedBlock } from "../agents/migrate.js";
 import { createPlan, formatPlan, inspectTarget, planWrite, type PlannedChange } from "../changes/plan.js";
 import { applyChangePlan, assertNoPendingTransactions } from "../changes/transaction.js";
 import { readManifest, sha256 } from "../render/manifest.js";
@@ -354,6 +355,7 @@ export async function applyResolutions(
         stateUpdates.set(id, entry);
       }
       const sharedPath = `.maker/workflow/agents/${role}.md`;
+      moveInjectedBlock(entry.state, item.path, sharedPath);
       entry.state.injectedTargets = entry.state.injectedTargets.map((path) => path === item.path ? sharedPath : path)
         .filter((path, position, paths) => paths.indexOf(path) === position);
     }

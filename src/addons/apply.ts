@@ -110,6 +110,18 @@ export async function applyAddon(
   const prior = await readAddonState(targetDir, addon.id);
   const owned = new Map((prior?.createdFiles ?? []).map((f) => [f.path, f]));
   const previousCtx = prior ? addonContext(manifest, prior.knobs) : undefined;
+  const injectedBlocks: Record<string, string> = {};
+  /** Bloco instalado que o dono editou: difere do registrado no state (ou, em states antigos, do render anterior). */
+  const blockEdited = (path: string, installed: string | undefined, previousBlock: string | undefined): boolean => {
+    if (installed === undefined) return false;
+    const recorded = prior?.injectedBlocks?.[path];
+    if (recorded) return sha256(Buffer.from(installed)) !== recorded;
+    return installed !== previousBlock;
+  };
+  const recordBlock = (path: string, content: string) => {
+    const installed = addonBlocks(content).get(addon.id);
+    if (installed !== undefined) injectedBlocks[path] = sha256(Buffer.from(installed));
+  };
 
   // 1. Princípios → injetados na seção "Princípios do Projeto" da constitution.
   if (addon.principles.length) {
@@ -123,11 +135,14 @@ export async function applyAddon(
       ? (await Promise.all(addon.principles.map(async (p) => (await renderFrom(dir, p, previousCtx)).trim()))).join("\n\n")
       : undefined;
     const installedBlock = addonBlocks(current).get(addon.id);
-    if (installedBlock !== undefined && installedBlock !== previousBlock) {
+    if (blockEdited(CONSTITUTION, installedBlock, previousBlock)) {
       console.warn(`  aviso: bloco do add-on ${addon.id} em ${CONSTITUTION} foi editado — não sobrescrito.`);
       injectedTargets.push(CONSTITUTION);
+      const recorded = prior?.injectedBlocks?.[CONSTITUTION];
+      if (recorded) injectedBlocks[CONSTITUTION] = recorded;
     } else {
       const next = injectBlock(CONSTITUTION, current, addon.id, block);
+      recordBlock(CONSTITUTION, next);
       changes.push(await planWrite({ targetDir, path: CONSTITUTION, content: next, source: `addon:${addon.id}`, reason: "injetar princípios do add-on", force: true }));
       manifest.files[CONSTITUTION] = injectedEntry(manifest.files[CONSTITUTION], next, addon.id);
       injectedTargets.push(CONSTITUTION);
@@ -146,12 +161,15 @@ export async function applyAddon(
     const current = await readFile(abs, "utf-8");
     const previousBlock = previousCtx ? (await renderFrom(dir, frag.file, previousCtx)).trim() : undefined;
     const installedBlock = addonBlocks(current).get(addon.id);
-    if (installedBlock !== undefined && installedBlock !== previousBlock) {
+    if (blockEdited(rel, installedBlock, previousBlock)) {
       console.warn(`  aviso: bloco do add-on ${addon.id} em ${rel} foi editado — não sobrescrito.`);
       injectedTargets.push(rel);
+      const recorded = prior?.injectedBlocks?.[rel];
+      if (recorded) injectedBlocks[rel] = recorded;
       continue;
     }
     const next = injectBlock(rel, current, addon.id, block);
+    recordBlock(rel, next);
     changes.push(await planWrite({ targetDir, path: rel, content: next, source: `addon:${addon.id}`, reason: "injetar fragmento do add-on", force: true }));
     manifest.files[rel] = injectedEntry(manifest.files[rel], next, addon.id);
     injectedTargets.push(rel);
@@ -186,6 +204,7 @@ export async function applyAddon(
     knobs,
     createdFiles,
     injectedTargets,
+    injectedBlocks,
   };
   changes.push(await planWrite({ targetDir, path: ".maker/manifest.json", content: JSON.stringify(manifest, null, 2) + "\n", source: "metadata", reason: "publicar manifest do add-on", force: true }));
   const stateRel = manifestKey(targetDir, addonStatePath(targetDir, addon.id));

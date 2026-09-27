@@ -114,6 +114,7 @@ export async function planLegacyAddonAgents(
       changes.push(...await planAdapter(targetDir, file, current, adapter, adapterUpstream, manifest));
       changes.push(await planBase(targetDir, base));
       manifest.files[sharedPath] = { hash: sha256(content), source: entry.source, baseHash: sha256(base) };
+      moveInjectedBlock(loaded.state, file.rel, sharedPath);
       loaded.state.injectedTargets = loaded.state.injectedTargets.map((path) => path === file.rel ? sharedPath : path)
         .filter((path, index, paths) => path !== sharedPath || paths.indexOf(path) === index);
       loaded.changed = true;
@@ -264,4 +265,12 @@ function sharedIsReplaceable(shared: Inspected, entry: ManifestEntry | undefined
   if (entry.source === addonSource) return shared.content!.equals(Buffer.from(content));
   if (!entry.source.startsWith("engine")) return false;
   return shared.content!.equals(upstream) || isUnedited(shared, entry);
+}
+
+/** O registro do bloco acompanha o alvo de injeção quando ele muda de arquivo (o conteúdo do bloco é o mesmo). */
+export function moveInjectedBlock(state: AddonState, from: string, to: string): void {
+  const recorded = state.injectedBlocks?.[from];
+  if (!recorded) return;
+  state.injectedBlocks![to] = recorded;
+  delete state.injectedBlocks![from];
 }

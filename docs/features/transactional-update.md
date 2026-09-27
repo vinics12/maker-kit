@@ -48,7 +48,10 @@ arquivos quando a config está disponível: sem customização recebem o upstrea
 preservados e encaminhados para mediação.
 Ao reaplicar um add-on, arquivos que ele criou e blocos que foram editados pelo dono são
 preservados com aviso. Para arquivos criados, o hash original fica no state para que
-`maker remove` não os apague.
+`maker remove` não os apague. Para blocos, o state guarda o hash de cada bloco como o maker o
+gravou (`injectedBlocks`): um bloco intacto de uma versão anterior do add-on é atualizado, e só um
+bloco diferente do gravado conta como editado. States antigos, sem esse registro, comparam com o
+fragmento renderizado pelos knobs anteriores.
 
 ## Config de instalações 0.2.x
 

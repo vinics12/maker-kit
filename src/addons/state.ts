@@ -13,6 +13,12 @@ export const addonStateSchema = z.object({
   createdFiles: z.array(z.object({ path: z.string(), hash: z.string() })),
   /** Arquivos do motor onde o add-on injetou um bloco (por marcador). */
   injectedTargets: z.array(z.string()),
+  /**
+   * sha256 do conteúdo de cada bloco injetado, por alvo, como o maker o gravou. Na reaplicação, um
+   * bloco só é substituído se ainda for esse: comparar com o fragmento renderizado não serve, porque
+   * uma versão nova do add-on muda o fragmento e o bloco intacto pareceria editado.
+   */
+  injectedBlocks: z.record(z.string(), z.string()).optional(),
 });
 
 export type AddonState = z.infer<typeof addonStateSchema>;

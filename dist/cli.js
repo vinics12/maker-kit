@@ -1121,7 +1121,13 @@ var addonStateSchema = z4.object({
   /** Arquivos novos criados pelo add-on (deletáveis na remoção). */
   createdFiles: z4.array(z4.object({ path: z4.string(), hash: z4.string() })),
   /** Arquivos do motor onde o add-on injetou um bloco (por marcador). */
-  injectedTargets: z4.array(z4.string())
+  injectedTargets: z4.array(z4.string()),
+  /**
+   * sha256 do conteúdo de cada bloco injetado, por alvo, como o maker o gravou. Na reaplicação, um
+   * bloco só é substituído se ainda for esse: comparar com o fragmento renderizado não serve, porque
+   * uma versão nova do add-on muda o fragmento e o bloco intacto pareceria editado.
+   */
+  injectedBlocks: z4.record(z4.string(), z4.string()).optional()
 });
 function addonStatePath(targetDir, id) {
   return join11(targetDir, ".maker", "addons", `${id}.json`);
@@ -1373,6 +1379,7 @@ ${adapterInstruction(sharedPath)}`;
       changes.push(...await planAdapter(targetDir, file, current, adapter, adapterUpstream, manifest));
       changes.push(await planBase(targetDir, base2));
       manifest.files[sharedPath] = { hash: sha256(content), source: entry.source, baseHash: sha256(base2) };
+      moveInjectedBlock(loaded.state, file.rel, sharedPath);
       loaded.state.injectedTargets = loaded.state.injectedTargets.map((path) => path === file.rel ? sharedPath : path).filter((path, index, paths) => path !== sharedPath || paths.indexOf(path) === index);
       loaded.changed = true;
       handled.add(file.rel);
@@ -1519,6 +1526,12 @@ function sharedIsReplaceable(shared, entry, addonSource, content, upstream) {
   if (!entry.source.startsWith("engine")) return false;
   return shared.content.equals(upstream) || isUnedited(shared, entry);
 }
+function moveInjectedBlock(state, from, to) {
+  const recorded = state.injectedBlocks?.[from];
+  if (!recorded) return;
+  state.injectedBlocks[to] = recorded;
+  delete state.injectedBlocks[from];
+}
 
 // src/addons/apply.ts
 import { readFile as readFile14 } from "fs/promises";
@@ -1580,6 +1593,17 @@ async function applyAddon(targetDir, addon, knobs, options = {}) {
   const prior = await readAddonState(targetDir, addon.id);
   const owned = new Map((prior?.createdFiles ?? []).map((f) => [f.path, f]));
   const previousCtx = prior ? addonContext(manifest, prior.knobs) : void 0;
+  const injectedBlocks = {};
+  const blockEdited = (path, installed, previousBlock) => {
+    if (installed === void 0) return false;
+    const recorded = prior?.injectedBlocks?.[path];
+    if (recorded) return sha256(Buffer.from(installed)) !== recorded;
+    return installed !== previousBlock;
+  };
+  const recordBlock = (path, content) => {
+    const installed = addonBlocks(content).get(addon.id);
+    if (installed !== void 0) injectedBlocks[path] = sha256(Buffer.from(installed));
+  };
   if (addon.principles.length) {
     const absConst = join15(targetDir, CONSTITUTION);
     if (!existsSync10(absConst)) throw new Error(`${CONSTITUTION} ausente no install.`);
@@ -1589,11 +1613,14 @@ async function applyAddon(targetDir, addon, knobs, options = {}) {
     const current = await readFile14(absConst, "utf-8");
     const previousBlock = previousCtx ? (await Promise.all(addon.principles.map(async (p3) => (await renderFrom(dir, p3, previousCtx)).trim()))).join("\n\n") : void 0;
     const installedBlock = addonBlocks(current).get(addon.id);
-    if (installedBlock !== void 0 && installedBlock !== previousBlock) {
+    if (blockEdited(CONSTITUTION, installedBlock, previousBlock)) {
       console.warn(`  aviso: bloco do add-on ${addon.id} em ${CONSTITUTION} foi editado \u2014 n\xE3o sobrescrito.`);
       injectedTargets.push(CONSTITUTION);
+      const recorded = prior?.injectedBlocks?.[CONSTITUTION];
+      if (recorded) injectedBlocks[CONSTITUTION] = recorded;
     } else {
       const next = injectBlock(CONSTITUTION, current, addon.id, block);
+      recordBlock(CONSTITUTION, next);
       changes.push(await planWrite({ targetDir, path: CONSTITUTION, content: next, source: `addon:${addon.id}`, reason: "injetar princ\xEDpios do add-on", force: true }));
       manifest.files[CONSTITUTION] = injectedEntry(manifest.files[CONSTITUTION], next, addon.id);
       injectedTargets.push(CONSTITUTION);
@@ -1610,12 +1637,15 @@ async function applyAddon(targetDir, addon, knobs, options = {}) {
     const current = await readFile14(abs, "utf-8");
     const previousBlock = previousCtx ? (await renderFrom(dir, frag.file, previousCtx)).trim() : void 0;
     const installedBlock = addonBlocks(current).get(addon.id);
-    if (installedBlock !== void 0 && installedBlock !== previousBlock) {
+    if (blockEdited(rel, installedBlock, previousBlock)) {
       console.warn(`  aviso: bloco do add-on ${addon.id} em ${rel} foi editado \u2014 n\xE3o sobrescrito.`);
       injectedTargets.push(rel);
+      const recorded = prior?.injectedBlocks?.[rel];
+      if (recorded) injectedBlocks[rel] = recorded;
       continue;
     }
     const next = injectBlock(rel, current, addon.id, block);
+    recordBlock(rel, next);
     changes.push(await planWrite({ targetDir, path: rel, content: next, source: `addon:${addon.id}`, reason: "injetar fragmento do add-on", force: true }));
     manifest.files[rel] = injectedEntry(manifest.files[rel], next, addon.id);
     injectedTargets.push(rel);
@@ -1646,7 +1676,8 @@ async function applyAddon(targetDir, addon, knobs, options = {}) {
     appliedAt: (/* @__PURE__ */ new Date()).toISOString(),
     knobs,
     createdFiles,
-    injectedTargets
+    injectedTargets,
+    injectedBlocks
   };
   changes.push(await planWrite({ targetDir, path: ".maker/manifest.json", content: JSON.stringify(manifest, null, 2) + "\n", source: "metadata", reason: "publicar manifest do add-on", force: true }));
   const stateRel = manifestKey(targetDir, addonStatePath(targetDir, addon.id));
@@ -2002,6 +2033,7 @@ async function applyResolutions(targetDir, dirOption, currentConfig, candidates,
         stateUpdates.set(id, entry);
       }
       const sharedPath = `.maker/workflow/agents/${role}.md`;
+      moveInjectedBlock(entry.state, item.path, sharedPath);
       entry.state.injectedTargets = entry.state.injectedTargets.map((path) => path === item.path ? sharedPath : path).filter((path, position, paths) => paths.indexOf(path) === position);
     }
   }
