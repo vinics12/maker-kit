@@ -1,7 +1,8 @@
-# Guia de migração: 0.2.x e 0.4.x → versão atual
+# Guia de migração: 0.2.x, 0.3.x e 0.4.x → versão atual
 
-Este guia leva um projeto instalado com o maker 0.2.x ou 0.4.x até um install íntegro na versão
-atual, sem perder o que foi customizado. Ele cobre os problemas de incompatibilidade conhecidos:
+Este guia leva um projeto instalado com o maker 0.2.x, 0.3.x ou 0.4.x até um install íntegro na
+versão atual, sem perder o que foi customizado. A 0.3.x já usava papéis compartilhados como a 0.4.x:
+onde o guia fala em 0.4.x, vale também para ela. Ele cobre os problemas de incompatibilidade conhecidos:
 
 - agentes Claude 0.2.x com add-on que ficaram sem referência ao papel compartilhado
   (`maker doctor` mostra a integração Claude como **degradada**);
@@ -31,7 +32,8 @@ maker doctor
 maker update --dry-run
 ```
 
-O `--dry-run` não escreve nada e mostra, por arquivo, o que o update fará (`create`, `update`,
+O `--dry-run` não escreve nada e sai com código 0 quando o update resolve tudo sozinho, 1 quando há
+conflito e 2 quando sobra mediação ou agente degradado. Ele mostra, por arquivo, o que o update fará (`create`, `update`,
 `merge`, `preserve`, `conflict`), um bloco **Agentes legados** com o destino de cada agente
 (`migrar`, `pendente`, `degradado`) e, quando for o caso, quantos arquivos precisam de mediação.
 Use a tabela abaixo para achar o seu caso.
@@ -74,7 +76,7 @@ maker doctor
 
 ### D/E. Install 0.4.x degradado ou add-on reaplicado
 
-Acontece quando o projeto foi atualizado por uma 0.4.x (que preservava os agentes legados sem
+Acontece quando o projeto foi atualizado por uma 0.3.x/0.4.x (que preservava os agentes legados sem
 migrá-los) e, às vezes, o add-on foi reaplicado com `maker add`.
 
 - **Sem customização no agente legado:** `maker update` só regenera o adapter (`migrado … (só o
@@ -126,11 +128,13 @@ maker update --export                     # grava .maker/mediation/
 #   local     seu arquivo atual
 #   upstream  versão nova
 # escreva o resultado em items/<id>/resolved (e, se quiser, notes.md)
-maker update --apply-resolutions --dry-run
+maker update --apply-resolutions --dry-run   # mostra o diff local → proposta de cada item
 maker update --apply-resolutions
 maker update                              # aplica o restante do update
 maker doctor
 ```
+
+Uma exportação feita com `maker update --no-merge --export` é aplicada automaticamente no mesmo modo.
 
 Regras que a CLI impõe (a proposta é recusada sem alterar nada):
 
@@ -138,10 +142,12 @@ Regras que a CLI impõe (a proposta é recusada sem alterar nada):
 - blocos `<!-- maker:addon:<id>:start/end -->` precisam continuar com o mesmo conteúdo (num grupo de
   agente legado, eles vão do agente para o papel);
 - itens de um mesmo grupo são resolvidos juntos;
-- sem marcadores de conflito, sem proposta vazia.
+- sem marcadores de conflito, sem proposta vazia;
+- nenhuma linha customizada (presente no seu arquivo e ausente da `base`) pode sumir. A CLI lista as
+  linhas descartadas; se a remoção for intencional, aplique com `--accept-dropped`.
 
-A CLI **não** verifica se uma customização fora dos blocos foi descartada: revise o diff
-`local → resolved` antes de aplicar. Itens sem `resolved` ficam pendentes e podem ser resolvidos
+A checagem de linhas é literal: ela não percebe uma customização reescrita com outro sentido nem uma
+regra movida para uma seção onde deixa de valer. Revise o diff `local → resolved` antes de aplicar. Itens sem `resolved` ficam pendentes e podem ser resolvidos
 depois; `--export` recusa sobrescrever propostas ainda não aplicadas.
 
 ### H. Agente com `tools` sem `Read`
@@ -152,7 +158,9 @@ do frontmatter de `.claude/agents/<role>.md` e rode `maker update` de novo.
 ### I. `maker remove` em installs antigos
 
 Installs cujo add-on foi aplicado antes desta versão não guardavam a base do template. Agora o
-`remove` compara o arquivo com os templates conhecidos:
+`remove` compara o arquivo com os templates conhecidos (em installs 0.2.x, crie o `maker.config.json`
+antes; se o `remove` rodar sem ele, os arquivos ficam marcados como editados e são reavaliados no
+primeiro `update` depois que a config existir):
 
 - sem customização, o arquivo volta a ser tratado como intacto e o próximo update o regenera;
 - com customização, o manifest o marca como editado (com o hash real, sem aparecer como
@@ -165,8 +173,10 @@ repete o problema.
 
 ## 4. Verificação final
 
-- [ ] `maker doctor` termina com `✓ Install íntegro.` e sem arquivos aguardando mediação.
-- [ ] `maker update --dry-run` não lista `create`, `update`, `merge` nem `conflict`.
+- [ ] `maker doctor` termina com `✓ Install íntegro.` e sem arquivos aguardando mediação. Depois da
+  migração, arquivos que você editar voltam a aparecer como `modificado` no doctor — isso é esperado
+  e é o que o update usa para preservá-los.
+- [ ] `maker update --dry-run` sai com código 0 e não lista `create`, `update`, `merge` nem `conflict`.
 - [ ] `git diff` mostra suas customizações preservadas (agentes, papéis, constitution).
 - [ ] `.maker/mediation/` não existe ou está no `.gitignore`.
 - [ ] Faça commit do resultado.
@@ -177,7 +187,10 @@ repete o problema.
   (`installedAt`). Em installs atualizados em outros dias, o primeiro update ajusta essa data uma vez;
   depois ela não muda mais.
 - **Arquivos com blocos de add-on** (constitution, papéis com fragmentos) passam a receber o template
-  novo por merge, preservando os blocos e suas customizações.
+  novo por merge, preservando os blocos e suas customizações; só vai para mediação o que você e o
+  template mudaram na mesma região.
+- **Exit code do `update`:** 2 quando o update foi aplicado mas sobraram itens de mediação ou agentes
+  degradados. Scripts de CI que rodam `maker update` devem tratar esse código.
 - **Manifest:** entradas podem ganhar `baseHash` (base do próximo merge) e `edited` (arquivo com
   customização sem base exata). Não edite esses campos à mão.
 - **Nova skill** `maker-update` instalada para Claude (`.claude/skills/`) e Codex (`.agents/skills/`).
@@ -187,8 +200,9 @@ repete o problema.
 - Nenhum comando grava parcialmente: uma falha no meio desfaz a transação. Um comando interrompido
   (ex.: processo morto) é desfeito automaticamente pelo próximo comando que aplica mudanças; o
   `--dry-run` avisa quando há uma transação pendente.
-- Para voltar ao estado anterior: `git checkout -- .` e `git clean -fd` (confira antes com
-  `git status`), ou reverta o commit da migração.
+- Para voltar ao estado anterior: `git checkout -- .` e, para apagar arquivos novos, veja antes o que
+  sairia com `git clean -nd` (inclui `.maker/mediation/` com propostas ainda não aplicadas e arquivos
+  seus não versionados) e só então rode `git clean -fd`. Ou reverta o commit da migração.
 - Se o seu caso não está aqui, abra uma issue com a saída de `maker doctor` e
   `maker update --dry-run`.
 

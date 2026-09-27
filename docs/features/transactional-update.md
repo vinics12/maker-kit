@@ -11,7 +11,12 @@ plano. Manifest e states são publicados somente depois dos arquivos corresponde
 O manifest v3 referencia bases exatas e deduplicadas em `.maker/bases/`. `maker update` combina a
 base anterior, o conteúdo local e a nova versão upstream. Mudanças independentes são mescladas;
 conflitos preservam o conteúdo local, bloqueiam toda a aplicação e retornam exit code diferente de
-zero. O Maker não grava marcadores de conflito.
+zero. O Maker não grava marcadores de conflito. Quando o update é aplicado mas sobram itens de
+mediação ou agentes degradados, ele sai com código 2 (o `--dry-run` também: 0 sem pendências, 1 com
+conflito, 2 com mediação ou agentes degradados).
+
+Installs existentes renderizam `{{generatedAt}}` com a data do install (`installedAt`), então a
+versão upstream não muda de um dia para o outro.
 
 Um arquivo já mesclado é comparado com sua base upstream, não com o hash gravado após o merge: as
 edições locais incorporadas continuam sendo mescladas nos updates seguintes em vez de sobrescritas.
@@ -31,19 +36,23 @@ mantiver cada bloco intacto. Quando o arquivo é o template atual com os blocos 
 alvos gravados sem base por versões antigas —, o update apenas adota o template atual como base, sem
 pedir mediação. A comparação ignora a data de geração que o template da constitution grava. O que o
 merge não resolve (mesma região alterada pelo dono e pelo template, ou arquivo sem base que difere do
-template) é preservado e encaminhado para mediação.
+template) é preservado e encaminhado para mediação. Se o arquivo local é a base com os blocos, eles
+são reinjetados no template novo, mesmo quando o template muda na região onde o bloco foi inserido.
 
 `maker add` mantém a base upstream do alvo de injeção e `maker remove` a devolve ao engine, então o
 update seguinte mescla as customizações em vez de sobrescrevê-las. Em alvos gravados sem base, o
 `remove` compara o arquivo com o template atual (e, em agentes Claude 0.2.x, com o template 0.2.x):
-sem customização, o arquivo volta a ser tratado como intacto; com customização, o manifest o marca
-como editado (`edited`), com o hash real, e o update o preserva e o encaminha para mediação.
+sem customização, o arquivo volta a ser tratado como intacto; com customização — ou sem config para
+comparar —, o manifest o marca como editado (`edited`), com o hash real. O update reavalia esses
+arquivos quando a config está disponível: sem customização recebem o upstream; com customização são
+preservados e encaminhados para mediação.
 
 ## Config de instalações 0.2.x
 
 A 0.2.x não gravava a config no manifest; ela só é recuperada de `maker.config.json` na raiz do
 projeto. Sem essa fonte, o update renderiza com os valores padrão apenas os arquivos que não
-dependem da config (detectados renderizando também com valores sentinela). Arquivos existentes que
+dependem da config (detectados renderizando também com um sentinela em cada campo de texto da config,
+exceto projeto e agente). Arquivos existentes que
 dependem dela, incluindo agentes Claude 0.2.x cujo papel depende dela, são preservados, e os
 ausentes são criados com os padrões; o update lista ambos. Crie `maker.config.json` com os valores
 usados no init e execute `maker update --dry-run` para renderizá-los com a config correta.
@@ -111,8 +120,12 @@ quando há itens assim. O maker continua sendo o único a escrever nos arquivos 
    mudar de arquivo dentro de um grupo); blocos novos são recusados. O maker recalcula os itens de
    mediação e só aceita propostas para itens que ainda correspondem a eles: caminho, upstream, base e
    origem vêm do cálculo atual e do manifest, nunca do índice ou das cópias exportadas, que o agente
-   pode editar. A CLI não detecta customizações fora dos blocos que a proposta tenha descartado —
-   essa revisão é do agente e do dono.
+   pode editar. Linhas customizadas (do local e ausentes da base, ou do upstream quando não há base)
+   que não aparecem em nenhuma proposta do grupo fazem a proposta ser recusada, com a lista das
+   linhas, a menos que `--accept-dropped` seja passado com a aprovação do dono. O `--dry-run` mostra
+   o diff local → proposta de cada item. A checagem é literal: reescritas que mudam o sentido de uma
+   customização continuam sendo revisão do agente e do dono. Uma exportação feita com `--no-merge` é
+   aplicada no mesmo modo.
 
 Cada arquivo aplicado passa a ter como base a versão upstream exportada, então o update seguinte
 mescla normalmente a partir dela. Em agentes legados, o adapter volta ao engine e o papel fica com a
@@ -120,4 +133,6 @@ origem do add-on cujos blocos recebeu, com `injectedTargets` atualizado. Itens a
 exportação, que é removida quando não sobra nenhum. Os ids são estáveis por caminho, e `--export`
 recusa sobrescrever uma exportação com propostas (`resolved`/`notes.md`) ainda não aplicadas.
 Mantenha o diretório fora do versionamento (por exemplo, `.maker/mediation/` no `.gitignore`).
-`maker doctor` informa quantos arquivos aguardam mediação, sem tratar isso como install degradado.
+`maker doctor` informa quantos arquivos aguardam mediação, sem tratar isso como install degradado,
+com a mesma orientação contextual do update; se não conseguir planejar o update (ex.: config
+inválida no manifest), mostra o erro e não declara o install íntegro.
