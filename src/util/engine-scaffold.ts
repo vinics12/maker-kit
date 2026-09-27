@@ -192,6 +192,13 @@ export async function legacySharedAgent(ctx: RenderContext, role: string): Promi
   return sharedAgentText(parseFrontmatter(render(await readFile(path, "utf-8"), ctx)).body);
 }
 
+/** Agente Claude completo como a 0.2.x o gerava, para reconhecer um agente legado sem customização. */
+export async function legacyAgent(ctx: RenderContext, role: string): Promise<string | undefined> {
+  const path = templatesDir(`legacy/0.2.0/agents/${role}.md.hbs`);
+  if (!existsSync(path)) return undefined;
+  return render(await readFile(path, "utf-8"), ctx);
+}
+
 function adaptSharedAgentText(input: string): string {
   return input
     .replace(/Claude Preview/g, "automação de browser disponível")

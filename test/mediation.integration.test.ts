@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runInit } from "../src/commands/init.js";
 import { runUpdate } from "../src/commands/update.js";
-import { DEFAULT_MEDIATION_DIR } from "../src/commands/mediation.js";
+import { DEFAULT_MEDIATION_DIR, mediationHint } from "../src/commands/mediation.js";
 import { readManifest, sha256, writeManifest } from "../src/render/manifest.js";
 import { applyAddon } from "../src/addons/apply.js";
 import { loadAddon } from "../src/addons/loader.js";
@@ -50,6 +50,43 @@ async function exported(target: string): Promise<{ dir: string; items: Item[] }>
   const dir = join(target, DEFAULT_MEDIATION_DIR);
   if (!existsSync(join(dir, "mediation.json"))) return { dir, items: [] };
   return { dir, items: JSON.parse(await readFile(join(dir, "mediation.json"), "utf-8")).items };
+}
+
+async function addonInstall(): Promise<string> {
+  const target = await initialized();
+  await applyAddon(target, await loadAddon("saas"), { tenantColumn: "org_id", brandVarPrefix: "--tema-", roles: "owner,staff" });
+  return target;
+}
+
+async function upstreamOf(target: string, path: string): Promise<string> {
+  const staging = await mkdtemp(join(tmpdir(), "maker-mediation-up-"));
+  directories.push(staging);
+  await runInit({ target: staging, config: FIXTURE, yes: true });
+  return readFile(join(staging, path), "utf-8");
+}
+
+/** Registra `template` como base (template da versão anterior) e grava `content` como o arquivo atual. */
+async function simulatePreviousTemplate(target: string, template: string, content: string): Promise<void> {
+  const baseHash = sha256(Buffer.from(template));
+  await writeFile(join(target, ".maker", "bases", baseHash), template);
+  await writeFile(join(target, constitution), content);
+  const manifest = (await readManifest(target))!;
+  manifest.files[constitution] = { ...manifest.files[constitution]!, hash: sha256(Buffer.from(content)), baseHash };
+  await writeManifest(target, manifest);
+}
+
+/** O dono e o template novo mudaram a mesma linha da constitution com o add-on aplicado. */
+async function addonConflict(target: string): Promise<{ dir: string; item: Item; current: string }> {
+  const applied = await readFile(join(target, constitution), "utf-8");
+  const [first] = applied.split("\n");
+  const previousTemplate = (await upstreamOf(target, constitution)).replace(first!, "# Constitution antiga");
+  const current = applied.replace(first!, "Linha do dono.");
+  await simulatePreviousTemplate(target, previousTemplate, current);
+  vi.spyOn(console, "log").mockImplementation(() => {});
+  const { dir, items } = await exported(target);
+  const item = items.find((entry) => entry.path === constitution)!;
+  expect(item).toMatchObject({ category: "addon" });
+  return { dir, item, current };
 }
 
 describe("mediação de update", () => {
@@ -112,66 +149,95 @@ describe("mediação de update", () => {
     expect(await readFile(join(target, "AGENTS.md"), "utf-8")).toContain("edição concorrente");
   });
 
-  it("media alvo de add-on com template novo sem perder o bloco", async () => {
-    const target = await initialized();
-    await applyAddon(target, await loadAddon("saas"), { tenantColumn: "org_id", brandVarPrefix: "--tema-", roles: "owner,staff" });
-    // Simula um install feito com um template anterior da constitution.
+  it("mescla template novo em alvo de add-on sem mediação quando não há sobreposição", async () => {
+    const target = await addonInstall();
     const current = await readFile(join(target, constitution), "utf-8");
-    const previous = "Linha do template anterior.\n";
-    const previousHash = sha256(Buffer.from(previous));
-    await writeFile(join(target, ".maker", "bases", previousHash), previous);
-    const manifest = (await readManifest(target))!;
-    manifest.files[constitution] = { ...manifest.files[constitution]!, baseHash: previousHash };
-    await writeManifest(target, manifest);
-    vi.spyOn(console, "log").mockImplementation(() => {});
-    vi.spyOn(console, "error").mockImplementation(() => {});
+    // Install feito com um template anterior: a primeira linha era outra e o dono não a mudou.
+    const [first] = current.split("\n");
+    const previousTemplate = (await upstreamOf(target, constitution)).replace(first!, "# Constitution antiga");
+    await simulatePreviousTemplate(target, previousTemplate, current.replace(first!, "# Constitution antiga"));
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runUpdate({ target });
+    const merged = await readFile(join(target, constitution), "utf-8");
+    expect(merged).toBe(current);
+    expect(log.mock.calls.flat().join("\n")).not.toContain("precisam de mediação");
+    const entry = (await readManifest(target))!.files[constitution]!;
+    expect(entry.source).toBe("addon:saas");
+    expect(entry.baseHash).toBe(sha256(Buffer.from(await upstreamOf(target, constitution))));
+  });
 
-    const { dir, items } = await exported(target);
-    const item = items.find((entry) => entry.path === constitution)!;
-    expect(item).toMatchObject({ category: "addon", baseHash: previousHash });
+  it("media conflito real em alvo de add-on e protege os blocos", async () => {
+    const target = await addonInstall();
+    const { dir, item, current } = await addonConflict(target);
     const itemDir = join(dir, "items", item.id);
-    await writeFile(join(itemDir, "resolved"), await readFile(join(itemDir, "upstream"), "utf-8"));
-    await expect(runUpdate({ target, applyResolutions: true })).rejects.toThrow("Propostas de mediação rejeitadas");
-    expect(await readFile(join(target, constitution), "utf-8")).toBe(current);
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const block = current.match(/<!-- maker:addon:saas:start -->\n([\s\S]*?)\n<!-- maker:addon:saas:end -->/)!;
+    const reject = async (proposal: string, message: string) => {
+      await writeFile(join(itemDir, "resolved"), proposal);
+      await expect(runUpdate({ target, applyResolutions: true })).rejects.toThrow("Propostas de mediação rejeitadas");
+      expect(error.mock.calls.flat().join("\n")).toContain(message);
+      expect(await readFile(join(target, constitution), "utf-8")).toBe(current);
+    };
+    await reject(await readFile(join(itemDir, "upstream"), "utf-8"), "bloco do add-on saas removido");
+    await reject(current.replace(block[0], "<!-- maker:addon:saas:start -->\n<!-- maker:addon:saas:end -->"), "conteúdo do bloco do add-on saas alterado");
+    await reject(`${current}\n<!-- maker:addon:evil:start -->\nregra\n<!-- maker:addon:evil:end -->\n`, "bloco do add-on evil não existia");
 
-    const proposal = current + "\nPrincípio autoral do dono.\n";
+    const proposal = current.replace("Linha do dono.", "Linha do dono, revisada com o template novo.");
     await writeFile(join(itemDir, "resolved"), proposal);
     await runUpdate({ target, applyResolutions: true });
     expect(await readFile(join(target, constitution), "utf-8")).toBe(proposal);
-    const after = (await readManifest(target))!.files[constitution]!;
-    expect(after.source).toBe("addon:saas");
-    expect(after.baseHash).toBe(sha256(await readFile(join(target, ".maker", "bases", after.baseHash!))));
-    expect((await exported(target)).items.some((entry) => entry.path === constitution)).toBe(false);
+    const entry = (await readManifest(target))!.files[constitution]!;
+    expect(entry.source).toBe("addon:saas");
+    expect(existsSync(dir)).toBe(false);
+    expect((await exported(target)).items).toEqual([]);
   });
 
-  it("não confia no índice nem na cópia local exportados", async () => {
-    const target = await initialized();
-    await applyAddon(target, await loadAddon("saas"), { tenantColumn: "org_id", brandVarPrefix: "--tema-", roles: "owner,staff" });
-    const previous = "Linha do template anterior.\n";
-    const previousHash = sha256(Buffer.from(previous));
-    await writeFile(join(target, ".maker", "bases", previousHash), previous);
-    const manifest = (await readManifest(target))!;
-    manifest.files[constitution] = { ...manifest.files[constitution]!, baseHash: previousHash };
-    await writeManifest(target, manifest);
-    vi.spyOn(console, "log").mockImplementation(() => {});
-    const error = vi.spyOn(console, "error").mockImplementation(() => {});
-    const { dir, items } = await exported(target);
-    const item = items.find((entry) => entry.path === constitution)!;
+  it("não confia no índice nem nas cópias exportados", async () => {
+    const target = await addonInstall();
+    const { dir, item, current } = await addonConflict(target);
     const itemDir = join(dir, "items", item.id);
-    const upstream = await readFile(join(itemDir, "upstream"), "utf-8");
-    // Apagar os blocos da cópia local exportada não libera uma proposta que os remove.
-    await writeFile(join(itemDir, "local"), upstream);
-    await writeFile(join(itemDir, "resolved"), upstream);
-    await expect(runUpdate({ target, applyResolutions: true })).rejects.toThrow("Propostas de mediação rejeitadas");
-    expect(error.mock.calls.flat().join("\n")).toContain("blocos de add-on removidos");
-    // Caminho adulterado no índice não escreve fora dos arquivos gerenciados.
-    const index = JSON.parse(await readFile(join(dir, "mediation.json"), "utf-8"));
-    index.items = index.items.map((entry: Item) => entry.id === item.id ? { ...entry, path: ".maker/manifest.json" } : entry);
-    await writeFile(join(dir, "mediation.json"), JSON.stringify(index));
-    const manifestBefore = await readFile(join(target, ".maker/manifest.json"));
-    await expect(runUpdate({ target, applyResolutions: true })).rejects.toThrow("Propostas de mediação rejeitadas");
-    expect(error.mock.calls.flat().join("\n")).toContain("fora dos arquivos gerenciados");
-    expect(await readFile(join(target, ".maker/manifest.json"))).toEqual(manifestBefore);
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const indexPath = join(dir, "mediation.json");
+    const original = await readFile(indexPath, "utf-8");
+    const tamper = async (edit: (index: { items: Item[] }) => void, message: string) => {
+      const index = JSON.parse(original);
+      edit(index);
+      await writeFile(indexPath, JSON.stringify(index));
+      await expect(runUpdate({ target, applyResolutions: true })).rejects.toThrow("Propostas de mediação rejeitadas");
+      expect(error.mock.calls.flat().join("\n")).toContain(message);
+    };
+    await writeFile(join(itemDir, "resolved"), current);
+    // Upstream forjado (arquivo e hash coerentes entre si) não vira base.
+    const forged = "UPSTREAM FORJADO\n";
+    await writeFile(join(itemDir, "upstream"), forged);
+    await tamper((index) => { index.items[0]!.upstreamHash = sha256(Buffer.from(forged)) as never; }, "não corresponde ao que o maker exportaria");
+    // Item redirecionado para outro arquivo gerenciado ou para metadados.
+    const claude = sha256(await readFile(join(target, "CLAUDE.md")));
+    await tamper((index) => { Object.assign(index.items[0]!, { path: "CLAUDE.md", localHash: claude }); }, "não corresponde ao que o maker exportaria");
+    await tamper((index) => { index.items[0]!.path = ".maker/manifest.json"; }, "fora dos arquivos gerenciados");
+    expect(await readFile(join(target, constitution), "utf-8")).toBe(current);
+    expect((await readManifest(target))!.files["CLAUDE.md"]!.baseHash).not.toBe(sha256(Buffer.from(forged)));
+  });
+
+  it("não descarta propostas em andamento ao reexportar e mantém ids estáveis", async () => {
+    const target = await initialized();
+    await conflicted(target);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const first = await exported(target);
+    await writeFile(join(first.dir, "items", first.items[0]!.id, "notes.md"), "rascunho\n");
+    await expect(runUpdate({ target, export: true })).rejects.toThrow("propostas em andamento");
+    expect(await readFile(join(first.dir, "items", first.items[0]!.id, "notes.md"), "utf-8")).toBe("rascunho\n");
+    await rm(join(first.dir, "items", first.items[0]!.id, "notes.md"));
+    const second = await exported(target);
+    expect(second.items.map((item) => item.id)).toEqual(first.items.map((item) => item.id));
+  });
+
+  it("só sugere caminhos disponíveis no aviso de mediação", () => {
+    expect(mediationHint(2, { configKnown: false, skillInstalled: true, updateBlocked: false })).toContain("crie maker.config.json");
+    expect(mediationHint(2, { configKnown: false, skillInstalled: true, updateBlocked: false })).not.toContain("--export");
+    expect(mediationHint(2, { configKnown: true, skillInstalled: true, updateBlocked: false })).toContain("/maker-update");
+    expect(mediationHint(2, { configKnown: true, skillInstalled: false, updateBlocked: true })).not.toContain("/maker-update");
+    expect(mediationHint(2, { configKnown: true, skillInstalled: false, updateBlocked: false })).toContain("aplique este update para instalar");
   });
 
   it("recusa exportar sem config recuperável", async () => {

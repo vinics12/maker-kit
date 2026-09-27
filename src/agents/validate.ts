@@ -89,7 +89,10 @@ export async function validateAgentIntegration(
       const source = manifest?.files[adapterPath]?.source;
       issues.push(`${adapterPath}: referência ao papel compartilhado ausente; esperado ${expected}` +
         (source ? `; origem ${source}` : "") +
-        "; o update preserva conteúdo local/add-on sem migração segura. Execute maker update --dry-run para revisar o reparo; preserve as customizações e não reaplique o add-on apenas para corrigir o adapter");
+        "; o update preserva conteúdo local/add-on sem migração segura. Execute maker update --dry-run para revisar o reparo" +
+        (source?.startsWith("addon:")
+          ? "; preserve as customizações e não reaplique o add-on apenas para corrigir o adapter (a skill maker-update media a migração)"
+          : "; se o motivo for config não recuperada, crie maker.config.json com os valores usados no init"));
     } else if (!existsSync(join(targetDir, shared))) {
       issues.push(`${adapterPath}: arquivo do papel compartilhado ausente: ${shared}; execute maker update --dry-run para revisar a restauração`);
     }

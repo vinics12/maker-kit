@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { existsSync } from "node:fs";
 import { appendFile, cp, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -310,7 +311,7 @@ describe("migração de agentes legados: template, remove e reaplicação", () =
     expect(reviewer).toContain("Regra local do revisor.");
     const byPath = new Map(migration.reports.map((report) => [report.path, report]));
     expect(byPath.get(".claude/agents/architect.md")!.reason).toContain("template atual");
-    expect(byPath.get(".claude/agents/code-reviewer.md")!.reason).toContain("sob controle do add-on, sem updates do template");
+    expect(byPath.get(".claude/agents/code-reviewer.md")!.reason).toContain("copiado como está; updates do template chegam por merge");
   });
 
   it("maker remove seguido de update preserva customizações migradas e da constitution", async () => {
@@ -455,15 +456,74 @@ describe("instalação real 0.2.0", () => {
     expect(output(log)).toContain(`preservado(s): .claude/agents/dev.md, ${skill}`);
     expect(await readFile(join(target, ".claude/agents/dev.md"), "utf-8")).toContain("just verify");
     expect(output(log)).toContain("crie maker.config.json");
-    // O revisor legado depende de comandos desconhecidos: é preservado integralmente, com aviso.
-    expect(await readFile(join(target, ".maker/workflow/agents/code-reviewer.md"), "utf-8")).toContain("just verify");
-    expect(output(log)).toContain("config não recuperada); copiado como está; o papel fica sob controle do add-on");
+    // O revisor legado depende de comandos desconhecidos: não migra com a config padrão (nem ganha base
+    // renderizada com ela); fica pendente até a config existir.
+    const reviewer = ".claude/agents/code-reviewer.md";
+    expect(await readFile(join(target, reviewer), "utf-8")).toContain("just verify");
+    expect(await readFile(join(target, reviewer), "utf-8")).toContain("maker:addon:saas:start");
+    expect(output(log)).toContain(`degradado ${reviewer}: depende de config não recuperada`);
     await cp(join(project020, "maker.config.json"), join(target, "maker.config.json"));
     await runUpdate({ target });
+    const role = await readFile(join(target, ".maker/workflow/agents/code-reviewer.md"), "utf-8");
+    expect(role).toContain("just verify");
+    expect(role).toContain("maker:addon:saas:start");
+    expect(role).not.toContain("npm run verify");
     expect(await readFile(join(target, skill), "utf-8")).toBe(await readFile(join(await fresh(), skill), "utf-8"));
     expect((await readManifest(target))!.files[skill]).toMatchObject({ hash: sha256(before), baseHash: sha256(before) });
     expect(await readFile(join(target, ".maker/workflow/agents/dev.md"), "utf-8")).toContain("just verify");
     expect((await validateAgentIntegration(target, "claude")).issues).toEqual([]);
+  });
+
+  it("maker remove em instalação 0.2.0 sem customização deixa o install íntegro e sem mediação", async () => {
+    const target = await project();
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    await removeAddon(target, "saas");
+    const manifest = (await readManifest(target))!;
+    for (const path of [constitution, ".claude/agents/architect.md", ".claude/agents/code-reviewer.md"]) {
+      expect(manifest.files[path]!.edited).toBeUndefined();
+    }
+    // Antes do update a integração 0.2.0 ainda é legada; o que não pode aparecer é edição fantasma.
+    await runDoctor({ target });
+    expect(output(log)).not.toContain("modificado:");
+    await runUpdate({ target });
+    expect(output(log)).not.toContain("precisam de mediação");
+    expect((await validateAgentIntegration(target, "claude")).issues).toEqual([]);
+    process.exitCode = 0;
+    await runDoctor({ target });
+    expect(process.exitCode).not.toBe(1);
+    const reference = await temporary();
+    await runInit({ target: reference, config, yes: true });
+    for (const role of roles) {
+      expect(await readFile(join(target, `.claude/agents/${role}.md`), "utf-8"))
+        .toBe(await readFile(join(reference, `.claude/agents/${role}.md`), "utf-8"));
+    }
+  });
+
+  it("maker remove em instalação 0.2.0 customizada marca a edição sem hash falso e encaminha para mediação", async () => {
+    const target = await project();
+    const agent = ".claude/agents/architect.md";
+    await appendFile(join(target, agent), "Regra local do arquiteto.\n");
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    await removeAddon(target, "saas");
+    const entry = (await readManifest(target))!.files[agent]!;
+    expect(entry).toMatchObject({ edited: true, hash: sha256(await readFile(join(target, agent))) });
+    await runDoctor({ target });
+    expect(output(log)).not.toContain(`modificado: ${agent}`);
+    await runUpdate({ target });
+    expect(await readFile(join(target, agent), "utf-8")).toContain("Regra local do arquiteto.");
+    expect(output(log)).toContain("precisam de mediação");
+  });
+
+  it("alvo de add-on 0.2.0 sem base e sem customização adota a base sem pedir mediação", async () => {
+    const target = await project();
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runUpdate({ target });
+    expect(output(log)).not.toContain("precisam de mediação");
+    const manifest = (await readManifest(target))!;
+    expect(manifest.files[constitution]!.baseHash).toBeDefined();
+    expect(manifest.files[constitution]!.source).toBe("addon:saas");
+    await runUpdate({ target, export: true });
+    expect(existsSync(join(target, DEFAULT_MEDIATION_DIR))).toBe(false);
   });
 
   it.each([false, true])("segundo update seguido não altera nada (add-on: %s)", async (fromLegacy) => {

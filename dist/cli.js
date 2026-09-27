@@ -426,6 +426,11 @@ async function legacySharedAgent(ctx, role) {
   if (!existsSync4(path)) return void 0;
   return sharedAgentText(parseFrontmatter(render(await readFile4(path, "utf-8"), ctx)).body);
 }
+async function legacyAgent(ctx, role) {
+  const path = templatesDir(`legacy/0.2.0/agents/${role}.md.hbs`);
+  if (!existsSync4(path)) return void 0;
+  return render(await readFile4(path, "utf-8"), ctx);
+}
 function adaptSharedAgentText(input) {
   return input.replace(/Claude Preview/g, "automa\xE7\xE3o de browser dispon\xEDvel").replace(/Chrome MCP/g, "automa\xE7\xE3o de browser dispon\xEDvel").replace(/mcp__Claude_Preview__[a-z0-9_]+/gi, "uma ferramenta de browser dispon\xEDvel").replace(/mcp__claude-in-chrome__[a-z0-9_]+/gi, "uma ferramenta de browser dispon\xEDvel").replace(/\.claude\/launch\.json/g, "a configura\xE7\xE3o de execu\xE7\xE3o do agente").replace(/Claude Code/g, "a CLI ag\xEAntica");
 }
@@ -889,8 +894,8 @@ function formatCollisions(collisions) {
 }
 
 // src/commands/doctor.ts
-import { resolve as resolve3 } from "path";
-import pc2 from "picocolors";
+import { resolve as resolve5 } from "path";
+import pc4 from "picocolors";
 
 // src/agents/validate.ts
 import { existsSync as existsSync5 } from "fs";
@@ -957,7 +962,7 @@ async function validateAgentIntegration(targetDir, provider) {
     if (!shared) {
       const expected = `.maker/workflow/agents/${rel.replace(/\.(md|toml)$/, "")}.md`;
       const source = manifest?.files[adapterPath]?.source;
-      issues.push(`${adapterPath}: refer\xEAncia ao papel compartilhado ausente; esperado ${expected}` + (source ? `; origem ${source}` : "") + "; o update preserva conte\xFAdo local/add-on sem migra\xE7\xE3o segura. Execute maker update --dry-run para revisar o reparo; preserve as customiza\xE7\xF5es e n\xE3o reaplique o add-on apenas para corrigir o adapter");
+      issues.push(`${adapterPath}: refer\xEAncia ao papel compartilhado ausente; esperado ${expected}` + (source ? `; origem ${source}` : "") + "; o update preserva conte\xFAdo local/add-on sem migra\xE7\xE3o segura. Execute maker update --dry-run para revisar o reparo" + (source?.startsWith("addon:") ? "; preserve as customiza\xE7\xF5es e n\xE3o reaplique o add-on apenas para corrigir o adapter (a skill maker-update media a migra\xE7\xE3o)" : "; se o motivo for config n\xE3o recuperada, crie maker.config.json com os valores usados no init"));
     } else if (!existsSync5(join9(targetDir, shared))) {
       issues.push(`${adapterPath}: arquivo do papel compartilhado ausente: ${shared}; execute maker update --dry-run para revisar a restaura\xE7\xE3o`);
     }
@@ -1094,6 +1099,14 @@ function stripBlock(content, id) {
 function escapeRe(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
+var BLOCK = /<!-- maker:addon:([a-z0-9-]+):start -->\n?([\s\S]*?)\n?<!-- maker:addon:\1:end -->/g;
+function addonBlocks(content) {
+  return new Map([...content.matchAll(BLOCK)].map((match) => [match[1], match[2]]));
+}
+function sameText(a, b) {
+  const normalize = (value) => value.replace(/\r\n/g, "\n").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").replace(/(Gerado por\*\*: maker em )\d{4}-\d{2}-\d{2}/g, "$1<data>").trim();
+  return normalize(a) === normalize(b);
+}
 
 // src/addons/state.ts
 import { readFile as readFile10, writeFile as writeFile5, mkdir as mkdir5, rm as rm3 } from "fs/promises";
@@ -1222,63 +1235,42 @@ function issue(message, action) {
   return { message, action };
 }
 
-// src/commands/doctor.ts
-async function runDoctor(opts) {
-  const targetDir = resolve3(opts.target ?? process.cwd());
-  const manifest = await readManifest(targetDir);
-  if (!manifest) {
-    throw new Error(`Nenhum install do maker encontrado em ${targetDir} (.maker/manifest.json ausente).`);
-  }
-  const result = await verifyManifest(targetDir, manifest);
-  const integrations = await Promise.all(
-    enabledAgents(manifest).map((agent2) => validateAgentIntegration(targetDir, agent2))
-  );
-  const addons = await inspectAddons(targetDir, manifest);
-  console.log(pc2.dim(`Projeto "${manifest.project.name}" \xB7 maker ${manifest.makerVersion}`));
-  console.log(pc2.dim(`${result.checked} arquivos verificados`));
-  for (const integration of integrations) {
-    const status2 = integration.issues.length ? pc2.red("degradada") : pc2.green("\xEDntegra");
-    console.log(
-      `  ${integration.provider}: ${status2} \xB7 ${integration.skills} skills \xB7 ${integration.agents} agentes`
-    );
-    for (const issue2 of integration.issues) console.log(pc2.red(`    ${issue2}`));
-  }
-  if (addons.addons.length) {
-    console.log(pc2.bold("\nAdd-ons aplicados:"));
-    for (const addon of addons.addons) {
-      const status2 = addon.ok ? pc2.green("\xEDntegro") : pc2.red("degradado");
-      console.log(`  ${addon.id} \xB7 ${addon.name} \xB7 v${addon.version ?? "?"} \xB7 ${status2}`);
-      for (const problem of addon.issues) {
-        console.log(pc2.red(`    problema: ${problem.message}`));
-        console.log(pc2.yellow(`    a\xE7\xE3o: ${problem.action}`));
-      }
-    }
-  }
-  if (result.ok && integrations.every((integration) => integration.issues.length === 0) && addons.ok) {
-    console.log(pc2.green("\u2713 Install \xEDntegro."));
-    return;
-  }
-  const reported = new Set(integrations.flatMap((integration) => integration.missingAdapters));
-  for (const m of result.missing) if (!reported.has(m)) console.log(pc2.red(`  ausente:    ${m}`));
-  for (const m of result.modified) console.log(pc2.yellow(`  modificado: ${m}`));
-  console.log(
-    pc2.dim(`
-${result.missing.length} ausente(s), ${result.modified.length} modificado(s).`)
-  );
-  process.exitCode = 1;
-}
-
 // src/commands/update.ts
-import { existsSync as existsSync10 } from "fs";
-import { mkdtemp as mkdtemp2, readFile as readFile14, readdir as readdir5, rm as rm5 } from "fs/promises";
-import { tmpdir as tmpdir2 } from "os";
-import { join as join15, resolve as resolve5 } from "path";
-import pc4 from "picocolors";
+import { existsSync as existsSync12 } from "fs";
+import { mkdtemp as mkdtemp3, readFile as readFile16, readdir as readdir5, rm as rm6 } from "fs/promises";
+import { tmpdir as tmpdir3 } from "os";
+import { join as join17, resolve as resolve4 } from "path";
+import pc3 from "picocolors";
 import { mergeDiff3 } from "node-diff3";
 
-// src/agents/migrate.ts
-import { readFile as readFile12 } from "fs/promises";
+// src/util/upstream.ts
+import { existsSync as existsSync9 } from "fs";
+import { mkdtemp as mkdtemp2, readFile as readFile12, rm as rm4 } from "fs/promises";
+import { tmpdir as tmpdir2 } from "os";
 import { join as join13 } from "path";
+async function resolveConfig(targetDir, stored, project) {
+  if (stored) return { config: parseConfig(stored), recovered: true };
+  const configPath = join13(targetDir, "maker.config.json");
+  if (existsSync9(configPath)) return { config: parseConfig(JSON.parse(await readFile12(configPath, "utf-8"))), recovered: true };
+  return { config: parseConfig({ project }), recovered: false };
+}
+async function renderUpstream(targetDir, manifest) {
+  const { config, recovered } = await resolveConfig(targetDir, manifest.config, manifest.project);
+  if (!recovered) return null;
+  const staging = await mkdtemp2(join13(tmpdir2(), "maker-upstream-"));
+  try {
+    const expected = await applyEngine(staging, buildContext(config), enabledAgents(manifest));
+    const files = /* @__PURE__ */ new Map();
+    for (const file of expected) files.set(file.rel, await readFile12(join13(staging, file.rel)));
+    return { files, config };
+  } finally {
+    await rm4(staging, { recursive: true, force: true });
+  }
+}
+
+// src/agents/migrate.ts
+import { readFile as readFile13 } from "fs/promises";
+import { join as join14 } from "path";
 var MANUAL_ACTION = "mova as customiza\xE7\xF5es do corpo legado para o papel compartilhado, remova-as do agente legado e execute maker update --dry-run; n\xE3o reaplique o add-on sobre conte\xFAdo personalizado";
 async function planLegacyAddonAgents(targetDir, staging, expected, manifest, options) {
   const changes = [];
@@ -1307,7 +1299,11 @@ async function planLegacyAddonAgents(targetDir, staging, expected, manifest, opt
         expectedHash: current.hash
       });
     };
-    const upstream = outputs.has(sharedPath) ? await readFile12(join13(staging, sharedPath)) : void 0;
+    if (options.configKnown === false && (options.configDependent?.has(sharedPath) || options.configDependent?.has(file.rel))) {
+      preserve("depende de config n\xE3o recuperada", "crie maker.config.json com os valores usados no init e execute maker update --dry-run");
+      continue;
+    }
+    const upstream = outputs.has(sharedPath) ? await readFile13(join14(staging, sharedPath)) : void 0;
     const agent2 = upstream ? parseLegacyAgent(current.content, role) : void 0;
     if (!agent2 || !upstream) {
       preserve("formato do agente legado n\xE3o reconhecido");
@@ -1340,7 +1336,7 @@ async function planLegacyAddonAgents(targetDir, staging, expected, manifest, opt
     const pristine = templates.includes(sharedAgentText(stripBlock(agent2.body, id)));
     const adapter = `${agent2.frontmatter.replace(/\r\n/g, "\n")}
 ${adapterInstruction(sharedPath)}`;
-    const adapterUpstream = await readFile12(join13(staging, file.rel));
+    const adapterUpstream = await readFile13(join14(staging, file.rel));
     if (confirmsInjectionTarget(loaded.state, id, file.rel)) {
       const content = pristine ? upsertBlock(upstream.toString("utf-8"), id, block) : sharedAgentText(agent2.body);
       if (!sharedIsReplaceable(shared, sharedEntry, entry.source, content, upstream)) {
@@ -1348,7 +1344,7 @@ ${adapterInstruction(sharedPath)}`;
         continue;
       }
       const base2 = pristine ? upstream : Buffer.from(legacyTemplate ?? upstream.toString("utf-8"));
-      const reason2 = pristine ? "corpo sem customiza\xE7\xE3o; papel recebe o template atual com o bloco do add-on" : `${options.configKnown === false ? "corpo difere do template com a config padr\xE3o (config n\xE3o recuperada)" : "corpo personalizado"}; copiado como est\xE1; o papel fica sob controle do add-on, sem updates do template`;
+      const reason2 = pristine ? "corpo sem customiza\xE7\xE3o; papel recebe o template atual com o bloco do add-on" : "corpo personalizado; copiado como est\xE1; updates do template chegam por merge a partir do template 0.2.x";
       if (options.migrate === false) {
         report("pending", reason2);
         handled.add(file.rel);
@@ -1524,11 +1520,163 @@ function sharedIsReplaceable(shared, entry, addonSource, content, upstream) {
   return shared.content.equals(upstream) || isUnedited(shared, entry);
 }
 
+// src/addons/apply.ts
+import { readFile as readFile14 } from "fs/promises";
+import { existsSync as existsSync10 } from "fs";
+import { join as join15 } from "path";
+var CONSTITUTION = ".specify/memory/constitution.md";
+var PLACEHOLDER = "_(nenhum princ\xEDpio de projeto definido ainda)_";
+function injectBlock(path, content, id, block) {
+  return path === CONSTITUTION ? upsertBlock(content, id, block, { replacePlaceholder: PLACEHOLDER, beforeHeading: "## Governance" }) : upsertBlock(content, id, block);
+}
+function reinjectBlocks(path, template, local) {
+  let result = template;
+  for (const [id, block] of addonBlocks(local)) result = injectBlock(path, result, id, block);
+  return result;
+}
+function addonContext(manifest, knobs) {
+  return {
+    project: manifest.project,
+    addon: knobs,
+    generatedAt: (/* @__PURE__ */ new Date()).toISOString().slice(0, 10)
+  };
+}
+async function renderFrom(dir, rel, ctx) {
+  const raw = await readFile14(join15(dir, rel), "utf-8");
+  return rel.endsWith(".hbs") ? renderRaw(raw, ctx) : raw;
+}
+function injectedEntry(prior, content, id) {
+  return { hash: sha256(content), source: `addon:${id}`, ...prior?.baseHash ? { baseHash: prior.baseHash } : {} };
+}
+function restoredEntry(rel, prior, content, pristine) {
+  const source = rel.startsWith(".claude/") ? "engine:claude" : rel.startsWith(".codex/") || rel.startsWith(".agents/") ? "engine:codex" : "engine:common";
+  if (prior?.baseHash) return { hash: sha256(content), source, baseHash: prior.baseHash };
+  return pristine ? { hash: sha256(content), source } : { hash: sha256(content), source, edited: true };
+}
+async function knownTemplates(rel, upstream) {
+  if (!upstream) return [];
+  const templates = upstream.files.has(rel) ? [upstream.files.get(rel).toString("utf-8")] : [];
+  const role = rel.match(/^\.claude\/agents\/([a-z0-9-]+)\.md$/)?.[1];
+  const legacy = role ? await legacyAgent(buildContext(upstream.config), role) : void 0;
+  if (legacy) templates.push(legacy);
+  return templates;
+}
+async function applyAddon(targetDir, addon, knobs, options = {}) {
+  if (options.dryRun) await assertNoPendingTransactions(targetDir);
+  const currentManifest = await readManifest(targetDir);
+  if (!currentManifest) {
+    throw new Error(`Nenhum install do maker em ${targetDir} \u2014 rode 'maker init' antes de add-ons.`);
+  }
+  const manifest = structuredClone(currentManifest);
+  const dir = addonDir(addon.id);
+  const ctx = addonContext(manifest, knobs);
+  const injectedTargets = [];
+  const createdFiles = [];
+  const changes = [];
+  const prior = await readAddonState(targetDir, addon.id);
+  const owned = new Set((prior?.createdFiles ?? []).map((f) => f.path));
+  if (addon.principles.length) {
+    const absConst = join15(targetDir, CONSTITUTION);
+    if (!existsSync10(absConst)) throw new Error(`${CONSTITUTION} ausente no install.`);
+    const rendered = [];
+    for (const p3 of addon.principles) rendered.push((await renderFrom(dir, p3, ctx)).trim());
+    const block = rendered.join("\n\n");
+    const current = await readFile14(absConst, "utf-8");
+    const next = injectBlock(CONSTITUTION, current, addon.id, block);
+    changes.push(await planWrite({ targetDir, path: CONSTITUTION, content: next, source: `addon:${addon.id}`, reason: "injetar princ\xEDpios do add-on", force: true }));
+    manifest.files[CONSTITUTION] = injectedEntry(manifest.files[CONSTITUTION], next, addon.id);
+    injectedTargets.push(CONSTITUTION);
+  }
+  for (const frag of addon.agentFragments) {
+    const rel = `.maker/workflow/agents/${frag.agent}.md`;
+    const abs = join15(targetDir, rel);
+    if (!existsSync10(abs)) {
+      console.warn(`  aviso: agente ${frag.agent} ausente \u2014 fragmento pulado.`);
+      continue;
+    }
+    const block = (await renderFrom(dir, frag.file, ctx)).trim();
+    const next = injectBlock(rel, await readFile14(abs, "utf-8"), addon.id, block);
+    changes.push(await planWrite({ targetDir, path: rel, content: next, source: `addon:${addon.id}`, reason: "injetar fragmento do add-on", force: true }));
+    manifest.files[rel] = injectedEntry(manifest.files[rel], next, addon.id);
+    injectedTargets.push(rel);
+  }
+  for (const f of addon.files) {
+    const abs = join15(targetDir, f.to);
+    if (existsSync10(abs) && !owned.has(f.to)) {
+      console.warn(`  aviso: ${f.to} j\xE1 existe (n\xE3o \xE9 deste add-on) \u2014 n\xE3o sobrescrito.`);
+      continue;
+    }
+    const content = await renderFrom(dir, f.from, ctx);
+    const hash = sha256(Buffer.from(content, "utf-8"));
+    manifest.files[manifestKey(targetDir, abs)] = { hash, source: `addon:${addon.id}` };
+    createdFiles.push({ path: f.to, hash });
+    changes.push(await planWrite({ targetDir, path: f.to, content, source: `addon:${addon.id}`, reason: "arquivo criado pelo add-on", force: owned.has(f.to) }));
+  }
+  const state = {
+    id: addon.id,
+    version: addon.version,
+    appliedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    knobs,
+    createdFiles,
+    injectedTargets
+  };
+  changes.push(await planWrite({ targetDir, path: ".maker/manifest.json", content: JSON.stringify(manifest, null, 2) + "\n", source: "metadata", reason: "publicar manifest do add-on", force: true }));
+  const stateRel = manifestKey(targetDir, addonStatePath(targetDir, addon.id));
+  changes.push(await planWrite({ targetDir, path: stateRel, content: JSON.stringify(state, null, 2) + "\n", source: "metadata", reason: "publicar state do add-on", force: true }));
+  const plan = createPlan(targetDir, changes);
+  if (options.dryRun) console.log(formatPlan(plan));
+  else await applyChangePlan(plan);
+  return { injectedTargets, createdFiles: createdFiles.map((c) => c.path), plan };
+}
+async function removeAddon(targetDir, id, options = {}) {
+  if (options.dryRun) await assertNoPendingTransactions(targetDir);
+  const state = await readAddonState(targetDir, id);
+  if (!state) throw new Error(`Add-on "${id}" n\xE3o est\xE1 aplicado em ${targetDir}.`);
+  const manifest = await readManifest(targetDir);
+  const strippedTargets = [];
+  const deletedFiles = [];
+  const keptFiles = [];
+  const changes = [];
+  const legacyTargets = state.injectedTargets.some((rel) => manifest && !manifest.files[rel]?.baseHash);
+  const upstream = legacyTargets && manifest ? await renderUpstream(targetDir, manifest) : null;
+  for (const rel of state.injectedTargets) {
+    const abs = join15(targetDir, rel);
+    if (!existsSync10(abs)) continue;
+    const current = await readFile14(abs, "utf-8");
+    const next = stripBlock(current, id);
+    changes.push(await planWrite({ targetDir, path: rel, content: next, source: "engine", reason: "remover bloco do add-on", force: true }));
+    const pristine = addonBlocks(current).size === 1 && (await knownTemplates(rel, upstream)).some((template) => sameText(reinjectBlocks(rel, template, current), current));
+    if (manifest) manifest.files[rel] = restoredEntry(rel, manifest.files[rel], next, pristine);
+    strippedTargets.push(rel);
+  }
+  for (const f of state.createdFiles) {
+    const abs = join15(targetDir, f.path);
+    if (!existsSync10(abs)) continue;
+    const current = sha256(await readFile14(abs));
+    if (current === f.hash) {
+      if (manifest) delete manifest.files[manifestKey(targetDir, abs)];
+      deletedFiles.push(f.path);
+      const inspected = await inspectTarget(targetDir, f.path);
+      changes.push({ path: f.path, action: "remove", source: `addon:${id}`, reason: "arquivo intacto criado pelo add-on", expectedHash: inspected.hash, expectedKind: inspected.kind });
+    } else {
+      keptFiles.push(f.path);
+    }
+  }
+  if (manifest) changes.push(await planWrite({ targetDir, path: ".maker/manifest.json", content: JSON.stringify(manifest, null, 2) + "\n", source: "metadata", reason: "publicar manifest sem o add-on", force: true }));
+  const stateRel = manifestKey(targetDir, addonStatePath(targetDir, id));
+  const stateTarget = await inspectTarget(targetDir, stateRel);
+  changes.push({ path: stateRel, action: "remove", source: "metadata", reason: "remover state do add-on", expectedHash: stateTarget.hash, expectedKind: stateTarget.kind });
+  const plan = createPlan(targetDir, changes);
+  if (options.dryRun) console.log(formatPlan(plan));
+  else await applyChangePlan(plan);
+  return { strippedTargets, deletedFiles, keptFiles, plan };
+}
+
 // src/commands/mediation.ts
-import { existsSync as existsSync9 } from "fs";
-import { mkdir as mkdir6, readFile as readFile13, readdir as readdir4, rm as rm4, writeFile as writeFile6 } from "fs/promises";
-import { join as join14, resolve as resolve4 } from "path";
-import pc3 from "picocolors";
+import { existsSync as existsSync11 } from "fs";
+import { mkdir as mkdir6, readFile as readFile15, readdir as readdir4, rm as rm5, writeFile as writeFile6 } from "fs/promises";
+import { join as join16, resolve as resolve3 } from "path";
+import pc2 from "picocolors";
 import { z as z5 } from "zod";
 var DEFAULT_MEDIATION_DIR = ".maker/mediation";
 var INDEX = "mediation.json";
@@ -1555,32 +1703,54 @@ var CONFLICT_MARKER = /^(<{7}|={7}|>{7})(\s|$)/m;
 function configHash(config) {
   return sha256(Buffer.from(JSON.stringify(config)));
 }
-function mediationHint(count) {
-  return `${count} arquivo(s) precisam de media\xE7\xE3o (conflitos ou customiza\xE7\xF5es que o merge autom\xE1tico n\xE3o resolve): use a skill /maker-update no Claude Code ($maker-update no Codex) ou maker update --export para revisar com base/local/upstream.`;
+function mediationHint(count, state) {
+  const lead = `${count} arquivo(s) precisam de media\xE7\xE3o (conflitos ou customiza\xE7\xF5es que o merge autom\xE1tico n\xE3o resolve): `;
+  if (!state.configKnown) return lead + "crie maker.config.json com os valores usados no init; a media\xE7\xE3o precisa da config do projeto.";
+  if (state.skillInstalled) return lead + "use a skill /maker-update no Claude Code ($maker-update no Codex) ou maker update --export.";
+  if (state.updateBlocked) return lead + "use maker update --export para revisar base/local/upstream e resolver os conflitos.";
+  return lead + "aplique este update para instalar a skill maker-update (/maker-update no Claude Code, $maker-update no Codex) ou use maker update --export.";
+}
+function itemId(path) {
+  const slug = path.replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-|-$/g, "").toLowerCase().slice(-48).replace(/^-/, "");
+  return `${slug}-${sha256(Buffer.from(path)).slice(0, 8)}`;
+}
+async function proposalsIn(dir) {
+  if (!existsSync11(join16(dir, "items"))) return [];
+  const found = [];
+  for (const id of await readdir4(join16(dir, "items"))) {
+    for (const name of ["resolved", "notes.md"]) {
+      if (existsSync11(join16(dir, "items", id, name))) found.push(`items/${id}/${name}`);
+    }
+  }
+  return found;
 }
 async function exportMediation(targetDir, dirOption, candidates, config) {
-  const dir = resolve4(targetDir, dirOption === true ? DEFAULT_MEDIATION_DIR : dirOption);
-  if (existsSync9(dir)) {
+  const dir = resolve3(targetDir, dirOption === true ? DEFAULT_MEDIATION_DIR : dirOption);
+  if (existsSync11(dir)) {
     const entries = await readdir4(dir);
     if (entries.length && !entries.includes(INDEX)) {
       throw new Error(`${dir} j\xE1 existe e n\xE3o \xE9 uma exporta\xE7\xE3o do maker; escolha outro diret\xF3rio.`);
     }
-    await rm4(dir, { recursive: true, force: true });
+    const pending = await proposalsIn(dir);
+    if (pending.length) {
+      throw new Error(`${dir} tem propostas em andamento (${pending.join(", ")}); aplique-as com maker update --apply-resolutions ou mova-as antes de exportar de novo.`);
+    }
+    await rm5(dir, { recursive: true, force: true });
   }
   const shown = dirOption === true ? DEFAULT_MEDIATION_DIR : dirOption;
   if (!candidates.length) {
-    console.log(pc3.green("Nada a mediar: o update resolve tudo automaticamente."));
+    console.log(pc2.green("Nada a mediar: o update resolve tudo automaticamente."));
     return;
   }
-  await mkdir6(join14(dir, "items"), { recursive: true });
+  await mkdir6(join16(dir, "items"), { recursive: true });
   const items = [];
-  for (const [index2, candidate] of candidates.entries()) {
-    const id = `${String(index2 + 1).padStart(3, "0")}-${candidate.path.replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-|-$/g, "").toLowerCase()}`;
-    const itemDir = join14(dir, "items", id);
+  for (const candidate of candidates) {
+    const id = itemId(candidate.path);
+    const itemDir = join16(dir, "items", id);
     await mkdir6(itemDir, { recursive: true });
-    await writeFile6(join14(itemDir, "upstream"), candidate.upstream);
-    if (candidate.local) await writeFile6(join14(itemDir, "local"), candidate.local);
-    if (candidate.base) await writeFile6(join14(itemDir, "base"), candidate.base);
+    await writeFile6(join16(itemDir, "upstream"), candidate.upstream);
+    if (candidate.local) await writeFile6(join16(itemDir, "local"), candidate.local);
+    if (candidate.base) await writeFile6(join16(itemDir, "base"), candidate.base);
     items.push({
       id,
       path: candidate.path,
@@ -1595,8 +1765,8 @@ async function exportMediation(targetDir, dirOption, candidates, config) {
     });
   }
   const index = { format: 1, makerVersion: makerVersion(), configHash: configHash(config), items };
-  await writeFile6(join14(dir, INDEX), JSON.stringify(index, null, 2) + "\n");
-  await writeFile6(join14(dir, "README.md"), [
+  await writeFile6(join16(dir, INDEX), JSON.stringify(index, null, 2) + "\n");
+  await writeFile6(join16(dir, "README.md"), [
     "# Media\xE7\xE3o de update do maker",
     "",
     "Cada item em `items/<id>/` traz `upstream` (nova vers\xE3o), `local` (conte\xFAdo atual, se existir) e",
@@ -1608,16 +1778,17 @@ async function exportMediation(targetDir, dirOption, candidates, config) {
     "A skill `maker-update` conduz esse fluxo.",
     ""
   ].join("\n"));
-  console.log(pc3.bold(`${items.length} item(ns) exportado(s) para media\xE7\xE3o em ${shown}:`));
+  console.log(pc2.bold(`${items.length} item(ns) exportado(s) para media\xE7\xE3o em ${shown}:`));
   for (const item of items) {
     console.log(`  ${item.id}  ${item.path} [${item.category}${item.group ? `, grupo ${item.group}` : ""}] \u2014 ${item.reason}`);
   }
-  console.log(pc3.yellow(`Escreva items/<id>/resolved e aplique com maker update --apply-resolutions${dirOption === true ? "" : ` ${shown}`}.`));
+  console.log(pc2.yellow(`Escreva items/<id>/resolved e aplique com maker update --apply-resolutions${dirOption === true ? "" : ` ${shown}`}.`));
 }
-async function applyResolutions(targetDir, dirOption, currentConfig, opts) {
+async function applyResolutions(targetDir, dirOption, currentConfig, candidates, opts) {
   if (opts.dryRun) await assertNoPendingTransactions(targetDir);
-  const dir = resolve4(targetDir, dirOption === true ? DEFAULT_MEDIATION_DIR : dirOption);
-  const index = indexSchema.parse(JSON.parse(await readFile13(join14(dir, INDEX), "utf-8")));
+  const byPath = new Map(candidates.map((candidate) => [candidate.path, candidate]));
+  const dir = resolve3(targetDir, dirOption === true ? DEFAULT_MEDIATION_DIR : dirOption);
+  const index = indexSchema.parse(JSON.parse(await readFile15(join16(dir, INDEX), "utf-8")));
   if (index.makerVersion !== makerVersion()) {
     throw new Error(`Exporta\xE7\xE3o feita com o maker ${index.makerVersion}; exporte de novo com o ${makerVersion()} (maker update --export).`);
   }
@@ -1628,24 +1799,26 @@ async function applyResolutions(targetDir, dirOption, currentConfig, opts) {
   if (!manifest) throw new Error(`Nenhum install do maker em ${targetDir}.`);
   const errors = [];
   const resolved = /* @__PURE__ */ new Map();
-  const locals = /* @__PURE__ */ new Map();
+  const matched = /* @__PURE__ */ new Map();
   for (const item of index.items) {
-    const path = join14(dir, "items", item.id, "resolved");
-    if (!existsSync9(path)) continue;
+    const path = join16(dir, "items", item.id, "resolved");
+    if (!existsSync11(path)) continue;
     if (!isMediablePath(item, manifest.files)) {
       errors.push(`${item.path}: caminho fora dos arquivos gerenciados que podem ser mediados`);
       continue;
     }
-    const content = await readFile13(path);
+    const content = await readFile15(path);
     const problem = validateText(content);
     if (problem) errors.push(`${item.path}: proposta inv\xE1lida (${problem})`);
-    const upstream = await readFile13(join14(dir, "items", item.id, "upstream"));
-    if (sha256(upstream) !== item.upstreamHash) errors.push(`${item.path}: upstream exportado foi alterado`);
     const current = await inspectTarget(targetDir, item.path);
+    const candidate = byPath.get(item.path);
     if (current.kind === "other" || (current.hash ?? null) !== item.localHash) {
       errors.push(`${item.path}: o arquivo mudou desde a exporta\xE7\xE3o; exporte de novo`);
+    } else if (!candidate || candidate.category !== item.category || (candidate.group ?? null) !== item.group || sha256(candidate.upstream) !== item.upstreamHash || (candidate.local ? sha256(candidate.local) : null) !== item.localHash) {
+      errors.push(`${item.path}: o item n\xE3o corresponde ao que o maker exportaria agora; exporte de novo`);
+    } else {
+      matched.set(item.id, candidate);
     }
-    locals.set(item.id, current.content?.toString("utf-8") ?? "");
     resolved.set(item.id, content);
   }
   const groups = /* @__PURE__ */ new Map();
@@ -1661,9 +1834,17 @@ async function applyResolutions(targetDir, dirOption, currentConfig, opts) {
       errors.push(`grupo ${key}: resolva todos os itens juntos (${members.map((item) => item.path).join(", ")})`);
       continue;
     }
-    const before = members.map((item) => locals.get(item.id) ?? "").join("\n");
-    const lost = [...markers(before)].filter((marker) => !markers(members.map((item) => resolved.get(item.id).toString("utf-8")).join("\n")).has(marker));
-    if (lost.length) errors.push(`${members.map((item) => item.path).join(", ")}: blocos de add-on removidos (${lost.join(", ")}); mantenha-os intactos`);
+    if (!members.every((item) => matched.has(item.id))) continue;
+    const paths = members.map((item) => item.path).join(", ");
+    const before = blocksOf(members.map((item) => matched.get(item.id).local?.toString("utf-8") ?? ""));
+    const after = blocksOf(members.map((item) => resolved.get(item.id).toString("utf-8")));
+    for (const [id, content] of before) {
+      if (!after.has(id)) errors.push(`${paths}: bloco do add-on ${id} removido; mantenha-o intacto`);
+      else if (after.get(id).trim() !== content.trim()) errors.push(`${paths}: conte\xFAdo do bloco do add-on ${id} alterado; mantenha-o byte a byte`);
+    }
+    for (const id of after.keys()) {
+      if (!before.has(id)) errors.push(`${paths}: bloco do add-on ${id} n\xE3o existia; blocos s\xF3 s\xE3o criados por maker add`);
+    }
     for (const item of members) {
       const text3 = resolved.get(item.id).toString("utf-8");
       const unbalanced = unbalancedBlocks(text3);
@@ -1679,11 +1860,11 @@ async function applyResolutions(targetDir, dirOption, currentConfig, opts) {
     selected.push(...members);
   }
   if (errors.length) {
-    for (const error of errors) console.error(pc3.red(`\u2717 ${error}`));
+    for (const error of errors) console.error(pc2.red(`\u2717 ${error}`));
     throw new Error("Propostas de media\xE7\xE3o rejeitadas; nenhuma altera\xE7\xE3o foi feita.");
   }
   if (!selected.length) {
-    console.log(pc3.yellow(`Nenhuma proposta em ${dir}/items/<id>/resolved; nada a aplicar.`));
+    console.log(pc2.yellow(`Nenhuma proposta em ${dir}/items/<id>/resolved; nada a aplicar.`));
     return;
   }
   const changes = [];
@@ -1692,13 +1873,14 @@ async function applyResolutions(targetDir, dirOption, currentConfig, opts) {
   const stateUpdates = /* @__PURE__ */ new Map();
   for (const item of selected) {
     const content = resolved.get(item.id);
-    const upstream = await readFile13(join14(dir, "items", item.id, "upstream"));
+    const candidate = matched.get(item.id);
+    const source = resolvedSource(candidate, content.toString("utf-8"));
     changes.push({
       ...await planWrite({
         targetDir,
         path: item.path,
         content,
-        source: item.source,
+        source,
         reason: `proposta mediada (${item.category})`,
         force: true
       }),
@@ -1708,22 +1890,17 @@ async function applyResolutions(targetDir, dirOption, currentConfig, opts) {
     changes.push(await planWrite({
       targetDir,
       path: `.maker/bases/${item.upstreamHash}`,
-      content: upstream,
+      content: candidate.upstream,
       source: "metadata",
       reason: `base upstream de ${item.path}`
     }));
-    const recorded = manifest.files[item.path];
-    next.files[item.path] = {
-      ...recorded,
-      source: resolvedSource({ ...item, source: recorded?.source ?? item.engineSource }, content.toString("utf-8")),
-      hash: sha256(content),
-      baseHash: item.upstreamHash
-    };
+    const { edited: _edited, ...recorded } = manifest.files[item.path] ?? { hash: "", source };
+    next.files[item.path] = { ...recorded, source, hash: sha256(content), baseHash: item.upstreamHash };
   }
   for (const item of selected) {
     const role = legacyAdapterRole(item);
     if (!role || !item.localHash) continue;
-    const moved = new Set([...(locals.get(item.id) ?? "").matchAll(ADDON_MARKER)].map((match) => match[1]));
+    const moved = addonBlocks(matched.get(item.id).local?.toString("utf-8") ?? "").keys();
     for (const id of moved) {
       let entry = stateUpdates.get(id);
       if (!entry) {
@@ -1766,10 +1943,16 @@ async function applyResolutions(targetDir, dirOption, currentConfig, opts) {
     return;
   }
   await applyChangePlan(plan);
-  console.log(pc3.green(`\u2713 ${selected.length} proposta(s) mediada(s) aplicada(s).`));
-  const remaining = index.items.length - selected.length;
-  if (remaining) console.log(pc3.yellow(`${remaining} item(ns) sem proposta continuam pendentes.`));
-  if (dirOption === true && !remaining) await rm4(dir, { recursive: true, force: true });
+  console.log(pc2.green(`\u2713 ${selected.length} proposta(s) mediada(s) aplicada(s).`));
+  const applied = new Set(selected.map((item) => item.id));
+  const remaining = index.items.filter((item) => !applied.has(item.id));
+  for (const id of applied) await rm5(join16(dir, "items", id), { recursive: true, force: true });
+  if (remaining.length) {
+    await writeFile6(join16(dir, INDEX), JSON.stringify({ ...index, items: remaining }, null, 2) + "\n");
+    console.log(pc2.yellow(`${remaining.length} item(ns) sem proposta continuam pendentes em ${dir}.`));
+  } else {
+    await rm5(dir, { recursive: true, force: true });
+  }
   console.log("Execute maker update --dry-run e maker doctor para confirmar o estado final.");
 }
 function isMediablePath(item, files) {
@@ -1794,6 +1977,11 @@ function validateText(content) {
 function markers(text3) {
   return new Set([...text3.matchAll(ADDON_MARKER)].map((match) => `${match[1]}:${match[2]}`));
 }
+function blocksOf(texts) {
+  const blocks = /* @__PURE__ */ new Map();
+  for (const text3 of texts) for (const [id, content] of addonBlocks(text3)) blocks.set(id, content);
+  return blocks;
+}
 function unbalancedBlocks(text3) {
   const found = [...text3.matchAll(ADDON_MARKER)];
   for (const id of new Set(found.map((match) => match[1]))) {
@@ -1809,7 +1997,7 @@ function legacyAdapterRole(item) {
 }
 function resolvedSource(item, content) {
   if (item.category !== "legacy-agent") return item.source;
-  if (legacyAdapterRole(item)) return item.engineSource;
+  if (/^\.claude\/agents\//.test(item.path)) return item.engineSource;
   const ids = [...new Set([...content.matchAll(ADDON_MARKER)].map((match) => match[1]))];
   if (ids.length === 1) return `addon:${ids[0]}`;
   return item.source.startsWith("addon:") && ids.includes(item.source.slice("addon:".length)) ? item.source : item.engineSource;
@@ -1817,19 +2005,57 @@ function resolvedSource(item, content) {
 
 // src/commands/update.ts
 var CONFIG_UNKNOWN = "depende de config n\xE3o recuperada";
+var CONFIG_ACTION = "crie maker.config.json com os valores usados no init e execute maker update --dry-run";
 async function runUpdate(opts) {
-  const targetDir = resolve5(opts.target ?? process.cwd());
-  if (opts.dryRun) await assertNoPendingTransactions(targetDir);
+  const targetDir = resolve4(opts.target ?? process.cwd());
+  if (opts.export && opts.applyResolutions) throw new Error("Use --export ou --apply-resolutions, n\xE3o os dois juntos.");
+  if (opts.dryRun || opts.export) await assertNoPendingTransactions(targetDir);
+  const planning = await planUpdate(targetDir, { merge: opts.merge });
+  const { plan, reports, mediation, unresolved, defaulted, config, recovered } = planning;
+  if ((opts.export || opts.applyResolutions) && !recovered) {
+    throw new Error("Config do projeto n\xE3o recuperada: crie maker.config.json com os valores usados no init antes de mediar o update.");
+  }
+  if (opts.applyResolutions) return applyResolutions(targetDir, opts.applyResolutions, config, mediation, { dryRun: opts.dryRun });
+  if (opts.export) return exportMediation(targetDir, opts.export, mediation, config);
+  if (unresolved.length || defaulted.length) {
+    console.log(pc3.yellow("Config do projeto n\xE3o recuperada (manifest sem config e sem maker.config.json):"));
+    if (unresolved.length) console.log(pc3.yellow(`  ${unresolved.length} arquivo(s) existente(s) que dependem dela preservado(s): ${unresolved.join(", ")}`));
+    if (defaulted.length) console.log(pc3.yellow(`  ${defaulted.length} arquivo(s) ausente(s) criado(s) com valores padr\xE3o: ${defaulted.join(", ")}`));
+    console.log(pc3.yellow("A\xE7\xE3o recomendada: crie maker.config.json com os valores usados no init e execute maker update --dry-run; os arquivos acima s\xE3o ent\xE3o renderizados com ela."));
+  }
+  const conflicted = plan.changes.some((change) => change.action === "conflict");
+  if (mediation.length) {
+    console.log(pc3.yellow(mediationHint(mediation.length, {
+      configKnown: recovered,
+      skillInstalled: skillInstalled(targetDir),
+      updateBlocked: conflicted && !opts.dryRun
+    })));
+  }
+  if (opts.dryRun) {
+    printAgentReports(reports, "planejado");
+    console.log(formatPlan(plan));
+    if (conflicted) process.exitCode = 1;
+    return;
+  }
+  await applyChangePlan(plan);
+  printAgentReports(reports, "aplicado");
+  const merged = plan.changes.filter((change) => change.resolution === "merge").length;
+  const updated = plan.changes.filter((change) => (change.action === "update" || change.action === "create") && change.source !== "metadata" && change.resolution !== "merge").length;
+  const preserved = plan.changes.filter((change) => change.action === "preserve" && change.source !== "metadata" && change.reason !== "j\xE1 est\xE1 atualizado").length;
+  console.log(pc3.green(`\u2713 ${updated} arquivo(s) atualizado(s), ${merged} mesclado(s).`));
+  if (preserved) console.log(pc3.yellow(`${preserved} preservado(s) por seguran\xE7a.`));
+  if (reports.length) {
+    const migrated = reports.filter((report) => report.status === "migrated" || report.status === "adapter").length;
+    const degraded = reports.length - migrated;
+    console.log((degraded ? pc3.yellow : pc3.green)(`${migrated} agente(s) migrado(s), ${degraded} permanece(m) degradado(s).`));
+  }
+}
+async function planUpdate(targetDir, opts = {}) {
   const prior = await readManifest(targetDir);
   if (!prior) throw new Error(`Nenhum install do maker em ${targetDir}.`);
   const { config, recovered } = await resolveConfig(targetDir, prior.config, prior.project);
-  if (opts.applyResolutions) return applyResolutions(targetDir, opts.applyResolutions, config, { dryRun: opts.dryRun });
-  if (opts.export && !recovered) {
-    throw new Error("Config do projeto n\xE3o recuperada: crie maker.config.json com os valores usados no init antes de exportar a media\xE7\xE3o.");
-  }
-  if (opts.export) await assertNoPendingTransactions(targetDir);
   const agents = enabledAgents(prior);
-  const staging = await mkdtemp2(join15(tmpdir2(), "maker-update-plan-"));
+  const staging = await mkdtemp3(join17(tmpdir3(), "maker-update-plan-"));
   const changes = [];
   let reports = [];
   const unresolved = [];
@@ -1840,13 +2066,19 @@ async function runUpdate(opts) {
   try {
     const ctx = buildContext(config);
     const expected = await applyEngine(staging, ctx, agents);
-    const migration = await planLegacyAddonAgents(targetDir, staging, expected, next, { ctx, migrate: opts.merge !== false, configKnown: recovered });
+    const configDependent = recovered ? /* @__PURE__ */ new Set() : await configDependentFiles(expected, config, agents);
+    const migration = await planLegacyAddonAgents(
+      targetDir,
+      staging,
+      expected,
+      next,
+      { ctx, migrate: opts.merge !== false, configKnown: recovered, configDependent }
+    );
     changes.push(...migration.changes);
     reports = migration.reports;
-    const configDependent = recovered ? /* @__PURE__ */ new Set() : await configDependentFiles(expected, config, agents);
     for (const file of expected.sort((a, b) => a.rel.localeCompare(b.rel))) {
       if (migration.handled.has(file.rel)) continue;
-      const upstream = await readFile14(join15(staging, file.rel));
+      const upstream = await readFile16(join17(staging, file.rel));
       const upstreamHash = sha256(upstream);
       const current = await inspectTarget(targetDir, file.rel);
       const recorded = prior.files[file.rel];
@@ -1862,46 +2094,76 @@ async function runUpdate(opts) {
           upstream
         });
       };
+      const preserve = (reason, action = "preserve") => changes.push(status(action, file.rel, file.entry.source, current, reason));
       if (recorded?.source.startsWith("addon:")) {
-        changes.push(status("preserve", file.rel, file.entry.source, current, "arquivo controlado por add-on"));
-        if (current.kind === "file" && recorded.baseHash !== upstreamHash) {
-          await mediate("addon", "template atualizado em arquivo controlado por add-on", recorded.baseHash);
+        if (current.kind !== "file") {
+          preserve("arquivo controlado por add-on");
+        } else if (configDependent.has(file.rel)) {
+          preserve(CONFIG_UNKNOWN);
+          unresolved.push(file.rel);
+        } else {
+          const local = current.content.toString("utf-8");
+          if (sameText(reinjectBlocks(file.rel, upstream.toString("utf-8"), local), local)) {
+            preserve("arquivo controlado por add-on; template atual com os blocos");
+            next.files[file.rel] = { ...withoutEdited(recorded), baseHash: upstreamHash };
+          } else if (recorded.baseHash === upstreamHash) {
+            preserve("arquivo controlado por add-on; customiza\xE7\xF5es locais sobre o template atual");
+          } else if (opts.merge === false) {
+            preserve("arquivo controlado por add-on; merge desabilitado");
+            await mediate("addon", "template novo em arquivo controlado por add-on; merge desabilitado", recorded.baseHash);
+          } else {
+            const base2 = recorded.baseHash ? await readBase(targetDir, recorded.baseHash) : null;
+            const merged = base2 ? mergeText(current.content, base2, upstream) : null;
+            if (merged && sameBlocks(local, merged.toString("utf-8"))) {
+              changes.push(mergeChange(await planWrite({
+                targetDir,
+                path: file.rel,
+                content: merged,
+                source: recorded.source,
+                reason: "template novo mesclado preservando os blocos de add-on",
+                force: true
+              })));
+              next.files[file.rel] = { ...withoutEdited(recorded), hash: sha256(merged), baseHash: upstreamHash };
+            } else {
+              const reason = base2 ? "template novo e customiza\xE7\xF5es na mesma regi\xE3o de um arquivo de add-on" : "arquivo controlado por add-on sem base exata para o template novo";
+              preserve(reason);
+              await mediate("addon", reason, recorded.baseHash);
+            }
+          }
         }
       } else if (current.kind === "other") {
-        changes.push(status("conflict", file.rel, file.entry.source, current, "o caminho n\xE3o \xE9 um arquivo regular"));
+        preserve("o caminho n\xE3o \xE9 um arquivo regular", "conflict");
       } else if (current.kind === "absent") {
         changes.push(await planWrite({ targetDir, path: file.rel, content: upstream, source: file.entry.source, reason: "arquivo gerenciado ausente" }));
         next.files[file.rel] = manifestEntry(file.entry, upstreamHash, upstreamHash);
         if (configDependent.has(file.rel)) defaulted.push(file.rel);
       } else if (current.hash === upstreamHash) {
-        changes.push(status("preserve", file.rel, file.entry.source, current, "j\xE1 est\xE1 atualizado"));
+        preserve("j\xE1 est\xE1 atualizado");
         next.files[file.rel] = manifestEntry(file.entry, upstreamHash, upstreamHash);
       } else if (configDependent.has(file.rel) || configDependent.has(sharedRoleOf(file.rel))) {
-        changes.push(status("preserve", file.rel, file.entry.source, current, CONFIG_UNKNOWN));
+        preserve(CONFIG_UNKNOWN);
         unresolved.push(file.rel);
-      } else if (!recorded || current.hash === (recorded.baseHash ?? recorded.hash)) {
+      } else if (!recorded || !recorded.edited && current.hash === (recorded.baseHash ?? recorded.hash)) {
         changes.push(await planWrite({ targetDir, path: file.rel, content: upstream, source: file.entry.source, reason: "nova vers\xE3o upstream", force: true }));
         next.files[file.rel] = manifestEntry(file.entry, upstreamHash, upstreamHash);
       } else if (opts.merge === false) {
-        changes.push(status("preserve", file.rel, file.entry.source, current, "edi\xE7\xE3o local; merge desabilitado"));
+        preserve("edi\xE7\xE3o local; merge desabilitado");
         await mediate("local-edit", "edi\xE7\xE3o local; merge desabilitado", recorded.baseHash);
       } else if (!recorded.baseHash) {
-        changes.push(status("preserve", file.rel, file.entry.source, current, "edi\xE7\xE3o local em manifest legado sem base exata"));
+        preserve("edi\xE7\xE3o local em manifest legado sem base exata");
         await mediate("local-edit", "edi\xE7\xE3o local sem base exata");
       } else {
         const base2 = await readBase(targetDir, recorded.baseHash);
-        const merged2 = base2 ? mergeText(current.content, base2, upstream) : null;
+        const merged = base2 ? mergeText(current.content, base2, upstream) : null;
         if (!base2) {
-          changes.push(status("preserve", file.rel, file.entry.source, current, "base hist\xF3rica ausente; preservado por seguran\xE7a"));
+          preserve("base hist\xF3rica ausente; preservado por seguran\xE7a");
           await mediate("local-edit", "base hist\xF3rica ausente");
-        } else if (!merged2) {
-          changes.push(status("conflict", file.rel, file.entry.source, current, "mudan\xE7as locais e upstream na mesma regi\xE3o"));
+        } else if (!merged) {
+          preserve("mudan\xE7as locais e upstream na mesma regi\xE3o", "conflict");
           await mediate("conflict", "mudan\xE7as locais e upstream na mesma regi\xE3o", recorded.baseHash);
         } else {
-          const change = await planWrite({ targetDir, path: file.rel, content: merged2, source: file.entry.source, reason: "mudan\xE7as locais e upstream mescladas", force: true });
-          change.resolution = "merge";
-          changes.push(change);
-          next.files[file.rel] = manifestEntry(file.entry, sha256(merged2), upstreamHash);
+          changes.push(mergeChange(await planWrite({ targetDir, path: file.rel, content: merged, source: file.entry.source, reason: "mudan\xE7as locais e upstream mescladas", force: true })));
+          next.files[file.rel] = manifestEntry(file.entry, sha256(merged), upstreamHash);
         }
       }
       if (next.files[file.rel]?.baseHash === upstreamHash) {
@@ -1909,11 +2171,10 @@ async function runUpdate(opts) {
       }
     }
     const degraded = reports.filter((report) => report.status === "degraded").map((report) => report.path);
-    await groupLegacyAgents(targetDir, staging, expected, prior, mediation, degraded);
+    await groupLegacyAgents(targetDir, staging, expected, prior, mediation, degraded, recovered ? ctx : void 0);
   } finally {
-    await rm5(staging, { recursive: true, force: true });
+    await rm6(staging, { recursive: true, force: true });
   }
-  if (opts.export) return exportMediation(targetDir, opts.export, mediation, config);
   next.schemaVersion = 3;
   next.agents = agents;
   if (next.config || recovered) next.config = config;
@@ -1938,58 +2199,50 @@ async function runUpdate(opts) {
         sharedPath: `.maker/workflow/agents/${role}.md`,
         status: "degraded",
         reason: `${change.reason}; sem refer\xEAncia ao papel compartilhado`,
-        action: change.reason === CONFIG_UNKNOWN ? "crie maker.config.json com os valores usados no init e execute maker update --dry-run" : "revise o conte\xFAdo local, leve-o para o papel compartilhado e restaure o adapter gerado (maker update --dry-run mostra o plano)"
+        action: change.reason === CONFIG_UNKNOWN ? CONFIG_ACTION : "revise o conte\xFAdo local, leve-o para o papel compartilhado e restaure o adapter gerado (maker update --export e a skill maker-update ajudam)"
       });
     }
   }
-  if (unresolved.length || defaulted.length) {
-    console.log(pc4.yellow("Config do projeto n\xE3o recuperada (manifest sem config e sem maker.config.json):"));
-    if (unresolved.length) console.log(pc4.yellow(`  ${unresolved.length} arquivo(s) existente(s) que dependem dela preservado(s): ${unresolved.join(", ")}`));
-    if (defaulted.length) console.log(pc4.yellow(`  ${defaulted.length} arquivo(s) ausente(s) criado(s) com valores padr\xE3o: ${defaulted.join(", ")}`));
-    console.log(pc4.yellow("A\xE7\xE3o recomendada: crie maker.config.json com os valores usados no init e execute maker update --dry-run; os arquivos acima s\xE3o ent\xE3o renderizados com ela."));
-  }
-  if (mediation.length) console.log(pc4.yellow(mediationHint(mediation.length)));
-  if (opts.dryRun) {
-    printAgentReports(reports, "planejado");
-    console.log(formatPlan(plan));
-    if (plan.changes.some((change) => change.action === "conflict")) process.exitCode = 1;
-    return;
-  }
-  await applyChangePlan(plan);
-  printAgentReports(reports, "aplicado");
-  const merged = plan.changes.filter((change) => change.resolution === "merge").length;
-  const updated = plan.changes.filter((change) => (change.action === "update" || change.action === "create") && change.source !== "metadata" && change.resolution !== "merge").length;
-  const preserved = plan.changes.filter((change) => change.action === "preserve" && change.source !== "metadata" && change.reason !== "j\xE1 est\xE1 atualizado").length;
-  console.log(pc4.green(`\u2713 ${updated} arquivo(s) atualizado(s), ${merged} mesclado(s).`));
-  if (preserved) console.log(pc4.yellow(`${preserved} preservado(s) por seguran\xE7a.`));
-  if (reports.length) {
-    const migrated = reports.filter((report) => report.status === "migrated" || report.status === "adapter").length;
-    const degraded = reports.length - migrated;
-    console.log((degraded ? pc4.yellow : pc4.green)(`${migrated} agente(s) migrado(s), ${degraded} permanece(m) degradado(s).`));
-  }
+  return { plan, reports, mediation, unresolved, defaulted, config, recovered };
+}
+function mergeChange(change) {
+  if (change.action !== "preserve") change.resolution = "merge";
+  return change;
+}
+function withoutEdited(entry) {
+  const { edited: _edited, ...rest } = entry;
+  return rest;
+}
+function sameBlocks(before, after) {
+  const a = addonBlocks(before);
+  const b = addonBlocks(after);
+  return a.size === b.size && [...a].every(([id, content]) => b.get(id) === content);
+}
+function skillInstalled(targetDir) {
+  return existsSync12(join17(targetDir, ".claude/skills/maker-update/SKILL.md")) || existsSync12(join17(targetDir, ".agents/skills/maker-update/SKILL.md"));
 }
 function printAgentReports(reports, phase) {
   if (!reports.length) return;
-  console.log(pc4.bold(`Agentes legados (${phase}):`));
+  console.log(pc3.bold(`Agentes legados (${phase}):`));
   for (const report of reports) {
     if (report.status === "migrated" || report.status === "adapter") {
       const verb = phase === "planejado" ? "migrar" : "migrado";
       const target = report.status === "migrated" ? ` \u2192 ${report.sharedPath}` : " (s\xF3 o adapter)";
-      console.log(pc4.cyan(`  ${verb}   ${report.path}${target}: ${report.reason}`));
+      console.log(pc3.cyan(`  ${verb}   ${report.path}${target}: ${report.reason}`));
     } else if (report.status === "pending") {
-      console.log(pc4.dim(`  pendente ${report.path} \u2192 ${report.sharedPath}: ${report.reason}; n\xE3o migrado com --no-merge`));
+      console.log(pc3.dim(`  pendente ${report.path} \u2192 ${report.sharedPath}: ${report.reason}; n\xE3o migrado com --no-merge`));
     } else {
-      console.log(pc4.yellow(`  degradado ${report.path}: ${report.reason}`));
+      console.log(pc3.yellow(`  degradado ${report.path}: ${report.reason}`));
     }
   }
   const actions = [...new Set(reports.flatMap((report) => report.action ? [report.action] : []))];
   if (reports.some((report) => report.status === "pending")) actions.push("execute maker update sem --no-merge para migrar os agentes pendentes");
   if (!actions.length) return;
-  console.log(pc4.yellow("A\xE7\xE3o recomendada para os agentes que continuam sem refer\xEAncia ao papel compartilhado:"));
-  for (const action of actions) console.log(pc4.yellow(`  - ${action}`));
+  console.log(pc3.yellow("A\xE7\xE3o recomendada para os agentes que continuam sem refer\xEAncia ao papel compartilhado:"));
+  for (const action of actions) console.log(pc3.yellow(`  - ${action}`));
 }
 async function configDependentFiles(expected, config, agents) {
-  const staging = await mkdtemp2(join15(tmpdir2(), "maker-update-config-"));
+  const staging = await mkdtemp3(join17(tmpdir3(), "maker-update-config-"));
   try {
     const sentinel = parseConfig({
       ...config,
@@ -1999,14 +2252,14 @@ async function configDependentFiles(expected, config, agents) {
     const probe = new Map((await applyEngine(staging, buildContext(sentinel), agents)).map((file) => [file.rel, file.entry.hash]));
     return new Set(expected.filter((file) => probe.get(file.rel) !== file.entry.hash).map((file) => file.rel));
   } finally {
-    await rm5(staging, { recursive: true, force: true });
+    await rm6(staging, { recursive: true, force: true });
   }
 }
 function sharedRoleOf(path) {
   const role = path.match(/^\.claude\/agents\/([a-z0-9-]+)\.md$/)?.[1];
   return role ? `.maker/workflow/agents/${role}.md` : "";
 }
-async function groupLegacyAgents(targetDir, staging, expected, prior, mediation, degraded) {
+async function groupLegacyAgents(targetDir, staging, expected, prior, mediation, degraded, ctx) {
   const engineSources = new Map(expected.map((file) => [file.rel, file.entry.source]));
   const adapters = new Set(degraded);
   for (const candidate of mediation) {
@@ -2015,11 +2268,14 @@ async function groupLegacyAgents(targetDir, staging, expected, prior, mediation,
   for (const adapter of [...adapters].sort()) {
     const shared = sharedRoleOf(adapter);
     if (!shared || !engineSources.has(adapter) || !engineSources.has(shared)) continue;
+    const role = adapter.match(/^\.claude\/agents\/([a-z0-9-]+)\.md$/)[1];
+    const legacy = ctx ? await legacyAgent(ctx, role) : void 0;
     for (const path of [adapter, shared]) {
       const existing = mediation.find((candidate) => candidate.path === path);
       if (existing) {
         existing.category = "legacy-agent";
         existing.group = adapter;
+        if (path === adapter && !existing.base && legacy) existing.base = Buffer.from(legacy);
         continue;
       }
       const current = await inspectTarget(targetDir, path);
@@ -2033,8 +2289,8 @@ async function groupLegacyAgents(targetDir, staging, expected, prior, mediation,
         group: adapter,
         reason: path === adapter ? "agente legado sem refer\xEAncia ao papel compartilhado" : "papel compartilhado do agente legado",
         local: current.content ?? null,
-        base: recorded?.baseHash ? await readBase(targetDir, recorded.baseHash) : null,
-        upstream: await readFile14(join15(staging, path))
+        base: path === adapter ? legacy ? Buffer.from(legacy) : null : recorded?.baseHash ? await readBase(targetDir, recorded.baseHash) : null,
+        upstream: await readFile16(join17(staging, path))
       });
     }
   }
@@ -2047,7 +2303,7 @@ function status(action, path, source, current, reason) {
 }
 async function readBase(targetDir, hash) {
   try {
-    const content = await readFile14(join15(targetDir, ".maker", "bases", hash));
+    const content = await readFile16(join17(targetDir, ".maker", "bases", hash));
     return sha256(content) === hash ? content : null;
   } catch (error) {
     if (error.code === "ENOENT") return null;
@@ -2056,7 +2312,7 @@ async function readBase(targetDir, hash) {
 }
 async function listBases(targetDir) {
   try {
-    return (await readdir5(join15(targetDir, ".maker", "bases"))).filter((name) => /^[a-f0-9]{64}$/.test(name)).sort();
+    return (await readdir5(join17(targetDir, ".maker", "bases"))).filter((name) => /^[a-f0-9]{64}$/.test(name)).sort();
   } catch (error) {
     if (error.code === "ENOENT") return [];
     throw error;
@@ -2078,154 +2334,68 @@ function mergeText(local, base2, upstream) {
   });
   return result.conflict ? null : Buffer.from(result.result.join(""), "utf-8");
 }
-async function resolveConfig(targetDir, stored, project) {
-  if (stored) return { config: parseConfig(stored), recovered: true };
-  const configPath = join15(targetDir, "maker.config.json");
-  if (existsSync10(configPath)) return { config: parseConfig(JSON.parse(await readFile14(configPath, "utf-8"))), recovered: true };
-  return { config: parseConfig({ project }), recovered: false };
+
+// src/commands/doctor.ts
+async function runDoctor(opts) {
+  const targetDir = resolve5(opts.target ?? process.cwd());
+  const manifest = await readManifest(targetDir);
+  if (!manifest) {
+    throw new Error(`Nenhum install do maker encontrado em ${targetDir} (.maker/manifest.json ausente).`);
+  }
+  const result = await verifyManifest(targetDir, manifest);
+  const integrations = await Promise.all(
+    enabledAgents(manifest).map((agent2) => validateAgentIntegration(targetDir, agent2))
+  );
+  const addons = await inspectAddons(targetDir, manifest);
+  console.log(pc4.dim(`Projeto "${manifest.project.name}" \xB7 maker ${manifest.makerVersion}`));
+  console.log(pc4.dim(`${result.checked} arquivos verificados`));
+  for (const integration of integrations) {
+    const status2 = integration.issues.length ? pc4.red("degradada") : pc4.green("\xEDntegra");
+    console.log(
+      `  ${integration.provider}: ${status2} \xB7 ${integration.skills} skills \xB7 ${integration.agents} agentes`
+    );
+    for (const issue2 of integration.issues) console.log(pc4.red(`    ${issue2}`));
+  }
+  if (addons.addons.length) {
+    console.log(pc4.bold("\nAdd-ons aplicados:"));
+    for (const addon of addons.addons) {
+      const status2 = addon.ok ? pc4.green("\xEDntegro") : pc4.red("degradado");
+      console.log(`  ${addon.id} \xB7 ${addon.name} \xB7 v${addon.version ?? "?"} \xB7 ${status2}`);
+      for (const problem of addon.issues) {
+        console.log(pc4.red(`    problema: ${problem.message}`));
+        console.log(pc4.yellow(`    a\xE7\xE3o: ${problem.action}`));
+      }
+    }
+  }
+  const pending = await pendingMediation(targetDir);
+  if (pending) {
+    console.log(pc4.yellow(`${pending} arquivo(s) aguardam media\xE7\xE3o do update: use a skill maker-update ou maker update --export.`));
+  }
+  if (result.ok && integrations.every((integration) => integration.issues.length === 0) && addons.ok) {
+    console.log(pc4.green("\u2713 Install \xEDntegro."));
+    return;
+  }
+  const reported = new Set(integrations.flatMap((integration) => integration.missingAdapters));
+  for (const m of result.missing) if (!reported.has(m)) console.log(pc4.red(`  ausente:    ${m}`));
+  for (const m of result.modified) console.log(pc4.yellow(`  modificado: ${m}`));
+  console.log(
+    pc4.dim(`
+${result.missing.length} ausente(s), ${result.modified.length} modificado(s).`)
+  );
+  process.exitCode = 1;
+}
+async function pendingMediation(targetDir) {
+  try {
+    return (await planUpdate(targetDir)).mediation.length;
+  } catch {
+    return 0;
+  }
 }
 
 // src/commands/add.ts
 import { resolve as resolve6 } from "path";
 import pc5 from "picocolors";
 import * as p2 from "@clack/prompts";
-
-// src/addons/apply.ts
-import { readFile as readFile15 } from "fs/promises";
-import { existsSync as existsSync11 } from "fs";
-import { join as join16 } from "path";
-var CONSTITUTION = ".specify/memory/constitution.md";
-var PLACEHOLDER = "_(nenhum princ\xEDpio de projeto definido ainda)_";
-function addonContext(manifest, knobs) {
-  return {
-    project: manifest.project,
-    addon: knobs,
-    generatedAt: (/* @__PURE__ */ new Date()).toISOString().slice(0, 10)
-  };
-}
-async function renderFrom(dir, rel, ctx) {
-  const raw = await readFile15(join16(dir, rel), "utf-8");
-  return rel.endsWith(".hbs") ? renderRaw(raw, ctx) : raw;
-}
-function injectedEntry(prior, content, id) {
-  return { hash: sha256(content), source: `addon:${id}`, ...prior?.baseHash ? { baseHash: prior.baseHash } : {} };
-}
-function restoredEntry(rel, prior, content) {
-  const source = rel.startsWith(".claude/") ? "engine:claude" : rel.startsWith(".codex/") || rel.startsWith(".agents/") ? "engine:codex" : "engine:common";
-  if (!prior?.baseHash) return { hash: prior?.hash ?? sha256(content), source };
-  return { hash: sha256(content), source, baseHash: prior.baseHash };
-}
-async function applyAddon(targetDir, addon, knobs, options = {}) {
-  if (options.dryRun) await assertNoPendingTransactions(targetDir);
-  const currentManifest = await readManifest(targetDir);
-  if (!currentManifest) {
-    throw new Error(`Nenhum install do maker em ${targetDir} \u2014 rode 'maker init' antes de add-ons.`);
-  }
-  const manifest = structuredClone(currentManifest);
-  const dir = addonDir(addon.id);
-  const ctx = addonContext(manifest, knobs);
-  const injectedTargets = [];
-  const createdFiles = [];
-  const changes = [];
-  const prior = await readAddonState(targetDir, addon.id);
-  const owned = new Set((prior?.createdFiles ?? []).map((f) => f.path));
-  if (addon.principles.length) {
-    const absConst = join16(targetDir, CONSTITUTION);
-    if (!existsSync11(absConst)) throw new Error(`${CONSTITUTION} ausente no install.`);
-    const rendered = [];
-    for (const p3 of addon.principles) rendered.push((await renderFrom(dir, p3, ctx)).trim());
-    const block = rendered.join("\n\n");
-    const current = await readFile15(absConst, "utf-8");
-    const next = upsertBlock(current, addon.id, block, {
-      replacePlaceholder: PLACEHOLDER,
-      beforeHeading: "## Governance"
-    });
-    changes.push(await planWrite({ targetDir, path: CONSTITUTION, content: next, source: `addon:${addon.id}`, reason: "injetar princ\xEDpios do add-on", force: true }));
-    manifest.files[CONSTITUTION] = injectedEntry(manifest.files[CONSTITUTION], next, addon.id);
-    injectedTargets.push(CONSTITUTION);
-  }
-  for (const frag of addon.agentFragments) {
-    const rel = `.maker/workflow/agents/${frag.agent}.md`;
-    const abs = join16(targetDir, rel);
-    if (!existsSync11(abs)) {
-      console.warn(`  aviso: agente ${frag.agent} ausente \u2014 fragmento pulado.`);
-      continue;
-    }
-    const block = (await renderFrom(dir, frag.file, ctx)).trim();
-    const next = upsertBlock(await readFile15(abs, "utf-8"), addon.id, block);
-    changes.push(await planWrite({ targetDir, path: rel, content: next, source: `addon:${addon.id}`, reason: "injetar fragmento do add-on", force: true }));
-    manifest.files[rel] = injectedEntry(manifest.files[rel], next, addon.id);
-    injectedTargets.push(rel);
-  }
-  for (const f of addon.files) {
-    const abs = join16(targetDir, f.to);
-    if (existsSync11(abs) && !owned.has(f.to)) {
-      console.warn(`  aviso: ${f.to} j\xE1 existe (n\xE3o \xE9 deste add-on) \u2014 n\xE3o sobrescrito.`);
-      continue;
-    }
-    const content = await renderFrom(dir, f.from, ctx);
-    const hash = sha256(Buffer.from(content, "utf-8"));
-    manifest.files[manifestKey(targetDir, abs)] = { hash, source: `addon:${addon.id}` };
-    createdFiles.push({ path: f.to, hash });
-    changes.push(await planWrite({ targetDir, path: f.to, content, source: `addon:${addon.id}`, reason: "arquivo criado pelo add-on", force: owned.has(f.to) }));
-  }
-  const state = {
-    id: addon.id,
-    version: addon.version,
-    appliedAt: (/* @__PURE__ */ new Date()).toISOString(),
-    knobs,
-    createdFiles,
-    injectedTargets
-  };
-  changes.push(await planWrite({ targetDir, path: ".maker/manifest.json", content: JSON.stringify(manifest, null, 2) + "\n", source: "metadata", reason: "publicar manifest do add-on", force: true }));
-  const stateRel = manifestKey(targetDir, addonStatePath(targetDir, addon.id));
-  changes.push(await planWrite({ targetDir, path: stateRel, content: JSON.stringify(state, null, 2) + "\n", source: "metadata", reason: "publicar state do add-on", force: true }));
-  const plan = createPlan(targetDir, changes);
-  if (options.dryRun) console.log(formatPlan(plan));
-  else await applyChangePlan(plan);
-  return { injectedTargets, createdFiles: createdFiles.map((c) => c.path), plan };
-}
-async function removeAddon(targetDir, id, options = {}) {
-  if (options.dryRun) await assertNoPendingTransactions(targetDir);
-  const state = await readAddonState(targetDir, id);
-  if (!state) throw new Error(`Add-on "${id}" n\xE3o est\xE1 aplicado em ${targetDir}.`);
-  const manifest = await readManifest(targetDir);
-  const strippedTargets = [];
-  const deletedFiles = [];
-  const keptFiles = [];
-  const changes = [];
-  for (const rel of state.injectedTargets) {
-    const abs = join16(targetDir, rel);
-    if (!existsSync11(abs)) continue;
-    const next = stripBlock(await readFile15(abs, "utf-8"), id);
-    changes.push(await planWrite({ targetDir, path: rel, content: next, source: "engine", reason: "remover bloco do add-on", force: true }));
-    if (manifest) manifest.files[rel] = restoredEntry(rel, manifest.files[rel], next);
-    strippedTargets.push(rel);
-  }
-  for (const f of state.createdFiles) {
-    const abs = join16(targetDir, f.path);
-    if (!existsSync11(abs)) continue;
-    const current = sha256(await readFile15(abs));
-    if (current === f.hash) {
-      if (manifest) delete manifest.files[manifestKey(targetDir, abs)];
-      deletedFiles.push(f.path);
-      const inspected = await inspectTarget(targetDir, f.path);
-      changes.push({ path: f.path, action: "remove", source: `addon:${id}`, reason: "arquivo intacto criado pelo add-on", expectedHash: inspected.hash, expectedKind: inspected.kind });
-    } else {
-      keptFiles.push(f.path);
-    }
-  }
-  if (manifest) changes.push(await planWrite({ targetDir, path: ".maker/manifest.json", content: JSON.stringify(manifest, null, 2) + "\n", source: "metadata", reason: "publicar manifest sem o add-on", force: true }));
-  const stateRel = manifestKey(targetDir, addonStatePath(targetDir, id));
-  const stateTarget = await inspectTarget(targetDir, stateRel);
-  changes.push({ path: stateRel, action: "remove", source: "metadata", reason: "remover state do add-on", expectedHash: stateTarget.hash, expectedKind: stateTarget.kind });
-  const plan = createPlan(targetDir, changes);
-  if (options.dryRun) console.log(formatPlan(plan));
-  else await applyChangePlan(plan);
-  return { strippedTargets, deletedFiles, keptFiles, plan };
-}
-
-// src/commands/add.ts
 function parseSet(pairs = []) {
   const out = {};
   for (const pair of pairs) {
@@ -2301,8 +2471,8 @@ import { resolve as resolve8 } from "path";
 import pc7 from "picocolors";
 
 // src/runs/read.ts
-import { readdir as readdir6, readFile as readFile16 } from "fs/promises";
-import { basename as basename3, join as join18 } from "path";
+import { readdir as readdir6, readFile as readFile17 } from "fs/promises";
+import { basename as basename3, join as join19 } from "path";
 
 // src/runs/schema.ts
 import { z as z6 } from "zod";
@@ -2344,22 +2514,22 @@ var eventSchema = z6.discriminatedUnion("type", [
 
 // src/runs/emit.ts
 import { appendFile, mkdir as mkdir7 } from "fs/promises";
-import { dirname as dirname6, join as join17 } from "path";
+import { dirname as dirname6, join as join18 } from "path";
 var RUNS_DIR = ".maker/runs";
 
 // src/runs/read.ts
 async function listRunFiles(target) {
-  const dir = join18(target, RUNS_DIR);
+  const dir = join19(target, RUNS_DIR);
   let entries;
   try {
     entries = await readdir6(dir, { withFileTypes: true });
   } catch {
     return [];
   }
-  return entries.filter((e) => e.isFile() && e.name.endsWith(".jsonl")).map((e) => ({ runId: basename3(e.name, ".jsonl"), path: join18(dir, e.name) })).sort((a, b) => a.runId.localeCompare(b.runId));
+  return entries.filter((e) => e.isFile() && e.name.endsWith(".jsonl")).map((e) => ({ runId: basename3(e.name, ".jsonl"), path: join19(dir, e.name) })).sort((a, b) => a.runId.localeCompare(b.runId));
 }
 async function readRun(path) {
-  const raw = await readFile16(path, "utf-8");
+  const raw = await readFile17(path, "utf-8");
   const events = [];
   for (const line of raw.split("\n")) {
     const trimmed = line.trim();
@@ -2451,9 +2621,9 @@ async function runRuns(opts) {
 }
 
 // src/commands/list.ts
-import { existsSync as existsSync12 } from "fs";
+import { existsSync as existsSync13 } from "fs";
 import { lstat as lstat4, readdir as readdir7 } from "fs/promises";
-import { basename as basename4, join as join19, resolve as resolve9 } from "path";
+import { basename as basename4, join as join20, resolve as resolve9 } from "path";
 import pc8 from "picocolors";
 async function runList(opts) {
   const targetDir = resolve9(opts.target ?? process.cwd());
@@ -2485,7 +2655,7 @@ async function classifyAddons(targetDir, catalog) {
         };
       }
       const statePath = addonStatePath(targetDir, id);
-      if (!existsSync12(statePath)) return { id, catalog: entry, status: "available" };
+      if (!existsSync13(statePath)) return { id, catalog: entry, status: "available" };
       try {
         const state = await readAddonState(targetDir, id);
         if (state.id !== id) {
@@ -2512,7 +2682,7 @@ async function classifyAddons(targetDir, catalog) {
   );
 }
 async function listStateIds(targetDir) {
-  const dir = join19(targetDir, ".maker", "addons");
+  const dir = join20(targetDir, ".maker", "addons");
   let metadata;
   try {
     metadata = await lstat4(dir);
@@ -2550,11 +2720,11 @@ ${pc8.bold(addon.id)} \xB7 ${name} \xB7 ${label}`);
 }
 
 // src/commands/agent.ts
-import { existsSync as existsSync13 } from "fs";
-import { readFile as readFile17 } from "fs/promises";
-import { join as join20, resolve as resolve10 } from "path";
-import { mkdtemp as mkdtemp3, rm as rm6 } from "fs/promises";
-import { tmpdir as tmpdir3 } from "os";
+import { existsSync as existsSync14 } from "fs";
+import { readFile as readFile18 } from "fs/promises";
+import { join as join21, resolve as resolve10 } from "path";
+import { mkdtemp as mkdtemp4, rm as rm7 } from "fs/promises";
+import { tmpdir as tmpdir4 } from "os";
 import pc9 from "picocolors";
 async function runAgentAdd(providerInput, opts) {
   const provider = agentProviderSchema.parse(providerInput);
@@ -2602,24 +2772,24 @@ async function runAgentList(opts) {
 }
 async function resolveRenderConfig(targetDir, stored, explicitPath) {
   if (stored) return parseConfig(stored);
-  const path = explicitPath ? resolve10(explicitPath) : join20(targetDir, "maker.config.json");
-  if (!existsSync13(path)) {
+  const path = explicitPath ? resolve10(explicitPath) : join21(targetDir, "maker.config.json");
+  if (!existsSync14(path)) {
     throw new Error(
       "Este install usa um manifest legado sem a configura\xE7\xE3o de renderiza\xE7\xE3o. Forne\xE7a --config <maker.config.json> para adicionar outra integra\xE7\xE3o com seguran\xE7a."
     );
   }
-  return parseConfig(JSON.parse(await readFile17(path, "utf-8")));
+  return parseConfig(JSON.parse(await readFile18(path, "utf-8")));
 }
 async function assertNoUnmanagedProviderFiles(targetDir, provider, managed, ctx) {
-  const staging = await mkdtemp3(join20(tmpdir3(), "maker-agent-preflight-"));
+  const staging = await mkdtemp4(join21(tmpdir4(), "maker-agent-preflight-"));
   let expected;
   try {
     expected = (await applyAgentProvider(staging, ctx, provider)).map((file) => file.rel);
   } finally {
-    await rm6(staging, { recursive: true, force: true });
+    await rm7(staging, { recursive: true, force: true });
   }
   const collisions = expected.filter(
-    (rel) => existsSync13(join20(targetDir, rel)) && !(rel in managed)
+    (rel) => existsSync14(join21(targetDir, rel)) && !(rel in managed)
   );
   if (collisions.length) {
     throw new Error(

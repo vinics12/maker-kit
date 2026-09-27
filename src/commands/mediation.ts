@@ -5,6 +5,7 @@ import pc from "picocolors";
 import { z } from "zod";
 import { addonStateSchema, type AddonState } from "../addons/state.js";
 import { sharedRoleReference } from "../agents/reference.js";
+import { addonBlocks } from "../addons/inject.js";
 import { createPlan, formatPlan, inspectTarget, planWrite, type PlannedChange } from "../changes/plan.js";
 import { applyChangePlan, assertNoPendingTransactions } from "../changes/transaction.js";
 import { readManifest, sha256 } from "../render/manifest.js";
@@ -63,9 +64,30 @@ export function configHash(config: unknown): string {
   return sha256(Buffer.from(JSON.stringify(config)));
 }
 
-export function mediationHint(count: number): string {
-  return `${count} arquivo(s) precisam de mediação (conflitos ou customizações que o merge automático não resolve): ` +
-    "use a skill /maker-update no Claude Code ($maker-update no Codex) ou maker update --export para revisar com base/local/upstream.";
+/** Aviso do update: só sugere o que está disponível agora (skill instalada, config para exportar, update aplicável). */
+export function mediationHint(count: number, state: { configKnown: boolean; skillInstalled: boolean; updateBlocked: boolean }): string {
+  const lead = `${count} arquivo(s) precisam de mediação (conflitos ou customizações que o merge automático não resolve): `;
+  if (!state.configKnown) return lead + "crie maker.config.json com os valores usados no init; a mediação precisa da config do projeto.";
+  if (state.skillInstalled) return lead + "use a skill /maker-update no Claude Code ($maker-update no Codex) ou maker update --export.";
+  if (state.updateBlocked) return lead + "use maker update --export para revisar base/local/upstream e resolver os conflitos.";
+  return lead + "aplique este update para instalar a skill maker-update (/maker-update no Claude Code, $maker-update no Codex) ou use maker update --export.";
+}
+
+/** Id estável por caminho: reexportar não embaralha itens nem propostas. */
+function itemId(path: string): string {
+  const slug = path.replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-|-$/g, "").toLowerCase().slice(-48).replace(/^-/, "");
+  return `${slug}-${sha256(Buffer.from(path)).slice(0, 8)}`;
+}
+
+async function proposalsIn(dir: string): Promise<string[]> {
+  if (!existsSync(join(dir, "items"))) return [];
+  const found: string[] = [];
+  for (const id of await readdir(join(dir, "items"))) {
+    for (const name of ["resolved", "notes.md"]) {
+      if (existsSync(join(dir, "items", id, name))) found.push(`items/${id}/${name}`);
+    }
+  }
+  return found;
 }
 
 export async function exportMediation(
@@ -80,6 +102,11 @@ export async function exportMediation(
     if (entries.length && !entries.includes(INDEX)) {
       throw new Error(`${dir} já existe e não é uma exportação do maker; escolha outro diretório.`);
     }
+    const pending = await proposalsIn(dir);
+    if (pending.length) {
+      throw new Error(`${dir} tem propostas em andamento (${pending.join(", ")}); aplique-as com maker update --apply-resolutions ` +
+        "ou mova-as antes de exportar de novo.");
+    }
     await rm(dir, { recursive: true, force: true });
   }
   const shown = dirOption === true ? DEFAULT_MEDIATION_DIR : dirOption;
@@ -89,8 +116,8 @@ export async function exportMediation(
   }
   await mkdir(join(dir, "items"), { recursive: true });
   const items: MediationItem[] = [];
-  for (const [index, candidate] of candidates.entries()) {
-    const id = `${String(index + 1).padStart(3, "0")}-${candidate.path.replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-|-$/g, "").toLowerCase()}`;
+  for (const candidate of candidates) {
+    const id = itemId(candidate.path);
     const itemDir = join(dir, "items", id);
     await mkdir(itemDir, { recursive: true });
     await writeFile(join(itemDir, "upstream"), candidate.upstream);
@@ -127,13 +154,20 @@ export async function exportMediation(
 
 export interface ApplyResolutionsOptions { dryRun?: boolean }
 
+/**
+ * `candidates` é o que o maker exportaria agora. Cada proposta só é aceita para um item que ainda
+ * corresponde a um candidato (mesmo caminho, categoria, grupo, local e upstream): o índice exportado,
+ * que o agente pode editar, nunca decide caminho, upstream, base ou origem.
+ */
 export async function applyResolutions(
   targetDir: string,
   dirOption: string | true,
   currentConfig: unknown,
+  candidates: MediationCandidate[],
   opts: ApplyResolutionsOptions,
 ): Promise<void> {
   if (opts.dryRun) await assertNoPendingTransactions(targetDir);
+  const byPath = new Map(candidates.map((candidate) => [candidate.path, candidate]));
   const dir = resolve(targetDir, dirOption === true ? DEFAULT_MEDIATION_DIR : dirOption);
   const index = indexSchema.parse(JSON.parse(await readFile(join(dir, INDEX), "utf-8")));
   if (index.makerVersion !== makerVersion()) {
@@ -147,8 +181,7 @@ export async function applyResolutions(
 
   const errors: string[] = [];
   const resolved = new Map<string, Buffer>();
-  /** Conteúdo atual (já conferido contra localHash): a verificação de blocos não confia na cópia exportada. */
-  const locals = new Map<string, string>();
+  const matched = new Map<string, MediationCandidate>();
   for (const item of index.items) {
     const path = join(dir, "items", item.id, "resolved");
     if (!existsSync(path)) continue;
@@ -159,13 +192,16 @@ export async function applyResolutions(
     const content = await readFile(path);
     const problem = validateText(content);
     if (problem) errors.push(`${item.path}: proposta inválida (${problem})`);
-    const upstream = await readFile(join(dir, "items", item.id, "upstream"));
-    if (sha256(upstream) !== item.upstreamHash) errors.push(`${item.path}: upstream exportado foi alterado`);
     const current = await inspectTarget(targetDir, item.path);
+    const candidate = byPath.get(item.path);
     if (current.kind === "other" || (current.hash ?? null) !== item.localHash) {
       errors.push(`${item.path}: o arquivo mudou desde a exportação; exporte de novo`);
+    } else if (!candidate || candidate.category !== item.category || (candidate.group ?? null) !== item.group ||
+        sha256(candidate.upstream) !== item.upstreamHash || (candidate.local ? sha256(candidate.local) : null) !== item.localHash) {
+      errors.push(`${item.path}: o item não corresponde ao que o maker exportaria agora; exporte de novo`);
+    } else {
+      matched.set(item.id, candidate);
     }
-    locals.set(item.id, current.content?.toString("utf-8") ?? "");
     resolved.set(item.id, content);
   }
 
@@ -182,9 +218,18 @@ export async function applyResolutions(
       errors.push(`grupo ${key}: resolva todos os itens juntos (${members.map((item) => item.path).join(", ")})`);
       continue;
     }
-    const before = members.map((item) => locals.get(item.id) ?? "").join("\n");
-    const lost = [...markers(before)].filter((marker) => !markers(members.map((item) => resolved.get(item.id)!.toString("utf-8")).join("\n")).has(marker));
-    if (lost.length) errors.push(`${members.map((item) => item.path).join(", ")}: blocos de add-on removidos (${lost.join(", ")}); mantenha-os intactos`);
+    if (!members.every((item) => matched.has(item.id))) continue;
+    // Blocos de add-on: os mesmos ids, com o mesmo conteúdo, antes e depois (podem mudar de arquivo no grupo).
+    const paths = members.map((item) => item.path).join(", ");
+    const before = blocksOf(members.map((item) => matched.get(item.id)!.local?.toString("utf-8") ?? ""));
+    const after = blocksOf(members.map((item) => resolved.get(item.id)!.toString("utf-8")));
+    for (const [id, content] of before) {
+      if (!after.has(id)) errors.push(`${paths}: bloco do add-on ${id} removido; mantenha-o intacto`);
+      else if (after.get(id)!.trim() !== content.trim()) errors.push(`${paths}: conteúdo do bloco do add-on ${id} alterado; mantenha-o byte a byte`);
+    }
+    for (const id of after.keys()) {
+      if (!before.has(id)) errors.push(`${paths}: bloco do add-on ${id} não existia; blocos só são criados por maker add`);
+    }
     for (const item of members) {
       const text = resolved.get(item.id)!.toString("utf-8");
       const unbalanced = unbalancedBlocks(text);
@@ -214,22 +259,21 @@ export async function applyResolutions(
   const stateUpdates = new Map<string, { state: AddonState; hash: string }>();
   for (const item of selected) {
     const content = resolved.get(item.id)!;
-    const upstream = await readFile(join(dir, "items", item.id, "upstream"));
-    changes.push({ ...await planWrite({ targetDir, path: item.path, content, source: item.source,
+    const candidate = matched.get(item.id)!;
+    const source = resolvedSource(candidate, content.toString("utf-8"));
+    changes.push({ ...await planWrite({ targetDir, path: item.path, content, source,
       reason: `proposta mediada (${item.category})`, force: true }),
       expectedHash: item.localHash, expectedKind: item.localHash ? "file" : "absent" });
-    changes.push(await planWrite({ targetDir, path: `.maker/bases/${item.upstreamHash}`, content: upstream,
+    changes.push(await planWrite({ targetDir, path: `.maker/bases/${item.upstreamHash}`, content: candidate.upstream,
       source: "metadata", reason: `base upstream de ${item.path}` }));
-    // A origem vem do manifest, não do índice exportado (que o agente pode editar).
-    const recorded = manifest.files[item.path];
-    next.files[item.path] = { ...recorded, source: resolvedSource({ ...item, source: recorded?.source ?? item.engineSource }, content.toString("utf-8")),
-      hash: sha256(content), baseHash: item.upstreamHash };
+    const { edited: _edited, ...recorded } = manifest.files[item.path] ?? { hash: "", source };
+    next.files[item.path] = { ...recorded, source, hash: sha256(content), baseHash: item.upstreamHash };
   }
   // Blocos de add-on movidos do agente legado para o papel compartilhado: o state passa a apontar para o papel.
   for (const item of selected) {
     const role = legacyAdapterRole(item);
     if (!role || !item.localHash) continue;
-    const moved = new Set([...(locals.get(item.id) ?? "").matchAll(ADDON_MARKER)].map((match) => match[1]!));
+    const moved = addonBlocks(matched.get(item.id)!.local?.toString("utf-8") ?? "").keys();
     for (const id of moved) {
       let entry = stateUpdates.get(id);
       if (!entry) {
@@ -260,9 +304,16 @@ export async function applyResolutions(
   }
   await applyChangePlan(plan);
   console.log(pc.green(`✓ ${selected.length} proposta(s) mediada(s) aplicada(s).`));
-  const remaining = index.items.length - selected.length;
-  if (remaining) console.log(pc.yellow(`${remaining} item(ns) sem proposta continuam pendentes.`));
-  if (dirOption === true && !remaining) await rm(dir, { recursive: true, force: true });
+  // Itens aplicados saem da exportação: o que sobra pode ser reaplicado depois sem conflitar com eles.
+  const applied = new Set(selected.map((item) => item.id));
+  const remaining = index.items.filter((item) => !applied.has(item.id));
+  for (const id of applied) await rm(join(dir, "items", id), { recursive: true, force: true });
+  if (remaining.length) {
+    await writeFile(join(dir, INDEX), JSON.stringify({ ...index, items: remaining }, null, 2) + "\n");
+    console.log(pc.yellow(`${remaining.length} item(ns) sem proposta continuam pendentes em ${dir}.`));
+  } else {
+    await rm(dir, { recursive: true, force: true });
+  }
   console.log("Execute maker update --dry-run e maker doctor para confirmar o estado final.");
 }
 
@@ -292,6 +343,12 @@ function markers(text: string): Set<string> {
   return new Set([...text.matchAll(ADDON_MARKER)].map((match) => `${match[1]}:${match[2]}`));
 }
 
+function blocksOf(texts: string[]): Map<string, string> {
+  const blocks = new Map<string, string>();
+  for (const text of texts) for (const [id, content] of addonBlocks(text)) blocks.set(id, content);
+  return blocks;
+}
+
 function unbalancedBlocks(text: string): string | undefined {
   const found = [...text.matchAll(ADDON_MARKER)];
   for (const id of new Set(found.map((match) => match[1]!))) {
@@ -307,9 +364,9 @@ function legacyAdapterRole(item: MediationItem): string | undefined {
   return item.category === "legacy-agent" ? item.path.match(/^\.claude\/agents\/([a-z0-9-]+)\.md$/)?.[1] : undefined;
 }
 
-function resolvedSource(item: MediationItem, content: string): string {
+function resolvedSource(item: MediationCandidate, content: string): string {
   if (item.category !== "legacy-agent") return item.source;
-  if (legacyAdapterRole(item)) return item.engineSource;
+  if (/^\.claude\/agents\//.test(item.path)) return item.engineSource;
   const ids = [...new Set([...content.matchAll(ADDON_MARKER)].map((match) => match[1]!))];
   if (ids.length === 1) return `addon:${ids[0]}`;
   return item.source.startsWith("addon:") && ids.includes(item.source.slice("addon:".length)) ? item.source : item.engineSource;

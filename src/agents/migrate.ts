@@ -33,7 +33,7 @@ export async function planLegacyAddonAgents(
   staging: string,
   expected: AppliedFile[],
   manifest: Manifest,
-  options: { ctx: RenderContext; migrate?: boolean; configKnown?: boolean },
+  options: { ctx: RenderContext; migrate?: boolean; configKnown?: boolean; configDependent?: Set<string> },
 ): Promise<{ changes: PlannedChange[]; handled: Set<string>; reports: LegacyAgentReport[] }> {
   const changes: PlannedChange[] = [];
   const handled = new Set<string>();
@@ -59,6 +59,11 @@ export async function planLegacyAddonAgents(
         expectedKind: current.kind, expectedHash: current.hash });
     };
 
+    // Sem config, o papel renderizado com os padrões não serve de destino nem de base (just → npm etc.).
+    if (options.configKnown === false && (options.configDependent?.has(sharedPath) || options.configDependent?.has(file.rel))) {
+      preserve("depende de config não recuperada", "crie maker.config.json com os valores usados no init e execute maker update --dry-run");
+      continue;
+    }
     const upstream = outputs.has(sharedPath) ? await readFile(join(staging, sharedPath)) : undefined;
     const agent = upstream ? parseLegacyAgent(current.content!, role) : undefined;
     if (!agent || !upstream) { preserve("formato do agente legado não reconhecido"); continue; }
@@ -95,8 +100,7 @@ export async function planLegacyAddonAgents(
       const base = pristine ? upstream : Buffer.from(legacyTemplate ?? upstream.toString("utf-8"));
       const reason = pristine
         ? "corpo sem customização; papel recebe o template atual com o bloco do add-on"
-        : `${options.configKnown === false ? "corpo difere do template com a config padrão (config não recuperada)" : "corpo personalizado"}; ` +
-          "copiado como está; o papel fica sob controle do add-on, sem updates do template";
+        : "corpo personalizado; copiado como está; updates do template chegam por merge a partir do template 0.2.x";
       if (options.migrate === false) {
         report("pending", reason);
         handled.add(file.rel);

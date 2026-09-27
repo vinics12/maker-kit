@@ -26,6 +26,11 @@ Guiding rule: **the owner's customizations win over template text; the template'
 - Do not invent content. Everything in `resolved` must come from `local`, `upstream`, or an explicit owner decision.
 - Never leave conflict markers (`<<<<<<<`, `=======`, `>>>>>>>`) in a proposal.
 - Do not run `maker update --apply-resolutions` without `--dry-run` before the owner approves the final diff.
+- If no human can answer (non-interactive run, CI, batch mode): stop after step 7 and report the proposals, the dry-run output and every open question. Never apply without an explicit approval.
+
+## What the CLI checks — and what it does not
+
+The CLI rejects proposals that: target a file that changed since the export or that is not a current mediation item, contain conflict markers, are empty or not UTF-8, remove, alter or add add-on blocks, resolve only part of a group, or leave a legacy adapter without the shared-role instruction (or with add-on blocks). It **cannot** tell whether an owner customization outside the add-on blocks was dropped: a proposal equal to `upstream` passes. Checking that every customization survived is your job — diff `base → local` against `local → resolved` before asking for approval.
 
 ## Workflow
 
@@ -37,14 +42,14 @@ Guiding rule: **the owner's customizations win over template text; the template'
 4. **Propose, per category.**
    - `conflict` / `local-edit`: start from `upstream`, re-apply every owner customization in the place it belongs. If an upstream change rewrote a section the owner also changed, keep the owner's intent and fold in the new requirement; ask when they contradict.
    - `addon`: start from `upstream`, re-insert each add-on block exactly where it was relative to the surrounding headings, and re-apply other owner customizations.
-   - `legacy-agent` (items share a `group`: a legacy agent file that still carries its whole role inline, and its shared role under `.maker/workflow/agents/`): the agent file must become the generated adapter — take `upstream` for it, keeping owner changes to frontmatter fields such as `model`, `color` or `tools` (keep `Read` in `tools`). Move the role instructions to the shared role: start from the shared role's `upstream`, re-apply the owner's customizations from the legacy agent body, and move its add-on blocks there unchanged. Resolve every item of a group, or none.
-5. **Write** each proposal to `<dir>/items/<id>/resolved`, and a short `notes.md` listing: customizations kept, template changes brought in, anything left out and why.
+   - `legacy-agent` (items share a `group`: a legacy agent file that still carries its whole role inline, and its shared role under `.maker/workflow/agents/`): the agent file must become the generated adapter — its `resolved` is exactly `upstream`, changing only frontmatter fields the owner customized, such as `model`, `color` or `tools` (keep `Read` in `tools`); never keep role instructions in the adapter. Move the role instructions to the shared role: start from the shared role's `upstream`, re-apply the owner's customizations from the legacy agent body, and move its add-on blocks there unchanged. Resolve every item of a group, or none.
+5. **Write** each proposal to `<dir>/items/<id>/resolved` — keep the line endings of `local` and end the file with a newline — and a short `notes.md` listing: customizations kept, template changes brought in, anything left out and why.
 6. **Review with the owner.** Show, per file, the diff `local → resolved` and the notes. Ask explicit questions for every ambiguity. Adjust until the owner approves. Items the owner wants to postpone simply get no `resolved` file.
 7. **Validate.** Run `maker update --apply-resolutions --dry-run` (add the directory if not the default). Fix any rejected proposal (lost add-on blocks, conflict markers, adapter without the shared-role instruction, file changed since export) and repeat.
 8. **Apply** with `maker update --apply-resolutions`, then run `maker update --dry-run` and `maker doctor`. Report the final state: files mediated, items postponed, remaining warnings.
 
 ## Notes
 
-- If the owner edits a listed file during the process, the CLI rejects the stale proposal; export again.
+- If the owner edits a listed file during the process, the CLI rejects the stale proposal; export again. `--export` refuses to overwrite an export that still has `resolved` or `notes.md` files: apply them or move them away first. Item ids are stable per path, so proposals can be copied back into a new export.
 - A proposal equal to `upstream` is valid: it means the owner accepted the new version for that file.
-- The export directory is temporary. The default one is removed after all items are applied; remove a custom one when done.
+- Applied items are removed from the export; the directory is removed once every item is applied. Keep it out of version control (for example, add `.maker/mediation/` to `.gitignore`).

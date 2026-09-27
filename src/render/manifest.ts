@@ -14,6 +14,11 @@ export interface ManifestEntry {
   source: string;
   /** Conteúdo upstream exato usado como ancestral do próximo 3-way merge. */
   baseHash?: string;
+  /**
+   * Conteúdo divergente do upstream sem base exata para mesclar (ex.: remoção de um add-on aplicado
+   * antes das bases): o update preserva o arquivo e o encaminha para mediação em vez de sobrescrevê-lo.
+   */
+  edited?: boolean;
 }
 
 export interface Manifest {

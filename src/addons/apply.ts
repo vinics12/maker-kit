@@ -11,7 +11,10 @@ import {
 } from "../render/manifest.js";
 import { addonDir } from "./loader.js";
 import type { AddonManifest } from "./schema.js";
-import { upsertBlock, stripBlock } from "./inject.js";
+import { upsertBlock, stripBlock, addonBlocks, sameText } from "./inject.js";
+import { renderUpstream } from "../util/upstream.js";
+import { legacyAgent } from "../util/engine-scaffold.js";
+import { buildContext } from "../render/engine.js";
 import {
   readAddonState,
   addonStatePath,
@@ -22,6 +25,20 @@ import { applyChangePlan, assertNoPendingTransactions } from "../changes/transac
 
 const CONSTITUTION = ".specify/memory/constitution.md";
 const PLACEHOLDER = "_(nenhum princípio de projeto definido ainda)_";
+
+/** Injeta o bloco de um add-on no mesmo ponto que o apply usa para o caminho. */
+export function injectBlock(path: string, content: string, id: string, block: string): string {
+  return path === CONSTITUTION
+    ? upsertBlock(content, id, block, { replacePlaceholder: PLACEHOLDER, beforeHeading: "## Governance" })
+    : upsertBlock(content, id, block);
+}
+
+/** O conteúdo que um arquivo teria se fosse `template` com os blocos de add-on de `local` reinjetados. */
+export function reinjectBlocks(path: string, template: string, local: string): string {
+  let result = template;
+  for (const [id, block] of addonBlocks(local)) result = injectBlock(path, result, id, block);
+  return result;
+}
 
 function addonContext(manifest: Manifest, knobs: Record<string, string>) {
   return {
@@ -42,16 +59,27 @@ function injectedEntry(prior: ManifestEntry | undefined, content: string, id: st
 }
 
 /**
- * Entrada do engine após remover o bloco. O conteúdo resultante pode ter customizações: com base
- * upstream, o update seguinte faz merge 3-way; sem ela (states legados), manter o hash anterior faz
- * o update tratá-lo como edição local e preservá-lo em vez de sobrescrever.
+ * Entrada do engine após remover o bloco. Com base upstream, o update seguinte faz merge 3-way. Sem
+ * ela (add-on aplicado antes das bases), o arquivo só volta a ser tratado como intacto quando era um
+ * template conhecido com o bloco; senão fica marcado como editado, e o update o preserva e o
+ * encaminha para mediação em vez de sobrescrevê-lo.
  */
-function restoredEntry(rel: string, prior: ManifestEntry | undefined, content: string): ManifestEntry {
+function restoredEntry(rel: string, prior: ManifestEntry | undefined, content: string, pristine: boolean): ManifestEntry {
   const source = rel.startsWith(".claude/") ? "engine:claude"
     : rel.startsWith(".codex/") || rel.startsWith(".agents/") ? "engine:codex"
       : "engine:common";
-  if (!prior?.baseHash) return { hash: prior?.hash ?? sha256(content), source };
-  return { hash: sha256(content), source, baseHash: prior.baseHash };
+  if (prior?.baseHash) return { hash: sha256(content), source, baseHash: prior.baseHash };
+  return pristine ? { hash: sha256(content), source } : { hash: sha256(content), source, edited: true };
+}
+
+/** Templates conhecidos de um alvo de injeção: o upstream atual e, para agentes Claude, o formato 0.2.x. */
+async function knownTemplates(rel: string, upstream: Awaited<ReturnType<typeof renderUpstream>>): Promise<string[]> {
+  if (!upstream) return [];
+  const templates = upstream.files.has(rel) ? [upstream.files.get(rel)!.toString("utf-8")] : [];
+  const role = rel.match(/^\.claude\/agents\/([a-z0-9-]+)\.md$/)?.[1];
+  const legacy = role ? await legacyAgent(buildContext(upstream.config), role) : undefined;
+  if (legacy) templates.push(legacy);
+  return templates;
 }
 
 export async function applyAddon(
@@ -85,10 +113,7 @@ export async function applyAddon(
     for (const p of addon.principles) rendered.push((await renderFrom(dir, p, ctx)).trim());
     const block = rendered.join("\n\n");
     const current = await readFile(absConst, "utf-8");
-    const next = upsertBlock(current, addon.id, block, {
-      replacePlaceholder: PLACEHOLDER,
-      beforeHeading: "## Governance",
-    });
+    const next = injectBlock(CONSTITUTION, current, addon.id, block);
     changes.push(await planWrite({ targetDir, path: CONSTITUTION, content: next, source: `addon:${addon.id}`, reason: "injetar princípios do add-on", force: true }));
     manifest.files[CONSTITUTION] = injectedEntry(manifest.files[CONSTITUTION], next, addon.id);
     injectedTargets.push(CONSTITUTION);
@@ -103,7 +128,7 @@ export async function applyAddon(
       continue;
     }
     const block = (await renderFrom(dir, frag.file, ctx)).trim();
-    const next = upsertBlock(await readFile(abs, "utf-8"), addon.id, block);
+    const next = injectBlock(rel, await readFile(abs, "utf-8"), addon.id, block);
     changes.push(await planWrite({ targetDir, path: rel, content: next, source: `addon:${addon.id}`, reason: "injetar fragmento do add-on", force: true }));
     manifest.files[rel] = injectedEntry(manifest.files[rel], next, addon.id);
     injectedTargets.push(rel);
@@ -156,12 +181,18 @@ export async function removeAddon(
   const changes: PlannedChange[] = [];
 
   // 1. Remove os blocos injetados dos arquivos do motor.
+  const legacyTargets = state.injectedTargets.some((rel) => manifest && !manifest.files[rel]?.baseHash);
+  const upstream = legacyTargets && manifest ? await renderUpstream(targetDir, manifest) : null;
   for (const rel of state.injectedTargets) {
     const abs = join(targetDir, rel);
     if (!existsSync(abs)) continue;
-    const next = stripBlock(await readFile(abs, "utf-8"), id);
+    const current = await readFile(abs, "utf-8");
+    const next = stripBlock(current, id);
     changes.push(await planWrite({ targetDir, path: rel, content: next, source: "engine", reason: "remover bloco do add-on", force: true }));
-    if (manifest) manifest.files[rel] = restoredEntry(rel, manifest.files[rel], next);
+    // Blocos de outros add-ons continuam no arquivo: sobrescrevê-lo com o template os perderia.
+    const pristine = addonBlocks(current).size === 1 &&
+      (await knownTemplates(rel, upstream)).some((template) => sameText(reinjectBlocks(rel, template, current), current));
+    if (manifest) manifest.files[rel] = restoredEntry(rel, manifest.files[rel], next, pristine);
     strippedTargets.push(rel);
   }
 

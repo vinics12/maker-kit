@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -63,6 +63,11 @@ describe("maker update transacional", () => {
     expect(merged).toContain(`${lines[0]} local`);
     await runUpdate({ target });
     expect(await readFile(join(target, path), "utf-8")).toBe(merged);
+    // Merge cujo resultado já é o conteúdo atual não aparece como mesclado.
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runUpdate({ target, dryRun: true });
+    expect(log.mock.calls.flat().join("\n")).not.toMatch(/^merge\s/m);
+    log.mockRestore();
   });
 
   it("conflito preserva arquivos e manifest", async () => {

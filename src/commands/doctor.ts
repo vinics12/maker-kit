@@ -4,6 +4,7 @@ import { readManifest, verifyManifest } from "../render/manifest.js";
 import { enabledAgents } from "../render/manifest.js";
 import { validateAgentIntegration } from "../agents/validate.js";
 import { inspectAddons } from "../addons/doctor.js";
+import { planUpdate } from "./update.js";
 
 export interface DoctorOptions {
   target?: string;
@@ -44,6 +45,12 @@ export async function runDoctor(opts: DoctorOptions): Promise<void> {
     }
   }
 
+  // Informativo: mediação pendente não degrada o install, mas o update não a resolve sozinho.
+  const pending = await pendingMediation(targetDir);
+  if (pending) {
+    console.log(pc.yellow(`${pending} arquivo(s) aguardam mediação do update: use a skill maker-update ou maker update --export.`));
+  }
+
   if (result.ok && integrations.every((integration) => integration.issues.length === 0) && addons.ok) {
     console.log(pc.green("✓ Install íntegro."));
     return;
@@ -55,4 +62,12 @@ export async function runDoctor(opts: DoctorOptions): Promise<void> {
     pc.dim(`\n${result.missing.length} ausente(s), ${result.modified.length} modificado(s).`),
   );
   process.exitCode = 1;
+}
+
+async function pendingMediation(targetDir: string): Promise<number> {
+  try {
+    return (await planUpdate(targetDir)).mediation.length;
+  } catch {
+    return 0;
+  }
 }
