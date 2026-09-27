@@ -20,6 +20,8 @@ import { addonBlocks, sameText } from "../addons/inject.js";
 import { applyResolutions, exportMediation, mediationHint, type MediationCandidate, type MediationCategory } from "./mediation.js";
 
 const CONFIG_UNKNOWN = "depende de config não recuperada";
+/** Alvo de add-on já no template atual: conta como atualizado, não como preservado por segurança. */
+const UP_TO_DATE_ADDON = "já está atualizado (template atual com os blocos de add-on)";
 const CONFIG_ACTION = "crie maker.config.json com os valores usados no init e execute maker update --dry-run";
 
 export interface UpdateOptions {
@@ -79,7 +81,7 @@ export async function runUpdate(opts: UpdateOptions): Promise<void> {
   printAgentReports(reports, "aplicado");
   const merged = plan.changes.filter((change) => change.resolution === "merge").length;
   const updated = plan.changes.filter((change) => (change.action === "update" || change.action === "create") && change.source !== "metadata" && change.resolution !== "merge").length;
-  const preserved = plan.changes.filter((change) => change.action === "preserve" && change.source !== "metadata" && change.reason !== "já está atualizado").length;
+  const preserved = plan.changes.filter((change) => change.action === "preserve" && change.source !== "metadata" && !change.reason.startsWith("já está atualizado")).length;
   console.log(pc.green(`✓ ${updated} arquivo(s) atualizado(s), ${merged} mesclado(s).`));
   if (preserved) console.log(pc.yellow(`${preserved} preservado(s) por segurança.`));
   if (reports.length) {
@@ -133,7 +135,7 @@ export async function planUpdate(targetDir: string, opts: { merge?: boolean } = 
           // dos demais arquivos, e só o que o merge não resolve vai para mediação.
           const local = current.content!.toString("utf-8");
           if (sameText(reinjectBlocks(file.rel, upstream.toString("utf-8"), local), local)) {
-            preserve("arquivo controlado por add-on; template atual com os blocos");
+            preserve(UP_TO_DATE_ADDON);
             next.files[file.rel] = { ...withoutEdited(recorded), baseHash: upstreamHash };
           } else if (recorded.baseHash === upstreamHash) {
             preserve("arquivo controlado por add-on; customizações locais sobre o template atual");
@@ -195,7 +197,9 @@ export async function planUpdate(targetDir: string, opts: { merge?: boolean } = 
         changes.push(await planWrite({ targetDir, path: `.maker/bases/${upstreamHash}`, content: upstream, source: "metadata", reason: `base upstream de ${file.rel}` }));
       }
     }
-    const degraded = reports.filter((report) => report.status === "degraded").map((report) => report.path);
+    // Agentes parados só por falta de config migram sozinhos quando ela existir: não são mediação.
+    const degraded = reports.filter((report) => report.status === "degraded" && !report.reason.startsWith(CONFIG_UNKNOWN))
+      .map((report) => report.path);
     await groupLegacyAgents(targetDir, staging, expected, prior, mediation, degraded, recovered ? ctx : undefined);
   } finally {
     await rm(staging, { recursive: true, force: true });

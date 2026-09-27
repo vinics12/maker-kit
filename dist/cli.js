@@ -2005,6 +2005,7 @@ function resolvedSource(item, content) {
 
 // src/commands/update.ts
 var CONFIG_UNKNOWN = "depende de config n\xE3o recuperada";
+var UP_TO_DATE_ADDON = "j\xE1 est\xE1 atualizado (template atual com os blocos de add-on)";
 var CONFIG_ACTION = "crie maker.config.json com os valores usados no init e execute maker update --dry-run";
 async function runUpdate(opts) {
   const targetDir = resolve4(opts.target ?? process.cwd());
@@ -2041,7 +2042,7 @@ async function runUpdate(opts) {
   printAgentReports(reports, "aplicado");
   const merged = plan.changes.filter((change) => change.resolution === "merge").length;
   const updated = plan.changes.filter((change) => (change.action === "update" || change.action === "create") && change.source !== "metadata" && change.resolution !== "merge").length;
-  const preserved = plan.changes.filter((change) => change.action === "preserve" && change.source !== "metadata" && change.reason !== "j\xE1 est\xE1 atualizado").length;
+  const preserved = plan.changes.filter((change) => change.action === "preserve" && change.source !== "metadata" && !change.reason.startsWith("j\xE1 est\xE1 atualizado")).length;
   console.log(pc3.green(`\u2713 ${updated} arquivo(s) atualizado(s), ${merged} mesclado(s).`));
   if (preserved) console.log(pc3.yellow(`${preserved} preservado(s) por seguran\xE7a.`));
   if (reports.length) {
@@ -2104,7 +2105,7 @@ async function planUpdate(targetDir, opts = {}) {
         } else {
           const local = current.content.toString("utf-8");
           if (sameText(reinjectBlocks(file.rel, upstream.toString("utf-8"), local), local)) {
-            preserve("arquivo controlado por add-on; template atual com os blocos");
+            preserve(UP_TO_DATE_ADDON);
             next.files[file.rel] = { ...withoutEdited(recorded), baseHash: upstreamHash };
           } else if (recorded.baseHash === upstreamHash) {
             preserve("arquivo controlado por add-on; customiza\xE7\xF5es locais sobre o template atual");
@@ -2170,7 +2171,7 @@ async function planUpdate(targetDir, opts = {}) {
         changes.push(await planWrite({ targetDir, path: `.maker/bases/${upstreamHash}`, content: upstream, source: "metadata", reason: `base upstream de ${file.rel}` }));
       }
     }
-    const degraded = reports.filter((report) => report.status === "degraded").map((report) => report.path);
+    const degraded = reports.filter((report) => report.status === "degraded" && !report.reason.startsWith(CONFIG_UNKNOWN)).map((report) => report.path);
     await groupLegacyAgents(targetDir, staging, expected, prior, mediation, degraded, recovered ? ctx : void 0);
   } finally {
     await rm6(staging, { recursive: true, force: true });
