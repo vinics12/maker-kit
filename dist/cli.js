@@ -1579,6 +1579,7 @@ async function applyAddon(targetDir, addon, knobs, options = {}) {
   const changes = [];
   const prior = await readAddonState(targetDir, addon.id);
   const owned = new Map((prior?.createdFiles ?? []).map((f) => [f.path, f]));
+  const previousCtx = prior ? addonContext(manifest, prior.knobs) : void 0;
   if (addon.principles.length) {
     const absConst = join15(targetDir, CONSTITUTION);
     if (!existsSync10(absConst)) throw new Error(`${CONSTITUTION} ausente no install.`);
@@ -1586,10 +1587,17 @@ async function applyAddon(targetDir, addon, knobs, options = {}) {
     for (const p3 of addon.principles) rendered.push((await renderFrom(dir, p3, ctx)).trim());
     const block = rendered.join("\n\n");
     const current = await readFile14(absConst, "utf-8");
-    const next = injectBlock(CONSTITUTION, current, addon.id, block);
-    changes.push(await planWrite({ targetDir, path: CONSTITUTION, content: next, source: `addon:${addon.id}`, reason: "injetar princ\xEDpios do add-on", force: true }));
-    manifest.files[CONSTITUTION] = injectedEntry(manifest.files[CONSTITUTION], next, addon.id);
-    injectedTargets.push(CONSTITUTION);
+    const previousBlock = previousCtx ? (await Promise.all(addon.principles.map(async (p3) => (await renderFrom(dir, p3, previousCtx)).trim()))).join("\n\n") : void 0;
+    const installedBlock = addonBlocks(current).get(addon.id);
+    if (installedBlock !== void 0 && installedBlock !== previousBlock) {
+      console.warn(`  aviso: bloco do add-on ${addon.id} em ${CONSTITUTION} foi editado \u2014 n\xE3o sobrescrito.`);
+      injectedTargets.push(CONSTITUTION);
+    } else {
+      const next = injectBlock(CONSTITUTION, current, addon.id, block);
+      changes.push(await planWrite({ targetDir, path: CONSTITUTION, content: next, source: `addon:${addon.id}`, reason: "injetar princ\xEDpios do add-on", force: true }));
+      manifest.files[CONSTITUTION] = injectedEntry(manifest.files[CONSTITUTION], next, addon.id);
+      injectedTargets.push(CONSTITUTION);
+    }
   }
   for (const frag of addon.agentFragments) {
     const rel = `.maker/workflow/agents/${frag.agent}.md`;
@@ -1599,7 +1607,15 @@ async function applyAddon(targetDir, addon, knobs, options = {}) {
       continue;
     }
     const block = (await renderFrom(dir, frag.file, ctx)).trim();
-    const next = injectBlock(rel, await readFile14(abs, "utf-8"), addon.id, block);
+    const current = await readFile14(abs, "utf-8");
+    const previousBlock = previousCtx ? (await renderFrom(dir, frag.file, previousCtx)).trim() : void 0;
+    const installedBlock = addonBlocks(current).get(addon.id);
+    if (installedBlock !== void 0 && installedBlock !== previousBlock) {
+      console.warn(`  aviso: bloco do add-on ${addon.id} em ${rel} foi editado \u2014 n\xE3o sobrescrito.`);
+      injectedTargets.push(rel);
+      continue;
+    }
+    const next = injectBlock(rel, current, addon.id, block);
     changes.push(await planWrite({ targetDir, path: rel, content: next, source: `addon:${addon.id}`, reason: "injetar fragmento do add-on", force: true }));
     manifest.files[rel] = injectedEntry(manifest.files[rel], next, addon.id);
     injectedTargets.push(rel);

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll } from "vitest";
-import { appendFile, mkdtemp, readFile } from "node:fs/promises";
+import { appendFile, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
@@ -93,5 +93,20 @@ describe("add-on saas (integração)", () => {
     expect(await read(project, REF)).toBe(customized);
     await removeAddon(project, "saas");
     expect(await read(project, REF)).toBe(customized);
+  });
+
+  it("reaplicar add-on preserva bloco que o dono editou", async () => {
+    const project = await mkdtemp(join(tmpdir(), "maker-addon-block-"));
+    await runInit({ target: project, config: FIXTURE, yes: true });
+    const addon = await loadAddon("saas");
+    const knobs = { tenantColumn: "org_id", brandVarPrefix: "--tema-", roles: "owner,staff" };
+    await applyAddon(project, addon, knobs);
+    const customized = (await read(project, CONST)).replace("SaaS-1. Multi-Tenant First", "SaaS-1. Multi-Tenant First — regra local");
+    const reviewer = (await read(project, REVIEWER)).replace("Checklist SaaS", "Checklist SaaS — regra local");
+    await writeFile(join(project, CONST), customized);
+    await writeFile(join(project, REVIEWER), reviewer);
+    await applyAddon(project, addon, knobs);
+    expect(await read(project, CONST)).toBe(customized);
+    expect(await read(project, REVIEWER)).toBe(reviewer);
   });
 });

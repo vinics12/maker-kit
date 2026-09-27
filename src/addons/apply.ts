@@ -109,6 +109,7 @@ export async function applyAddon(
   // Reaplicação: arquivos criados por este add-on só podem ser substituídos se ainda estiverem intactos.
   const prior = await readAddonState(targetDir, addon.id);
   const owned = new Map((prior?.createdFiles ?? []).map((f) => [f.path, f]));
+  const previousCtx = prior ? addonContext(manifest, prior.knobs) : undefined;
 
   // 1. Princípios → injetados na seção "Princípios do Projeto" da constitution.
   if (addon.principles.length) {
@@ -118,10 +119,19 @@ export async function applyAddon(
     for (const p of addon.principles) rendered.push((await renderFrom(dir, p, ctx)).trim());
     const block = rendered.join("\n\n");
     const current = await readFile(absConst, "utf-8");
-    const next = injectBlock(CONSTITUTION, current, addon.id, block);
-    changes.push(await planWrite({ targetDir, path: CONSTITUTION, content: next, source: `addon:${addon.id}`, reason: "injetar princípios do add-on", force: true }));
-    manifest.files[CONSTITUTION] = injectedEntry(manifest.files[CONSTITUTION], next, addon.id);
-    injectedTargets.push(CONSTITUTION);
+    const previousBlock = previousCtx
+      ? (await Promise.all(addon.principles.map(async (p) => (await renderFrom(dir, p, previousCtx)).trim()))).join("\n\n")
+      : undefined;
+    const installedBlock = addonBlocks(current).get(addon.id);
+    if (installedBlock !== undefined && installedBlock !== previousBlock) {
+      console.warn(`  aviso: bloco do add-on ${addon.id} em ${CONSTITUTION} foi editado — não sobrescrito.`);
+      injectedTargets.push(CONSTITUTION);
+    } else {
+      const next = injectBlock(CONSTITUTION, current, addon.id, block);
+      changes.push(await planWrite({ targetDir, path: CONSTITUTION, content: next, source: `addon:${addon.id}`, reason: "injetar princípios do add-on", force: true }));
+      manifest.files[CONSTITUTION] = injectedEntry(manifest.files[CONSTITUTION], next, addon.id);
+      injectedTargets.push(CONSTITUTION);
+    }
   }
 
   // 2. Fragmentos de agente → papel canônico compartilhado por Claude e Codex.
@@ -133,7 +143,15 @@ export async function applyAddon(
       continue;
     }
     const block = (await renderFrom(dir, frag.file, ctx)).trim();
-    const next = injectBlock(rel, await readFile(abs, "utf-8"), addon.id, block);
+    const current = await readFile(abs, "utf-8");
+    const previousBlock = previousCtx ? (await renderFrom(dir, frag.file, previousCtx)).trim() : undefined;
+    const installedBlock = addonBlocks(current).get(addon.id);
+    if (installedBlock !== undefined && installedBlock !== previousBlock) {
+      console.warn(`  aviso: bloco do add-on ${addon.id} em ${rel} foi editado — não sobrescrito.`);
+      injectedTargets.push(rel);
+      continue;
+    }
+    const next = injectBlock(rel, current, addon.id, block);
     changes.push(await planWrite({ targetDir, path: rel, content: next, source: `addon:${addon.id}`, reason: "injetar fragmento do add-on", force: true }));
     manifest.files[rel] = injectedEntry(manifest.files[rel], next, addon.id);
     injectedTargets.push(rel);
