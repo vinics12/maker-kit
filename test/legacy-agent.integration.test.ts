@@ -9,6 +9,8 @@ import { DEFAULT_MEDIATION_DIR } from "../src/commands/mediation.js";
 import { runDoctor } from "../src/commands/doctor.js";
 import { runAgentAdd, runAgentList } from "../src/commands/agent.js";
 import { validateAgentIntegration } from "../src/agents/validate.js";
+import { parseConfig } from "../src/config/schema.js";
+import { sharedRoleReference } from "../src/agents/reference.js";
 import { planLegacyAddonAgents } from "../src/agents/migrate.js";
 import { buildContext, render } from "../src/render/engine.js";
 import { readManifest, sha256, writeManifest, verifyManifest } from "../src/render/manifest.js";
@@ -226,9 +228,15 @@ describe("migração de agentes legados", () => {
     await appendFile(join(target, constitution), "\nPrincípio autoral\n");
     const before = await readFile(join(target, constitution));
     await runUpdate({ target });
+    // Customização com base registrada: o doctor a mostra como personalizada, sem degradar o install.
     await runDoctor({ target });
-    expect(process.exitCode).toBe(1);
+    expect(log.mock.calls.flat().join("\n")).not.toContain(`modificado: ${constitution}`);
+    expect(process.exitCode).not.toBe(1);
     expect(await readFile(join(target, constitution))).toEqual(before);
+    await appendFile(join(target, constitution), "\nOutro princípio autoral\n");
+    await runDoctor({ target });
+    expect(log.mock.calls.flat().join("\n")).toContain(`personalizado: ${constitution}`);
+    expect(process.exitCode).not.toBe(1);
     await rm(join(target, ".maker/workflow/agents/architect.md"));
     await rm(join(target, ".claude/agents/code-reviewer.md"));
     const issues = (await validateAgentIntegration(target, "claude")).issues.join("\n");
@@ -249,7 +257,7 @@ describe("migração de agentes legados", () => {
     expect(await snapshot(target)).toEqual(before);
   });
 
-  it("avisa ao preservar agente legado editado sem origem add-on", async () => {
+  it("migra agente legado do engine editado sem origem add-on para o papel compartilhado", async () => {
     const target = await legacy("0.4.0");
     const path = ".claude/agents/e2e-runner.md";
     const content = await readFile(join(target, path), "utf-8");
@@ -261,9 +269,11 @@ describe("migração de agentes legados", () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     await runUpdate({ target });
     const output = log.mock.calls.flat().join("\n");
-    expect(output).toContain("degradado .claude/agents/e2e-runner.md");
-    expect(output).toContain("sem referência ao papel compartilhado");
-    expect(await readFile(join(target, path), "utf-8")).toBe(legacyContent);
+    expect(output).toContain("migrado   .claude/agents/e2e-runner.md → .maker/workflow/agents/e2e-runner.md");
+    expect(output).not.toContain("precisam de mediação");
+    expect(sharedRoleReference(await readFile(join(target, path), "utf-8"))).toBe(".maker/workflow/agents/e2e-runner.md");
+    expect(await readFile(join(target, ".maker/workflow/agents/e2e-runner.md"), "utf-8")).toContain("Instruções locais de e2e.");
+    expect((await validateAgentIntegration(target, "claude")).issues).toEqual([]);
   });
 
   it("rejeita mudança concorrente do state antes de migrar os agentes", async () => {
@@ -499,7 +509,7 @@ describe("instalação real 0.2.0", () => {
     }
   });
 
-  it("maker remove em instalação 0.2.0 customizada marca a edição sem hash falso e encaminha para mediação", async () => {
+  it("maker remove em instalação 0.2.0 customizada marca a edição sem hash falso e migra a customização", async () => {
     const target = await project();
     const agent = ".claude/agents/architect.md";
     await appendFile(join(target, agent), "Regra local do arquiteto.\n");
@@ -510,8 +520,36 @@ describe("instalação real 0.2.0", () => {
     await runDoctor({ target });
     expect(output(log)).not.toContain(`modificado: ${agent}`);
     await runUpdate({ target });
-    expect(await readFile(join(target, agent), "utf-8")).toContain("Regra local do arquiteto.");
-    expect(output(log)).toContain("precisam de mediação");
+    // O corpo customizado vai para o papel compartilhado (template 0.2.0 como base) e o agente vira adapter.
+    expect(await readFile(join(target, ".maker/workflow/agents/architect.md"), "utf-8")).toContain("Regra local do arquiteto.");
+    expect(sharedRoleReference(await readFile(join(target, agent), "utf-8"))).toBe(".maker/workflow/agents/architect.md");
+    expect(output(log)).not.toContain("precisam de mediação");
+  });
+
+  it("cenário da issue #37: e2e-runner legado e constitution personalizados se reconciliam sem mediação", async () => {
+    const target = await project();
+    const e2e = ".claude/agents/e2e-runner.md";
+    const manifest = (await readManifest(target))!;
+    const ctx = buildContext(parseConfig(JSON.parse(await readFile(join(target, "maker.config.json"), "utf-8"))), manifest.installedAt);
+    const legacyE2e = render(await readFile(join(__dirname, "../templates/legacy/0.2.0/agents/e2e-runner.md.hbs"), "utf-8"), ctx);
+    await writeFile(join(target, e2e), `${legacyE2e}\nRegra local do e2e.\n`);
+    manifest.files[e2e] = { hash: sha256(legacyE2e), source: "engine" };
+    await writeManifest(target, manifest);
+    await appendFile(join(target, constitution), "\nPrincípio autoral do projeto.\n");
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runUpdate({ target });
+    expect(output(log)).not.toContain("precisam de mediação");
+    expect(process.exitCode ?? 0).toBe(0);
+    expect((await validateAgentIntegration(target, "claude")).issues).toEqual([]);
+    expect(await readFile(join(target, ".maker/workflow/agents/e2e-runner.md"), "utf-8")).toContain("Regra local do e2e.");
+    const updatedConstitution = await readFile(join(target, constitution), "utf-8");
+    expect(updatedConstitution).toContain("Princípio autoral do projeto.");
+    expect(updatedConstitution).toContain("maker:addon:saas:start");
+    expect((await readManifest(target))!.files[constitution]!.baseHash).toBeDefined();
+    log.mockClear();
+    await runDoctor({ target });
+    expect(output(log)).toContain("✓ Install íntegro.");
+    expect(process.exitCode ?? 0).not.toBe(1);
   });
 
   it("maker remove sem config é reavaliado quando a config aparece, sem mediação", async () => {

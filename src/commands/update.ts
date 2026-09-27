@@ -7,7 +7,7 @@ import { mergeDiff3 } from "node-diff3";
 import { parseConfig, type AgentProvider, type MakerConfig } from "../config/schema.js";
 import { buildContext, type RenderContext } from "../render/engine.js";
 import { enabledAgents, readManifest, sha256, type Manifest, type ManifestEntry } from "../render/manifest.js";
-import { applyEngine, legacyAgent } from "../util/engine-scaffold.js";
+import { applyEngine, legacyAgent, legacyBase } from "../util/engine-scaffold.js";
 import type { AppliedFile } from "../util/scaffold.js";
 import { makerVersion } from "../util/version.js";
 import { resolveConfig } from "../util/upstream.js";
@@ -161,7 +161,9 @@ export async function planUpdate(targetDir: string, opts: { merge?: boolean } = 
             preserve("arquivo controlado por add-on; merge desabilitado");
             await mediate("addon", "template novo em arquivo controlado por add-on; merge desabilitado", recorded.baseHash);
           } else {
-            const base = recorded.baseHash ? await readBase(targetDir, recorded.baseHash) : null;
+            // Sem base registrada (add-on aplicado pela 0.2.x), o template 0.2.x empacotado é a base exata.
+            const legacy = !recorded.baseHash && recovered ? await legacyBase(ctx, file.rel) : undefined;
+            const base = recorded.baseHash ? await readBase(targetDir, recorded.baseHash) : legacy ? Buffer.from(legacy) : null;
             // Sem customização além dos blocos: reinjeta-os no template novo. O diff3 acusaria conflito
             // quando o template muda na mesma região onde o bloco foi inserido (ex.: fim do papel).
             const reinjected = base && sameText(reinjectBlocks(file.rel, base.toString("utf-8"), local), local)

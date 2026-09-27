@@ -63,10 +63,23 @@ dependem dela, incluindo agentes Claude 0.2.x cujo papel depende dela, são pres
 ausentes são criados com os padrões; o update lista ambos. Crie `maker.config.json` com os valores
 usados no init e execute `maker update --dry-run` para renderizá-los com a config correta.
 
+## Doctor e customizações
+
+`maker doctor` separa dois tipos de arquivo editado: **personalizado** (há base upstream registrada, então
+o update preserva e mescla a edição — informativo, não degrada o install) e **modificado** (sem base
+registrada; o update preserva e pode pedir mediação — degrada até um `maker update` registrar a base).
+O doctor do add-on segue a mesma regra para os alvos de injeção e nunca recomenda reaplicar o add-on
+para "corrigir" uma edição.
+
 ## Migração dos agentes legados
 
 Na 0.2.x os agentes Claude eram completos em `.claude/agents/<role>.md`, com o bloco do add-on
-injetado. Ao atualizar, `maker update` migra os agentes controlados por add-on quando reconhece o
+injetado. Todos os templates de agente da 0.2.0 e o da constitution ficam empacotados em
+`templates/legacy/0.2.0/` e servem de base exata para arquivos gravados sem base: agentes do engine
+customizados (sem add-on, ex.: `e2e-runner`) também migram para o papel compartilhado, e arquivos com
+blocos de add-on sem base (ex.: a constitution) passam pelo merge 3-way a partir desse template.
+
+Ao atualizar, `maker update` migra os agentes controlados por add-on quando reconhece o
 frontmatter, um único bloco completo do add-on e seu alvo no state:
 
 - **Sem customização** (o corpo sem o bloco é igual ao template 0.2.x renderizado, ao template atual

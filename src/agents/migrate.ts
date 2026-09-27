@@ -44,9 +44,14 @@ export async function planLegacyAddonAgents(
   for (const file of expected) {
     const role = file.rel.match(/^\.claude\/agents\/([a-z0-9-]+)\.md$/)?.[1];
     const entry = manifest.files[file.rel];
-    if (!role || !entry?.source.startsWith("addon:")) continue;
+    if (!role || !entry) continue;
     const current = await inspectTarget(targetDir, file.rel);
     if (current.kind !== "file" || sharedRoleReference(current.content!.toString("utf-8"))) continue;
+    if (entry.source.startsWith("engine")) {
+      await planEngineLegacyAgent(file, role, entry, current);
+      continue;
+    }
+    if (!entry.source.startsWith("addon:")) continue;
 
     const sharedPath = `.maker/workflow/agents/${role}.md`;
     const id = entry.source.slice("addon:".length);
@@ -152,6 +157,68 @@ export async function planLegacyAddonAgents(
     changes.push(...await planAdapter(targetDir, file, current, adapter, adapterUpstream, manifest));
     handled.add(file.rel);
     report("adapter", reason);
+  }
+
+  /**
+   * Agente Claude 0.2.x do engine (sem add-on) com customização: o update o preservaria sem referência
+   * ao papel. Com o template 0.2.x como base exata, o corpo vai para o papel compartilhado — igual ao
+   * template atual quando não há customização — e o adapter é regenerado com o frontmatter do dono.
+   * Sem destino seguro, fica degradado e vai para mediação junto com o papel.
+   */
+  async function planEngineLegacyAgent(file: AppliedFile, role: string, entry: ManifestEntry, current: Inspected): Promise<void> {
+    // Intacto desde que o maker o gravou: o update comum o troca pelo adapter.
+    if (!entry.edited && current.hash === (entry.baseHash ?? entry.hash)) return;
+    const sharedPath = `.maker/workflow/agents/${role}.md`;
+    const report = (status: LegacyAgentReport["status"], reason: string, action?: string) =>
+      reports.push({ path: file.rel, sharedPath, status, reason, action });
+    const preserve = (reason: string, action: string) => {
+      report("degraded", reason, action);
+      handled.add(file.rel);
+      changes.push({ path: file.rel, action: "preserve", source: entry.source, reason,
+        expectedKind: current.kind, expectedHash: current.hash });
+    };
+    if (options.configKnown === false) return;
+    const upstream = outputs.has(sharedPath) ? await readFile(join(staging, sharedPath)) : undefined;
+    const legacyShared = await legacySharedAgent(options.ctx, role);
+    const agent = upstream && legacyShared ? parseLegacyAgent(current.content!, role) : undefined;
+    if (!agent || !upstream || !legacyShared) return;
+    if (!allowsRead(agent.frontmatter)) {
+      preserve("o frontmatter restringe tools sem Read; o adapter não conseguiria ler o papel compartilhado",
+        `inclua Read em tools: de ${file.rel} e execute maker update --dry-run`);
+      return;
+    }
+    const shared = await inspectTarget(targetDir, sharedPath);
+    const sharedEntry = manifest.files[sharedPath];
+    const body = sharedAgentText(agent.body);
+    const pristine = body === upstream.toString("utf-8") || body === legacyShared;
+    const content = pristine ? upstream.toString("utf-8") : body;
+    if (!sharedIsReplaceable(shared, sharedEntry, "", content, upstream)) {
+      preserve(`papel compartilhado ${sharedPath} já possui conteúdo local`,
+        "use maker update --export ou a skill maker-update para levar as customizações do agente legado ao papel");
+      return;
+    }
+    const reason = pristine
+      ? "agente do engine sem customização no corpo; papel recebe o template atual"
+      : "agente do engine com corpo personalizado; copiado como está; updates do template chegam por merge a partir do template 0.2.x";
+    if (options.migrate === false) {
+      report("pending", reason);
+      handled.add(file.rel);
+      changes.push({ path: file.rel, action: "preserve", source: entry.source, reason: "migração pendente; merge desabilitado",
+        expectedKind: current.kind, expectedHash: current.hash });
+      return;
+    }
+    const base = pristine ? upstream : Buffer.from(legacyShared);
+    const sharedSource = sharedEntry?.source ?? "engine:common";
+    changes.push({ ...await planWrite({ targetDir, path: sharedPath, content, source: sharedSource,
+      reason: `migrar agente legado: ${reason}`, force: true }),
+      expectedHash: shared.hash, expectedKind: shared.kind });
+    const adapter = `${agent.frontmatter.replace(/\r\n/g, "\n")}\n${adapterInstruction(sharedPath)}`;
+    changes.push(...await planAdapter(targetDir, file, current, adapter, await readFile(join(staging, file.rel)), manifest));
+    changes.push(await planBase(targetDir, base));
+    manifest.files[sharedPath] = { hash: sha256(content), source: sharedSource, baseHash: sha256(base) };
+    handled.add(file.rel);
+    handled.add(sharedPath);
+    report("migrated", reason);
   }
 
   for (const [id, loaded] of states) {

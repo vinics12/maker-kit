@@ -134,7 +134,12 @@ async function checkInjectedTarget(
     issues.push(issue(`entrada do manifest para ${rel} aponta para ${entry.source}`, `reconcilie o manifest antes de reaplicar o add-on`));
   } else {
     const currentHash = sha256(await readFile(abs));
-    if (entry.hash !== currentHash) issues.push(issue(`alvo injetado modificado: ${rel}`, `revise a edição local e reaplique ou remova o add-on conscientemente`));
+    // Com base upstream registrada, a edição é customização que o update preserva e mescla.
+    const mergeable = entry.baseHash && existsSync(join(targetDir, ".maker", "bases", entry.baseHash));
+    if (entry.hash !== currentHash && !mergeable) {
+      issues.push(issue(`alvo injetado modificado sem base registrada: ${rel}`,
+        "execute maker update --dry-run: o update registra a base e preserva a customização; não reaplique o add-on para corrigir"));
+    }
   }
 }
 

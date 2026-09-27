@@ -199,6 +199,19 @@ export async function legacyAgent(ctx: RenderContext, role: string): Promise<str
   return render(await readFile(path, "utf-8"), ctx);
 }
 
+/**
+ * Base histórica de um arquivo gerado pela 0.2.x (que não registrava bases): o agente completo, o papel
+ * compartilhado equivalente ou outro arquivo empacotado em templates/legacy/0.2.0/files/.
+ */
+export async function legacyBase(ctx: RenderContext, path: string): Promise<string | undefined> {
+  const agent = path.match(/^\.claude\/agents\/([a-z0-9-]+)\.md$/)?.[1];
+  if (agent) return legacyAgent(ctx, agent);
+  const role = path.match(/^\.maker\/workflow\/agents\/([a-z0-9-]+)\.md$/)?.[1];
+  if (role) return legacySharedAgent(ctx, role);
+  const file = templatesDir(`legacy/0.2.0/files/${path}.hbs`);
+  return existsSync(file) ? render(await readFile(file, "utf-8"), ctx) : undefined;
+}
+
 function adaptSharedAgentText(input: string): string {
   return input
     .replace(/Claude Preview/g, "automação de browser disponível")

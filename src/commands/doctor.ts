@@ -1,4 +1,5 @@
-import { resolve } from "node:path";
+import { existsSync } from "node:fs";
+import { join, resolve } from "node:path";
 import pc from "picocolors";
 import { readManifest, verifyManifest } from "../render/manifest.js";
 import { enabledAgents } from "../render/manifest.js";
@@ -54,15 +55,24 @@ export async function runDoctor(opts: DoctorOptions): Promise<void> {
     console.log(pc.yellow(mediationHint(pending.count, pending.state).replace("precisam de mediação", "aguardam mediação do update")));
   }
 
-  if (result.ok && integrations.every((integration) => integration.issues.length === 0) && addons.ok && !("error" in pending)) {
+  // Arquivo editado com base upstream registrada é customização: o update a preserva e mescla.
+  const customized = result.modified.filter((path) => {
+    const baseHash = manifest.files[path]?.baseHash;
+    return baseHash && existsSync(join(targetDir, ".maker", "bases", baseHash));
+  });
+  const modified = result.modified.filter((path) => !customized.includes(path));
+  for (const path of customized) console.log(pc.dim(`  personalizado: ${path} (preservado e mesclado pelo update)`));
+
+  if (!result.missing.length && !modified.length && integrations.every((integration) => integration.issues.length === 0) &&
+      addons.ok && !("error" in pending)) {
     console.log(pc.green("✓ Install íntegro."));
     return;
   }
   const reported = new Set(integrations.flatMap((integration) => integration.missingAdapters));
   for (const m of result.missing) if (!reported.has(m)) console.log(pc.red(`  ausente:    ${m}`));
-  for (const m of result.modified) console.log(pc.yellow(`  modificado: ${m}`));
+  for (const m of modified) console.log(pc.yellow(`  modificado: ${m} (sem base registrada; execute maker update --dry-run)`));
   console.log(
-    pc.dim(`\n${result.missing.length} ausente(s), ${result.modified.length} modificado(s).`),
+    pc.dim(`\n${result.missing.length} ausente(s), ${modified.length} modificado(s) sem base, ${customized.length} personalizado(s).`),
   );
   process.exitCode = 1;
 }

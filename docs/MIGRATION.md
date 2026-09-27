@@ -65,8 +65,10 @@ blocos de add-on passa a acompanhar o template por merge.
 
 ### C. Agentes 0.2.x customizados
 
-O update copia o corpo do agente, com as customizações, para o papel compartilhado e regenera o
-adapter mantendo o frontmatter (`model`, `color`, `tools`…). O template 0.2.x vira a base do papel,
+Vale para agentes com bloco de add-on (`architect`, `code-reviewer`) e para os demais agentes do
+engine (ex.: `e2e-runner`). O maker compara o agente com o template 0.2.x empacotado para separar o
+que é seu. O update copia o corpo do agente, com as customizações, para o papel compartilhado e
+regenera o adapter mantendo o frontmatter (`model`, `color`, `tools`…). O template 0.2.x vira a base do papel,
 então as próximas versões do template chegam por merge 3-way. Confira depois do update:
 
 ```bash
@@ -81,7 +83,9 @@ migrá-los) e, às vezes, o add-on foi reaplicado com `maker add`.
 
 - **Sem customização no agente legado:** `maker update` só regenera o adapter (`migrado … (só o
   adapter)`). Nada a fazer além do update.
-- **Com customização**, ou com o papel compartilhado também editado: o agente é preservado como
+- **Com customização no agente legado e o papel compartilhado ainda intacto:** o update migra como no
+  [caso C](#c-agentes-02x-customizados) — inclusive agentes do engine como o `e2e-runner`.
+- **Com o papel compartilhado também editado** (as duas cópias divergem): o agente é preservado como
   `degradado` e entra na mediação como um grupo (agente legado + papel). Siga o [caso G](#g-conflitos-e-customizações-que-o-merge-não-resolve):
   a proposta leva as customizações e o bloco do add-on para o papel e deixa o adapter igual ao
   gerado. **Não reaplique o add-on** para tentar corrigir — isso não move as customizações.
@@ -165,7 +169,8 @@ primeiro `update` depois que a config existir):
 
 - sem customização, o arquivo volta a ser tratado como intacto e o próximo update o regenera;
 - com customização, o manifest o marca como editado (com o hash real, sem aparecer como
-  `modificado` no doctor) e o update o preserva e o encaminha para mediação ([caso G](#g-conflitos-e-customizações-que-o-merge-não-resolve)).
+  `modificado` no doctor); no update, agentes são migrados como no [caso C](#c-agentes-02x-customizados)
+  e os demais arquivos são preservados e encaminhados para mediação ([caso G](#g-conflitos-e-customizações-que-o-merge-não-resolve)).
 
 Na 0.4.x, `maker remove` seguido de `maker update` sobrescrevia com o template as customizações da
 constitution e dos papéis que tinham bloco de add-on. Se isso aconteceu, recupere o conteúdo pelo
@@ -174,9 +179,9 @@ repete o problema.
 
 ## 4. Verificação final
 
-- [ ] `maker doctor` termina com `✓ Install íntegro.` e sem arquivos aguardando mediação. Depois da
-  migração, arquivos que você editar voltam a aparecer como `modificado` no doctor — isso é esperado
-  e é o que o update usa para preservá-los.
+- [ ] `maker doctor` termina com `✓ Install íntegro.` e sem arquivos aguardando mediação. Arquivos que
+  você personalizar depois aparecem como `personalizado` — o update os preserva e mescla, e o doctor
+  não os trata como problema. Só `modificado` (edição sem base registrada) pede `maker update --dry-run`.
 - [ ] `maker update --dry-run` sai com código 0 e não lista `create`, `update`, `merge` nem `conflict`.
 - [ ] `git diff` mostra suas customizações preservadas (agentes, papéis, constitution).
 - [ ] `.maker/mediation/` não existe ou está no `.gitignore`.
@@ -187,6 +192,8 @@ repete o problema.
 - **Data da constitution:** a linha `Gerado por: maker em <data>` passa a usar a data do install
   (`installedAt`). Em installs atualizados em outros dias, o primeiro update ajusta essa data uma vez;
   depois ela não muda mais.
+- **Constitution personalizada de installs 0.2.x:** o template 0.2.x empacotado serve de base exata; a
+  sua versão é preservada, a base passa a ser registrada e o doctor deixa de acusar divergência.
 - **Arquivos com blocos de add-on** (constitution, papéis com fragmentos) passam a receber o template
   novo por merge, preservando os blocos e suas customizações; só vai para mediação o que você e o
   template mudaram na mesma região.

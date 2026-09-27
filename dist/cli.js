@@ -431,6 +431,14 @@ async function legacyAgent(ctx, role) {
   if (!existsSync4(path)) return void 0;
   return render(await readFile4(path, "utf-8"), ctx);
 }
+async function legacyBase(ctx, path) {
+  const agent2 = path.match(/^\.claude\/agents\/([a-z0-9-]+)\.md$/)?.[1];
+  if (agent2) return legacyAgent(ctx, agent2);
+  const role = path.match(/^\.maker\/workflow\/agents\/([a-z0-9-]+)\.md$/)?.[1];
+  if (role) return legacySharedAgent(ctx, role);
+  const file = templatesDir(`legacy/0.2.0/files/${path}.hbs`);
+  return existsSync4(file) ? render(await readFile4(file, "utf-8"), ctx) : void 0;
+}
 function adaptSharedAgentText(input) {
   return input.replace(/Claude Preview/g, "automa\xE7\xE3o de browser dispon\xEDvel").replace(/Chrome MCP/g, "automa\xE7\xE3o de browser dispon\xEDvel").replace(/mcp__Claude_Preview__[a-z0-9_]+/gi, "uma ferramenta de browser dispon\xEDvel").replace(/mcp__claude-in-chrome__[a-z0-9_]+/gi, "uma ferramenta de browser dispon\xEDvel").replace(/\.claude\/launch\.json/g, "a configura\xE7\xE3o de execu\xE7\xE3o do agente").replace(/Claude Code/g, "a CLI ag\xEAntica");
 }
@@ -894,7 +902,8 @@ function formatCollisions(collisions) {
 }
 
 // src/commands/doctor.ts
-import { resolve as resolve5 } from "path";
+import { existsSync as existsSync13 } from "fs";
+import { join as join18, resolve as resolve5 } from "path";
 import pc4 from "picocolors";
 
 // src/agents/validate.ts
@@ -1223,7 +1232,13 @@ async function checkInjectedTarget(targetDir, id, rel, manifest, issues) {
     issues.push(issue(`entrada do manifest para ${rel} aponta para ${entry.source}`, `reconcilie o manifest antes de reaplicar o add-on`));
   } else {
     const currentHash = sha256(await readFile11(abs));
-    if (entry.hash !== currentHash) issues.push(issue(`alvo injetado modificado: ${rel}`, `revise a edi\xE7\xE3o local e reaplique ou remova o add-on conscientemente`));
+    const mergeable = entry.baseHash && existsSync8(join12(targetDir, ".maker", "bases", entry.baseHash));
+    if (entry.hash !== currentHash && !mergeable) {
+      issues.push(issue(
+        `alvo injetado modificado sem base registrada: ${rel}`,
+        "execute maker update --dry-run: o update registra a base e preserva a customiza\xE7\xE3o; n\xE3o reaplique o add-on para corrigir"
+      ));
+    }
   }
 }
 async function appliedAddonIds(targetDir) {
@@ -1287,9 +1302,14 @@ async function planLegacyAddonAgents(targetDir, staging, expected, manifest, opt
   for (const file of expected) {
     const role = file.rel.match(/^\.claude\/agents\/([a-z0-9-]+)\.md$/)?.[1];
     const entry = manifest.files[file.rel];
-    if (!role || !entry?.source.startsWith("addon:")) continue;
+    if (!role || !entry) continue;
     const current = await inspectTarget(targetDir, file.rel);
     if (current.kind !== "file" || sharedRoleReference(current.content.toString("utf-8"))) continue;
+    if (entry.source.startsWith("engine")) {
+      await planEngineLegacyAgent(file, role, entry, current);
+      continue;
+    }
+    if (!entry.source.startsWith("addon:")) continue;
     const sharedPath = `.maker/workflow/agents/${role}.md`;
     const id = entry.source.slice("addon:".length);
     const report = (status2, reason2, action) => reports.push({ path: file.rel, sharedPath, status: status2, reason: reason2, action });
@@ -1422,6 +1442,83 @@ ${adapterInstruction(sharedPath)}`;
     changes.push(...await planAdapter(targetDir, file, current, adapter, adapterUpstream, manifest));
     handled.add(file.rel);
     report("adapter", reason);
+  }
+  async function planEngineLegacyAgent(file, role, entry, current) {
+    if (!entry.edited && current.hash === (entry.baseHash ?? entry.hash)) return;
+    const sharedPath = `.maker/workflow/agents/${role}.md`;
+    const report = (status2, reason2, action) => reports.push({ path: file.rel, sharedPath, status: status2, reason: reason2, action });
+    const preserve = (reason2, action) => {
+      report("degraded", reason2, action);
+      handled.add(file.rel);
+      changes.push({
+        path: file.rel,
+        action: "preserve",
+        source: entry.source,
+        reason: reason2,
+        expectedKind: current.kind,
+        expectedHash: current.hash
+      });
+    };
+    if (options.configKnown === false) return;
+    const upstream = outputs.has(sharedPath) ? await readFile13(join14(staging, sharedPath)) : void 0;
+    const legacyShared = await legacySharedAgent(options.ctx, role);
+    const agent2 = upstream && legacyShared ? parseLegacyAgent(current.content, role) : void 0;
+    if (!agent2 || !upstream || !legacyShared) return;
+    if (!allowsRead(agent2.frontmatter)) {
+      preserve(
+        "o frontmatter restringe tools sem Read; o adapter n\xE3o conseguiria ler o papel compartilhado",
+        `inclua Read em tools: de ${file.rel} e execute maker update --dry-run`
+      );
+      return;
+    }
+    const shared = await inspectTarget(targetDir, sharedPath);
+    const sharedEntry = manifest.files[sharedPath];
+    const body = sharedAgentText(agent2.body);
+    const pristine = body === upstream.toString("utf-8") || body === legacyShared;
+    const content = pristine ? upstream.toString("utf-8") : body;
+    if (!sharedIsReplaceable(shared, sharedEntry, "", content, upstream)) {
+      preserve(
+        `papel compartilhado ${sharedPath} j\xE1 possui conte\xFAdo local`,
+        "use maker update --export ou a skill maker-update para levar as customiza\xE7\xF5es do agente legado ao papel"
+      );
+      return;
+    }
+    const reason = pristine ? "agente do engine sem customiza\xE7\xE3o no corpo; papel recebe o template atual" : "agente do engine com corpo personalizado; copiado como est\xE1; updates do template chegam por merge a partir do template 0.2.x";
+    if (options.migrate === false) {
+      report("pending", reason);
+      handled.add(file.rel);
+      changes.push({
+        path: file.rel,
+        action: "preserve",
+        source: entry.source,
+        reason: "migra\xE7\xE3o pendente; merge desabilitado",
+        expectedKind: current.kind,
+        expectedHash: current.hash
+      });
+      return;
+    }
+    const base2 = pristine ? upstream : Buffer.from(legacyShared);
+    const sharedSource = sharedEntry?.source ?? "engine:common";
+    changes.push({
+      ...await planWrite({
+        targetDir,
+        path: sharedPath,
+        content,
+        source: sharedSource,
+        reason: `migrar agente legado: ${reason}`,
+        force: true
+      }),
+      expectedHash: shared.hash,
+      expectedKind: shared.kind
+    });
+    const adapter = `${agent2.frontmatter.replace(/\r\n/g, "\n")}
+${adapterInstruction(sharedPath)}`;
+    changes.push(...await planAdapter(targetDir, file, current, adapter, await readFile13(join14(staging, file.rel)), manifest));
+    changes.push(await planBase(targetDir, base2));
+    manifest.files[sharedPath] = { hash: sha256(content), source: sharedSource, baseHash: sha256(base2) };
+    handled.add(file.rel);
+    handled.add(sharedPath);
+    report("migrated", reason);
   }
   for (const [id, loaded] of states) {
     if (typeof loaded === "string" || !loaded.changed) continue;
@@ -2264,7 +2361,8 @@ async function planUpdate(targetDir, opts = {}) {
             preserve("arquivo controlado por add-on; merge desabilitado");
             await mediate("addon", "template novo em arquivo controlado por add-on; merge desabilitado", recorded.baseHash);
           } else {
-            const base2 = recorded.baseHash ? await readBase(targetDir, recorded.baseHash) : null;
+            const legacy = !recorded.baseHash && recovered ? await legacyBase(ctx, file.rel) : void 0;
+            const base2 = recorded.baseHash ? await readBase(targetDir, recorded.baseHash) : legacy ? Buffer.from(legacy) : null;
             const reinjected = base2 && sameText(reinjectBlocks(file.rel, base2.toString("utf-8"), local), local) ? Buffer.from(reinjectBlocks(file.rel, upstream.toString("utf-8"), local)) : null;
             const merged = reinjected ?? (base2 ? mergeText(current.content, base2, upstream) : null);
             if (merged && sameBlocks(local, merged.toString("utf-8"))) {
@@ -2540,16 +2638,22 @@ async function runDoctor(opts) {
   } else if (pending.count) {
     console.log(pc4.yellow(mediationHint(pending.count, pending.state).replace("precisam de media\xE7\xE3o", "aguardam media\xE7\xE3o do update")));
   }
-  if (result.ok && integrations.every((integration) => integration.issues.length === 0) && addons.ok && !("error" in pending)) {
+  const customized = result.modified.filter((path) => {
+    const baseHash = manifest.files[path]?.baseHash;
+    return baseHash && existsSync13(join18(targetDir, ".maker", "bases", baseHash));
+  });
+  const modified = result.modified.filter((path) => !customized.includes(path));
+  for (const path of customized) console.log(pc4.dim(`  personalizado: ${path} (preservado e mesclado pelo update)`));
+  if (!result.missing.length && !modified.length && integrations.every((integration) => integration.issues.length === 0) && addons.ok && !("error" in pending)) {
     console.log(pc4.green("\u2713 Install \xEDntegro."));
     return;
   }
   const reported = new Set(integrations.flatMap((integration) => integration.missingAdapters));
   for (const m of result.missing) if (!reported.has(m)) console.log(pc4.red(`  ausente:    ${m}`));
-  for (const m of result.modified) console.log(pc4.yellow(`  modificado: ${m}`));
+  for (const m of modified) console.log(pc4.yellow(`  modificado: ${m} (sem base registrada; execute maker update --dry-run)`));
   console.log(
     pc4.dim(`
-${result.missing.length} ausente(s), ${result.modified.length} modificado(s).`)
+${result.missing.length} ausente(s), ${modified.length} modificado(s) sem base, ${customized.length} personalizado(s).`)
   );
   process.exitCode = 1;
 }
@@ -2649,7 +2753,7 @@ import pc7 from "picocolors";
 
 // src/runs/read.ts
 import { readdir as readdir6, readFile as readFile17 } from "fs/promises";
-import { basename as basename3, join as join19 } from "path";
+import { basename as basename3, join as join20 } from "path";
 
 // src/runs/schema.ts
 import { z as z6 } from "zod";
@@ -2691,19 +2795,19 @@ var eventSchema = z6.discriminatedUnion("type", [
 
 // src/runs/emit.ts
 import { appendFile, mkdir as mkdir7 } from "fs/promises";
-import { dirname as dirname6, join as join18 } from "path";
+import { dirname as dirname6, join as join19 } from "path";
 var RUNS_DIR = ".maker/runs";
 
 // src/runs/read.ts
 async function listRunFiles(target) {
-  const dir = join19(target, RUNS_DIR);
+  const dir = join20(target, RUNS_DIR);
   let entries;
   try {
     entries = await readdir6(dir, { withFileTypes: true });
   } catch {
     return [];
   }
-  return entries.filter((e) => e.isFile() && e.name.endsWith(".jsonl")).map((e) => ({ runId: basename3(e.name, ".jsonl"), path: join19(dir, e.name) })).sort((a, b) => a.runId.localeCompare(b.runId));
+  return entries.filter((e) => e.isFile() && e.name.endsWith(".jsonl")).map((e) => ({ runId: basename3(e.name, ".jsonl"), path: join20(dir, e.name) })).sort((a, b) => a.runId.localeCompare(b.runId));
 }
 async function readRun(path) {
   const raw = await readFile17(path, "utf-8");
@@ -2798,9 +2902,9 @@ async function runRuns(opts) {
 }
 
 // src/commands/list.ts
-import { existsSync as existsSync13 } from "fs";
+import { existsSync as existsSync14 } from "fs";
 import { lstat as lstat4, readdir as readdir7 } from "fs/promises";
-import { basename as basename4, join as join20, resolve as resolve9 } from "path";
+import { basename as basename4, join as join21, resolve as resolve9 } from "path";
 import pc8 from "picocolors";
 async function runList(opts) {
   const targetDir = resolve9(opts.target ?? process.cwd());
@@ -2832,7 +2936,7 @@ async function classifyAddons(targetDir, catalog) {
         };
       }
       const statePath = addonStatePath(targetDir, id);
-      if (!existsSync13(statePath)) return { id, catalog: entry, status: "available" };
+      if (!existsSync14(statePath)) return { id, catalog: entry, status: "available" };
       try {
         const state = await readAddonState(targetDir, id);
         if (state.id !== id) {
@@ -2859,7 +2963,7 @@ async function classifyAddons(targetDir, catalog) {
   );
 }
 async function listStateIds(targetDir) {
-  const dir = join20(targetDir, ".maker", "addons");
+  const dir = join21(targetDir, ".maker", "addons");
   let metadata;
   try {
     metadata = await lstat4(dir);
@@ -2897,9 +3001,9 @@ ${pc8.bold(addon.id)} \xB7 ${name} \xB7 ${label}`);
 }
 
 // src/commands/agent.ts
-import { existsSync as existsSync14 } from "fs";
+import { existsSync as existsSync15 } from "fs";
 import { readFile as readFile18 } from "fs/promises";
-import { join as join21, resolve as resolve10 } from "path";
+import { join as join22, resolve as resolve10 } from "path";
 import { mkdtemp as mkdtemp4, rm as rm7 } from "fs/promises";
 import { tmpdir as tmpdir4 } from "os";
 import pc9 from "picocolors";
@@ -2949,8 +3053,8 @@ async function runAgentList(opts) {
 }
 async function resolveRenderConfig(targetDir, stored, explicitPath) {
   if (stored) return parseConfig(stored);
-  const path = explicitPath ? resolve10(explicitPath) : join21(targetDir, "maker.config.json");
-  if (!existsSync14(path)) {
+  const path = explicitPath ? resolve10(explicitPath) : join22(targetDir, "maker.config.json");
+  if (!existsSync15(path)) {
     throw new Error(
       "Este install usa um manifest legado sem a configura\xE7\xE3o de renderiza\xE7\xE3o. Forne\xE7a --config <maker.config.json> para adicionar outra integra\xE7\xE3o com seguran\xE7a."
     );
@@ -2958,7 +3062,7 @@ async function resolveRenderConfig(targetDir, stored, explicitPath) {
   return parseConfig(JSON.parse(await readFile18(path, "utf-8")));
 }
 async function assertNoUnmanagedProviderFiles(targetDir, provider, managed, ctx) {
-  const staging = await mkdtemp4(join21(tmpdir4(), "maker-agent-preflight-"));
+  const staging = await mkdtemp4(join22(tmpdir4(), "maker-agent-preflight-"));
   let expected;
   try {
     expected = (await applyAgentProvider(staging, ctx, provider)).map((file) => file.rel);
@@ -2966,7 +3070,7 @@ async function assertNoUnmanagedProviderFiles(targetDir, provider, managed, ctx)
     await rm7(staging, { recursive: true, force: true });
   }
   const collisions = expected.filter(
-    (rel) => existsSync14(join21(targetDir, rel)) && !(rel in managed)
+    (rel) => existsSync15(join22(targetDir, rel)) && !(rel in managed)
   );
   if (collisions.length) {
     throw new Error(
