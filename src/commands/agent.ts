@@ -32,9 +32,9 @@ export async function runAgentAdd(providerInput: string, opts: AgentAddOptions):
     targetDir,
     provider,
     manifest.files,
-    buildContext(config),
+    buildContext(config, manifest.installedAt),
   );
-  const applied = await applyAgentProvider(targetDir, buildContext(config), provider);
+  const applied = await applyAgentProvider(targetDir, buildContext(config, manifest.installedAt), provider);
   for (const file of applied) manifest.files[file.rel] = file.entry;
   manifest.schemaVersion = 3;
   manifest.config = config;

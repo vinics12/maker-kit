@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { upsertBlock, stripBlock, hasBlock } from "../src/addons/inject.js";
+import { upsertBlock, stripBlock, hasBlock, sameText, addonBlocks } from "../src/addons/inject.js";
 
 describe("inject: upsert/strip", () => {
   const id = "saas";
@@ -38,5 +38,16 @@ describe("inject: upsert/strip", () => {
     const out = upsertBlock("só texto", id, "FRAG");
     expect(out).toContain("FRAG");
     expect(hasBlock(out, id)).toBe(true);
+  });
+});
+
+describe("comparação de templates", () => {
+  it("ignora a data de geração e normalizações de bloco, mas não conteúdo", () => {
+    const a = "# T\n\n**Version**: 0.1.0 | **Gerado por**: maker em 2026-01-01\n";
+    expect(sameText(a, a.replace("2026-01-01", "2026-09-27"))).toBe(true);
+    expect(sameText("a\r\n\n\n\nb\n", "a\n\nb")).toBe(true);
+    expect(sameText(a, a.replace("0.1.0", "0.2.0"))).toBe(false);
+    expect([...addonBlocks("x\n<!-- maker:addon:saas:start -->\nregra\n<!-- maker:addon:saas:end -->\n")])
+      .toEqual([["saas", "regra"]]);
   });
 });

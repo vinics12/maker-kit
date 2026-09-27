@@ -1,0 +1,34 @@
+{
+  "makerVersion": "0.2.0",
+  "project": {
+    "name": "Nimbus Ledger",
+    "slug": "nimbus-ledger"
+  },
+  "installedAt": "2026-01-01T00:00:00.000Z",
+  "files": {
+    ".claude/agents/architect.md": {
+      "hash": "9b4d16d19365a9e26e092ee76531945b9cc25dba157a4e1ebc53a51927f43642",
+      "source": "addon:saas"
+    },
+    ".claude/agents/code-reviewer.md": {
+      "hash": "7b2dc80998fd48875b5a85706f9a98fb451ad5a11545467423498eb73419647f",
+      "source": "addon:saas"
+    },
+    ".claude/agents/dev.md": {
+      "hash": "9942ffddbc8bd0f53bc008014a46bcff0444b283bb1d85c424a215f31b9cdc8b",
+      "source": "engine"
+    },
+    ".claude/skills/run-spec/SKILL.md": {
+      "hash": "2f03d278217d83b5c1eac99ca474db92698d07b68973a1f3a194ffb33dca3b88",
+      "source": "engine"
+    },
+    ".specify/memory/constitution.md": {
+      "hash": "be6dc6883b7a201f03bf1fca8cdffa9d5c58882b37c2a3288059da47a8e5e105",
+      "source": "addon:saas"
+    },
+    ".specify/memory/saas-reference.md": {
+      "hash": "e95f665d10dcf331390a9b50ec6e9efedf5b355403f29302f53ee87d480fc8b1",
+      "source": "addon:saas"
+    }
+  }
+}

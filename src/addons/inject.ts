@@ -57,3 +57,20 @@ export function stripBlock(content: string, id: string): string {
 function escapeRe(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
+
+const BLOCK = /<!-- maker:addon:([a-z0-9-]+):start -->\n?([\s\S]*?)\n?<!-- maker:addon:\1:end -->/g;
+
+/** Blocos de add-on do texto, na ordem em que aparecem: id → conteúdo entre os marcadores. */
+export function addonBlocks(content: string): Map<string, string> {
+  return new Map([...content.matchAll(BLOCK)].map((match) => [match[1]!, match[2]!]));
+}
+
+/**
+ * Igualdade de texto ignorando CRLF, linhas em branco repetidas e bordas — o que stripBlock/upsertBlock
+ * normalizam — e a data de geração que o template grava ({{generatedAt}}), que muda a cada render.
+ */
+export function sameText(a: string, b: string): boolean {
+  const normalize = (value: string) => value.replace(/\r\n/g, "\n").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n")
+    .replace(/(Gerado por\*\*: maker em )\d{4}-\d{2}-\d{2}/g, "$1<data>").trim();
+  return normalize(a) === normalize(b);
+}

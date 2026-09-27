@@ -1,0 +1,21 @@
+{
+  "id": "saas",
+  "version": "0.1.0",
+  "appliedAt": "2026-01-01T00:00:00.000Z",
+  "knobs": {
+    "tenantColumn": "org_id",
+    "brandVarPrefix": "--tema-",
+    "roles": "owner,staff"
+  },
+  "createdFiles": [
+    {
+      "path": ".specify/memory/saas-reference.md",
+      "hash": "e95f665d10dcf331390a9b50ec6e9efedf5b355403f29302f53ee87d480fc8b1"
+    }
+  ],
+  "injectedTargets": [
+    ".specify/memory/constitution.md",
+    ".claude/agents/code-reviewer.md",
+    ".claude/agents/architect.md"
+  ]
+}

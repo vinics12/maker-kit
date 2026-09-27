@@ -50,7 +50,7 @@ export async function runInit(opts: InitOptions): Promise<void> {
     ...loadedConfig,
     agent: opts.agent ?? priorManifest?.config?.agent ?? agents[0],
   });
-  const ctx = buildContext(config);
+  const ctx = buildContext(config, priorManifest?.installedAt);
 
   const collisions = await findInitCollisions(targetDir, ctx, agents);
   if (collisions.length && !opts.force && !opts.dryRun) {

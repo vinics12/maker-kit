@@ -184,8 +184,26 @@ $run-spec "feature bem definida"
 maker doctor    # verifica integridade (manifest sha256): arquivos ausentes/modificados
 maker update             # atualiza e mescla mudanças locais/upstream quando possível
 maker update --dry-run   # mostra o plano completo sem escrever
-maker update --no-merge  # preserva todos os arquivos editados localmente
+maker update --no-merge  # preserva edições locais sem tentar merge
+maker update --export              # exporta o que precisa de mediação (base/local/upstream)
+maker update --apply-resolutions   # valida e aplica as propostas mediadas
 ```
+
+O que o merge automático não resolve — conflitos, customizações sem base exata, arquivos de add-on
+com template novo, agentes legados degradados — pode ser mediado por um agente: rode a skill
+`/maker-update` no Claude Code (`$maker-update` no Codex). Ela exporta cada item com as versões
+base/local/upstream, propõe o conteúdo final mantendo as customizações do dono, revisa o diff com
+ele e só então aplica pelo maker, que valida as propostas e as aplica numa única transação. Veja
+[mediação com agente](docs/features/transactional-update.md#mediação-com-agente).
+
+Ao atualizar um add-on legado, `maker update --dry-run` mostra a migração dos agentes Claude
+para papéis compartilhados. Agentes sem customização recebem o template atual com o bloco do
+add-on; corpos personalizados são preservados, com aviso, e conteúdo divergente no destino é
+sinalizado para revisão. Com `--no-merge` a migração só é listada. Veja
+[migração de agentes legados](docs/features/transactional-update.md#migração-dos-agentes-legados).
+
+Vindo da 0.2.x, 0.3.x ou 0.4.x? Siga o [guia de migração](docs/MIGRATION.md): diagnóstico, um caminho por
+sintoma (agentes degradados, add-on reaplicado, config ausente, conflitos) e a checklist final.
 
 ---
 

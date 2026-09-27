@@ -1,13 +1,13 @@
 import { describe, it, expect, beforeAll } from "vitest";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { appendFile, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
 import { runInit } from "../src/commands/init.js";
 import { loadAddon } from "../src/addons/loader.js";
 import { applyAddon, removeAddon } from "../src/addons/apply.js";
-import { readManifest, verifyManifest } from "../src/render/manifest.js";
-import { isAddonApplied } from "../src/addons/state.js";
+import { readManifest, sha256, verifyManifest } from "../src/render/manifest.js";
+import { isAddonApplied, readAddonState, writeAddonState } from "../src/addons/state.js";
 
 const FIXTURE = join(__dirname, "..", "fixtures", "example.config.json");
 const CONST = ".specify/memory/constitution.md";
@@ -79,5 +79,54 @@ describe("add-on saas (integração)", () => {
     const m = await readManifest(target);
     const r = await verifyManifest(target, m!);
     expect(r.ok, `missing=${r.missing} modified=${r.modified}`).toBe(true);
+  });
+
+  it("reaplicar add-on preserva arquivo criado que o dono editou", async () => {
+    const project = await mkdtemp(join(tmpdir(), "maker-addon-reapply-"));
+    await runInit({ target: project, config: FIXTURE, yes: true });
+    const addon = await loadAddon("saas");
+    const knobs = { tenantColumn: "org_id", brandVarPrefix: "--tema-", roles: "owner,staff" };
+    await applyAddon(project, addon, knobs);
+    await appendFile(join(project, REF), "\nAnotação local do dono.\n");
+    const customized = await read(project, REF);
+    await applyAddon(project, addon, knobs);
+    expect(await read(project, REF)).toBe(customized);
+    await removeAddon(project, "saas");
+    expect(await read(project, REF)).toBe(customized);
+  });
+
+  it("reaplicar add-on preserva bloco que o dono editou", async () => {
+    const project = await mkdtemp(join(tmpdir(), "maker-addon-block-"));
+    await runInit({ target: project, config: FIXTURE, yes: true });
+    const addon = await loadAddon("saas");
+    const knobs = { tenantColumn: "org_id", brandVarPrefix: "--tema-", roles: "owner,staff" };
+    await applyAddon(project, addon, knobs);
+    const customized = (await read(project, CONST)).replace("SaaS-1. Multi-Tenant First", "SaaS-1. Multi-Tenant First — regra local");
+    const reviewer = (await read(project, REVIEWER)).replace("Checklist SaaS", "Checklist SaaS — regra local");
+    await writeFile(join(project, CONST), customized);
+    await writeFile(join(project, REVIEWER), reviewer);
+    await applyAddon(project, addon, knobs);
+    expect(await read(project, CONST)).toBe(customized);
+    expect(await read(project, REVIEWER)).toBe(reviewer);
+  });
+
+  it("reaplicar add-on atualiza bloco intacto gravado por uma versão anterior do add-on", async () => {
+    const project = await mkdtemp(join(tmpdir(), "maker-addon-upgrade-"));
+    await runInit({ target: project, config: FIXTURE, yes: true });
+    const addon = await loadAddon("saas");
+    const knobs = { tenantColumn: "org_id", brandVarPrefix: "--tema-", roles: "owner,staff" };
+    await applyAddon(project, addon, knobs);
+    const fresh = await read(project, REVIEWER);
+    // Simula o bloco que a versão anterior do add-on gravou (texto diferente do fragmento atual),
+    // registrado no state como o maker faz ao injetar.
+    const oldBlock = "Checklist SaaS da versão anterior do add-on.";
+    const installed = fresh.replace(/(<!-- maker:addon:saas:start -->\n)[\s\S]*?(\n<!-- maker:addon:saas:end -->)/, `$1${oldBlock}$2`);
+    await writeFile(join(project, REVIEWER), installed);
+    const state = (await readAddonState(project, "saas"))!;
+    state.injectedBlocks = { ...state.injectedBlocks, [REVIEWER]: sha256(Buffer.from(oldBlock)) };
+    await writeAddonState(project, state);
+    await applyAddon(project, addon, knobs);
+    expect(await read(project, REVIEWER)).toBe(fresh);
+    expect((await readAddonState(project, "saas"))!.injectedBlocks![REVIEWER]).not.toBe(sha256(Buffer.from(oldBlock)));
   });
 });

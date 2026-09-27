@@ -14,13 +14,17 @@ export interface RenderContext {
   generatedAt: string;
 }
 
-export function buildContext(config: MakerConfig): RenderContext {
+/**
+ * `installedAt` (ISO) fixa a data renderizada para um install existente: sem ela, cada update
+ * geraria um upstream diferente por dia, reescrevendo arquivos intactos e alternando bases.
+ */
+export function buildContext(config: MakerConfig, installedAt?: string): RenderContext {
   return {
     project: { ...config.project, slug: config.project.slug! },
     layout: config.layout,
     commands: config.commands,
     agent: config.agent,
-    generatedAt: new Date().toISOString().slice(0, 10),
+    generatedAt: (installedAt ?? new Date().toISOString()).slice(0, 10),
   };
 }
 

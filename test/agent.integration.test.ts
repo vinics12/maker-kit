@@ -55,7 +55,7 @@ describe("integrações de agentes", () => {
       const content = await readFile(path, "utf-8");
       if (
         /\.claude\b|Claude Code|Claude Preview|Chrome MCP/.test(content) ||
-        /\/(?:run-spec|run-brainstorm|speckit-[a-z0-9-]+|fix-on-validation)\b/.test(content)
+        /\/(?:run-spec|run-brainstorm|maker-update|speckit-[a-z0-9-]+|fix-on-validation)\b/.test(content)
       ) leaks.push(path);
     }
     expect(leaks).toEqual([]);

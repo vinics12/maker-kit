@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -42,6 +42,52 @@ describe("maker update transacional", () => {
     const result = await readFile(join(target, path), "utf-8");
     expect(result).toContain(`${lines[0]} local`);
     expect(result).toContain(lines.at(-2)!);
+  });
+
+  it("preserva edições já mescladas em updates seguintes", async () => {
+    const target = await initialized("maker-update-remerge-");
+    const path = "AGENTS.md";
+    const upstream = await readFile(join(target, path), "utf-8");
+    const lines = upstream.split("\n");
+    const base = lines.slice(0, -2).join("\n") + "\n";
+    const local = base.replace(lines[0]!, `${lines[0]} local`);
+    const baseHash = sha256(base);
+    await mkdir(join(target, ".maker", "bases"), { recursive: true });
+    await writeFile(join(target, ".maker", "bases", baseHash), base);
+    await writeFile(join(target, path), local);
+    const manifest = (await readManifest(target))!;
+    manifest.files[path] = { ...manifest.files[path]!, hash: baseHash, baseHash };
+    await writeManifest(target, manifest);
+    await runUpdate({ target });
+    const merged = await readFile(join(target, path), "utf-8");
+    expect(merged).toContain(`${lines[0]} local`);
+    await runUpdate({ target });
+    expect(await readFile(join(target, path), "utf-8")).toBe(merged);
+    // Merge cujo resultado já é o conteúdo atual não aparece como mesclado.
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runUpdate({ target, dryRun: true });
+    expect(log.mock.calls.flat().join("\n")).not.toMatch(/^merge\s/m);
+    log.mockRestore();
+  });
+
+  it("update em outro dia não reescreve arquivos intactos pela data de geração", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-01-01T12:00:00Z"));
+      const target = await initialized("maker-update-day-");
+      const constitution = join(target, ".specify/memory/constitution.md");
+      const before = await readFile(constitution, "utf-8");
+      expect(before).toContain("maker em 2026-01-01");
+      vi.setSystemTime(new Date("2026-03-15T12:00:00Z"));
+      const log = vi.spyOn(console, "log").mockImplementation(() => {});
+      await runUpdate({ target, dryRun: true });
+      expect(log.mock.calls.flat().join("\n")).not.toMatch(/^(create|update|remove|merge)\s/m);
+      await runUpdate({ target });
+      expect(await readFile(constitution, "utf-8")).toBe(before);
+      log.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("conflito preserva arquivos e manifest", async () => {
