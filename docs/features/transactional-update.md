@@ -46,6 +46,8 @@ sem customização, o arquivo volta a ser tratado como intacto; com customizaç�
 comparar —, o manifest o marca como editado (`edited`), com o hash real. O update reavalia esses
 arquivos quando a config está disponível: sem customização recebem o upstream; com customização são
 preservados e encaminhados para mediação.
+Ao reaplicar um add-on, arquivos que ele criou e que foram editados pelo dono também são preservados;
+o comando avisa e mantém o hash original no state para que `maker remove` não os apague.
 
 ## Config de instalações 0.2.x
 

@@ -106,10 +106,9 @@ export async function applyAddon(
   const createdFiles: { path: string; hash: string }[] = [];
   const changes: PlannedChange[] = [];
 
-  // Reaplicação: arquivos que ESTE add-on já criou são "nossos" e podem ser sobrescritos;
-  // arquivos alheios de mesmo nome são preservados.
+  // Reaplicação: arquivos criados por este add-on só podem ser substituídos se ainda estiverem intactos.
   const prior = await readAddonState(targetDir, addon.id);
-  const owned = new Set((prior?.createdFiles ?? []).map((f) => f.path));
+  const owned = new Map((prior?.createdFiles ?? []).map((f) => [f.path, f]));
 
   // 1. Princípios → injetados na seção "Princípios do Projeto" da constitution.
   if (addon.principles.length) {
@@ -143,9 +142,17 @@ export async function applyAddon(
   // 3. Arquivos novos (memória de referência, skills).
   for (const f of addon.files) {
     const abs = join(targetDir, f.to);
-    if (existsSync(abs) && !owned.has(f.to)) {
-      console.warn(`  aviso: ${f.to} já existe (não é deste add-on) — não sobrescrito.`);
-      continue;
+    if (existsSync(abs)) {
+      const previous = owned.get(f.to);
+      if (!previous) {
+        console.warn(`  aviso: ${f.to} já existe (não é deste add-on) — não sobrescrito.`);
+        continue;
+      }
+      if (sha256(await readFile(abs)) !== previous.hash) {
+        console.warn(`  aviso: ${f.to} foi editado desde a aplicação do add-on — não sobrescrito.`);
+        createdFiles.push(previous);
+        continue;
+      }
     }
     const content = await renderFrom(dir, f.from, ctx);
     const hash = sha256(Buffer.from(content, "utf-8"));

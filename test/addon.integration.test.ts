@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll } from "vitest";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { appendFile, mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
@@ -79,5 +79,19 @@ describe("add-on saas (integração)", () => {
     const m = await readManifest(target);
     const r = await verifyManifest(target, m!);
     expect(r.ok, `missing=${r.missing} modified=${r.modified}`).toBe(true);
+  });
+
+  it("reaplicar add-on preserva arquivo criado que o dono editou", async () => {
+    const project = await mkdtemp(join(tmpdir(), "maker-addon-reapply-"));
+    await runInit({ target: project, config: FIXTURE, yes: true });
+    const addon = await loadAddon("saas");
+    const knobs = { tenantColumn: "org_id", brandVarPrefix: "--tema-", roles: "owner,staff" };
+    await applyAddon(project, addon, knobs);
+    await appendFile(join(project, REF), "\nAnotação local do dono.\n");
+    const customized = await read(project, REF);
+    await applyAddon(project, addon, knobs);
+    expect(await read(project, REF)).toBe(customized);
+    await removeAddon(project, "saas");
+    expect(await read(project, REF)).toBe(customized);
   });
 });

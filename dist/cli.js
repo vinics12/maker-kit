@@ -1578,7 +1578,7 @@ async function applyAddon(targetDir, addon, knobs, options = {}) {
   const createdFiles = [];
   const changes = [];
   const prior = await readAddonState(targetDir, addon.id);
-  const owned = new Set((prior?.createdFiles ?? []).map((f) => f.path));
+  const owned = new Map((prior?.createdFiles ?? []).map((f) => [f.path, f]));
   if (addon.principles.length) {
     const absConst = join15(targetDir, CONSTITUTION);
     if (!existsSync10(absConst)) throw new Error(`${CONSTITUTION} ausente no install.`);
@@ -1606,9 +1606,17 @@ async function applyAddon(targetDir, addon, knobs, options = {}) {
   }
   for (const f of addon.files) {
     const abs = join15(targetDir, f.to);
-    if (existsSync10(abs) && !owned.has(f.to)) {
-      console.warn(`  aviso: ${f.to} j\xE1 existe (n\xE3o \xE9 deste add-on) \u2014 n\xE3o sobrescrito.`);
-      continue;
+    if (existsSync10(abs)) {
+      const previous = owned.get(f.to);
+      if (!previous) {
+        console.warn(`  aviso: ${f.to} j\xE1 existe (n\xE3o \xE9 deste add-on) \u2014 n\xE3o sobrescrito.`);
+        continue;
+      }
+      if (sha256(await readFile14(abs)) !== previous.hash) {
+        console.warn(`  aviso: ${f.to} foi editado desde a aplica\xE7\xE3o do add-on \u2014 n\xE3o sobrescrito.`);
+        createdFiles.push(previous);
+        continue;
+      }
     }
     const content = await renderFrom(dir, f.from, ctx);
     const hash = sha256(Buffer.from(content, "utf-8"));
