@@ -41,7 +41,7 @@ Para forçar uma versão específica (ex.: a primeira estável), defina `"releas
 em `release-please-config.json`: o Release PR passa a propor essa versão independentemente do tipo
 dos commits. **Remova o campo no primeiro PR depois que o Release PR dessa versão for mergeado**; enquanto
 ele existir, o Release Please continua propondo a mesma versão. A `1.0.0` foi fixada assim para lançar a
-migração de agentes legados e a mediação de update (PR #38).
+migração de agentes legados e a mediação de update (PR #38), e o campo foi removido depois do release.
 
 Para testes públicos antes de uma versão estável, use prerelease SemVer e o dist-tag npm `next`
 (`X.Y.Z-beta.N`). Prereleases não devem substituir `latest`.
