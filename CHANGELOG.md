@@ -4,6 +4,18 @@ Todas as mudanças relevantes deste projeto serão documentadas neste arquivo. A
 geradas automaticamente pelo Release Please a partir dos Conventional Commits mergeados em
 `main`.
 
+## [1.0.0](https://github.com/vinics12/maker-kit/compare/v0.4.1...v1.0.0) (2026-09-27)
+
+
+### Features
+
+* **update:** Migra agentes legados e adiciona mediação por agente ([#38](https://github.com/vinics12/maker-kit/issues/38)) ([35f0f47](https://github.com/vinics12/maker-kit/commit/35f0f4734af7cdff27ec83ce4a2f5309603cb0ad)), closes [#37](https://github.com/vinics12/maker-kit/issues/37)
+
+
+### Bug Fixes
+
+* **deps:** Atualiza smol-toml para 1.9.0 ([#36](https://github.com/vinics12/maker-kit/issues/36)) ([0ed450d](https://github.com/vinics12/maker-kit/commit/0ed450df9c67e8db0f6154328b75e7f185ff72ea))
+
 ## [0.4.1](https://github.com/vinics12/maker-kit/compare/v0.4.0...v0.4.1) (2026-09-25)
 
 
