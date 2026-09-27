@@ -1,6 +1,6 @@
 {
   "name": "@vinicius.cerqueira/maker",
-  "version": "0.4.1",
+  "version": "1.0.0",
   "description": "Encapsulador do workflow de criação de produtos (SpecKit + orquestração multi-agente) — instala o motor agnóstico de negócio em qualquer projeto.",
   "license": "MIT",
   "author": "vinics12",
@@ -63,10 +63,10 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@types/node": "^26.6.2",
+    "@types/node": "^22.10.0",
     "tsup": "^8.3.5",
-    "typescript": "^7.0.2",
-    "vite": "^8.3.0",
+    "typescript": "^5.7.2",
+    "vite": "^7.3.6",
     "vitest": "^5.0.1"
   }
 }
