@@ -4,6 +4,7 @@
     ".": {
       "release-type": "node",
       "package-name": "@vinicius.cerqueira/maker",
+      "release-as": "1.0.0",
       "include-v-in-tag": true,
       "include-component-in-tag": false,
       "extra-files": [

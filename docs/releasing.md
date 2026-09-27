@@ -37,6 +37,12 @@ Não mantemos uma branch `develop` permanente. Quando várias branches instávei
 testadas juntas, use uma branch temporária `integration/<tema>`, abra um único PR dela para `main`
 quando estabilizar e remova-a depois do merge.
 
+Para forçar uma versão específica (ex.: a primeira estável), defina `"release-as": "X.Y.Z"` no pacote
+em `release-please-config.json`: o Release PR passa a propor essa versão independentemente do tipo
+dos commits. **Remova o campo no primeiro PR depois que o Release PR dessa versão for mergeado**; enquanto
+ele existir, o Release Please continua propondo a mesma versão. A `1.0.0` foi fixada assim para lançar a
+migração de agentes legados e a mediação de update (PR #38).
+
 Para testes públicos antes de uma versão estável, use prerelease SemVer e o dist-tag npm `next`
 (`X.Y.Z-beta.N`). Prereleases não devem substituir `latest`.
 
