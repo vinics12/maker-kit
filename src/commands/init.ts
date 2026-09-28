@@ -1,10 +1,11 @@
 import { resolve, join } from "node:path";
 import { lstat, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { z } from "zod";
 import pc from "picocolors";
 import { loadConfig } from "../config/load.js";
 import { buildContext } from "../render/engine.js";
-import { type BasesFormat, type Manifest } from "../render/manifest.js";
+import { type Manifest } from "../render/manifest.js";
 import { makerVersion } from "../util/version.js";
 import { applyEngine } from "../util/engine-scaffold.js";
 import { enabledAgents } from "../render/manifest.js";
@@ -12,6 +13,8 @@ import { parseConfig, type AgentProvider } from "../config/schema.js";
 import { createPlan, formatPlan, inspectTarget, planWrite, type PlannedChange } from "../changes/plan.js";
 import { applyChangePlan } from "../changes/transaction.js";
 import { openState, planStateWrite } from "../state/store.js";
+import { configuredBasesFormat, effectiveBasesFormat, planFormatTransition } from "../state/format.js";
+import { announceTransition } from "./update.js";
 
 export interface InitOptions {
   target?: string;
@@ -33,14 +36,19 @@ export async function runInit(opts: InitOptions): Promise<void> {
   const targetDir = resolve(opts.target ?? process.cwd());
   const priorState = await openState(targetDir, { mode: opts.dryRun ? "dry-run" : "mutate" });
   const priorManifest = priorState?.manifest ?? null;
-  const loadedConfig = await loadConfig({
-    targetDir,
-    configPath: opts.config,
-    yes: opts.yes,
-    name: opts.name,
-    agent: opts.agent,
-    fallback: priorManifest?.config,
-  });
+  let loadedConfig;
+  try {
+    loadedConfig = await loadConfig({
+      targetDir,
+      configPath: opts.config,
+      yes: opts.yes,
+      name: opts.name,
+      agent: opts.agent,
+      fallback: priorManifest?.config,
+    });
+  } catch (error) {
+    throw stateBasesAbort(error);
+  }
   const agents = priorManifest ? enabledAgents(priorManifest) : [loadedConfig.agent];
   if (priorManifest && opts.agent && !agents.includes(opts.agent)) {
     throw new Error(
@@ -52,6 +60,9 @@ export async function runInit(opts: InitOptions): Promise<void> {
     agent: opts.agent ?? priorManifest?.config?.agent ?? agents[0],
   });
   const ctx = buildContext(config, priorManifest?.installedAt);
+  // init usa a config carregada (--config ou maker.config.json), não relê o arquivo do zero (D6).
+  const configured = await configuredBasesFormat(targetDir, { loaded: config });
+  const effective = effectiveBasesFormat(configured, priorState?.recorded, priorState?.inUse);
 
   const collisions = await findInitCollisions(targetDir, ctx, agents);
   if (collisions.length && !opts.force && !opts.dryRun) {
@@ -130,21 +141,27 @@ export async function runInit(opts: InitOptions): Promise<void> {
     config,
     agents,
     installedAt: priorManifest?.installedAt ?? new Date().toISOString(),
+    basesFormat: effective.format,
     files: Object.fromEntries(applied.map((a) => [a.rel, { ...a.entry, baseHash: a.entry.hash }])),
   };
   const bases = new Map<string, Buffer>();
   for (const file of applied) bases.set(file.entry.hash, renderedByPath.get(file.rel)!);
-  // Instalação nova sempre em "files" (o efetivo por config/default é resolvido pelo update); sobre
-  // um install existente, preserva o formato em uso — init nunca migra por conta própria.
-  const format: BasesFormat = priorState?.inUse ?? "files";
-  changes.push(...await planStateWrite(priorState, targetDir, { manifest, format, bases, prune: false }));
+  // Install novo: formato efetivo direto (config carregada ou "pack", AC-06). Sobre um install
+  // existente, mesma transição do update (consolida, nunca poda — só o update poda órfãs, FR-011).
+  const referencedBases = new Set(Object.values(manifest.files).flatMap((item) => item.baseHash ? [item.baseHash] : []));
+  const transition = priorState ? planFormatTransition(priorState, effective, referencedBases) : null;
+  changes.push(...await planStateWrite(priorState, targetDir, {
+    manifest, format: effective.format, bases, consolidate: true, prune: false,
+  }));
   const plan = createPlan(targetDir, changes);
   if (opts.dryRun) {
+    if (transition) announceTransition(transition, { applied: false });
     console.log(formatPlan(plan));
     if (plan.changes.some((change) => change.action === "conflict")) process.exitCode = 1;
     return;
   }
   await applyChangePlan(plan);
+  if (transition) announceTransition(transition, { applied: true });
 
   console.log(pc.green(`\n✓ Motor instalado em ${targetDir}`));
   console.log(pc.dim(`  ${applied.length} arquivos · projeto "${config.project.name}"`));
@@ -246,4 +263,13 @@ async function lstatIfPresent(path: string): Promise<Awaited<ReturnType<typeof l
 
 function formatCollisions(collisions: InitCollision[]): string {
   return collisions.map((collision) => `  - ${collision.path}: ${collision.reason}`).join("\n");
+}
+
+/** `state.bases` fora do enum (FR-003): mensagem do contrato, nunca o ZodError cru. */
+function stateBasesAbort(error: unknown): unknown {
+  if (error instanceof z.ZodError) {
+    const issue = error.issues.find((item) => item.path.join(".") === "state.bases");
+    if (issue) return new Error(`maker.config.json: ${issue.message}`);
+  }
+  return error;
 }

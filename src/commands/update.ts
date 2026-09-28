@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import pc from "picocolors";
 import { mergeDiff3 } from "node-diff3";
+import { z } from "zod";
 import { parseConfig, type AgentProvider, type MakerConfig } from "../config/schema.js";
 import { buildContext, type RenderContext } from "../render/engine.js";
 import { enabledAgents, sha256, type Manifest, type ManifestEntry } from "../render/manifest.js";
@@ -14,6 +15,8 @@ import { resolveConfig } from "../util/upstream.js";
 import { createPlan, formatPlan, inspectTarget, planWrite, type ChangePlan, type PlannedChange } from "../changes/plan.js";
 import { applyChangePlan } from "../changes/transaction.js";
 import { openState, planStateWrite, type InstallState } from "../state/store.js";
+import { configuredBasesFormat, effectiveBasesFormat, planFormatTransition, type ConfiguredFormat, type FormatTransition } from "../state/format.js";
+import { GIT_CONTROL_FILES } from "../state/paths.js";
 import { planLegacyAddonAgents, type LegacyAgentReport } from "../agents/migrate.js";
 import { sharedRoleReference } from "../agents/reference.js";
 import { afterBlockRemoval, reinjectBlocks } from "../addons/apply.js";
@@ -49,6 +52,44 @@ export interface UpdatePlanning {
   defaulted: string[];
   config: MakerConfig;
   recovered: boolean;
+  /** Transição de formato planejada (migração e/ou consolidação de bases soltas); `null` sem transição. */
+  transition: FormatTransition | null;
+  /** `maker.config.json` ilegível: formato mantido sem migrar, aviso para o usuário. */
+  configWarning?: string;
+}
+
+/**
+ * Lê `state.bases` de `maker.config.json` do alvo; `state.bases` fora do enum aborta antes de
+ * qualquer escrita com a mensagem do contrato (FR-003) — nunca o ZodError cru.
+ */
+export async function configuredFormatOrAbort(targetDir: string): Promise<ConfiguredFormat> {
+  try {
+    return await configuredBasesFormat(targetDir);
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      throw new Error(`maker.config.json: ${error.issues[0]?.message ?? "state.bases inválido"}`);
+    }
+    throw error;
+  }
+}
+
+/** Anúncio de migração/consolidação de bases (`cli-output.md` §1), impresso antes do plano/resumo. */
+export function announceTransition(transition: FormatTransition, opts: { applied: boolean }): void {
+  const isConsolidationOnly = transition.from === transition.to;
+  const head = isConsolidationOnly
+    ? `Consolidação das bases: bases por arquivo → ${transition.to}`
+    : `Migração do formato das bases: ${transition.from} → ${transition.to}`;
+  const paint = opts.applied ? pc.green : pc.bold;
+  console.log(paint(opts.applied ? `✓ ${head}` : head));
+  console.log(`  ${transition.migrated} base(s) migrada(s), ${transition.discarded.length} descartada(s).`);
+  for (const problem of transition.discarded) {
+    const label = problem.hash ? `${problem.hash.slice(0, 4)}…(${problem.hash.length})` : `linha ${problem.line ?? "?"}`;
+    const files = problem.hash ? transition.affected[problem.hash] ?? [] : [];
+    console.log(pc.yellow(`  descartada ${label} [${problem.origin}] ${problem.detail}${files.length ? ` → afeta: ${files.join(", ")}` : ""}`));
+  }
+  if (transition.reason === "default") {
+    console.log(`  O formato "${transition.to}" é o padrão; para manter as bases por arquivo, declare "state": { "bases": "files" } em maker.config.json.`);
+  }
 }
 
 export async function runUpdate(opts: UpdateOptions): Promise<void> {
@@ -60,7 +101,7 @@ export async function runUpdate(opts: UpdateOptions): Promise<void> {
   // As propostas são validadas contra os candidatos do mesmo modo (--no-merge ou não) da exportação.
   const merge = opts.applyResolutions ? (await exportedMergeMode(targetDir, opts.applyResolutions)) ?? opts.merge : opts.merge;
   const planning = await planUpdate(targetDir, { merge, state });
-  const { plan, reports, mediation, unresolved, defaulted, config, recovered } = planning;
+  const { plan, reports, mediation, unresolved, defaulted, config, recovered, transition, configWarning } = planning;
   if ((opts.export || opts.applyResolutions) && !recovered) {
     throw new Error("Config do projeto não recuperada: crie maker.config.json com os valores usados no init antes de mediar o update.");
   }
@@ -83,6 +124,8 @@ export async function runUpdate(opts: UpdateOptions): Promise<void> {
     configKnown: recovered, skillInstalled: skillInstalled(targetDir), updateBlocked: conflicted && !opts.dryRun })));
   if (opts.dryRun) {
     hint();
+    if (configWarning) console.log(pc.yellow(configWarning));
+    if (transition) announceTransition(transition, { applied: false });
     printAgentReports(reports, "planejado");
     console.log(formatPlan(plan));
     if (conflicted) process.exitCode = 1;
@@ -95,6 +138,8 @@ export async function runUpdate(opts: UpdateOptions): Promise<void> {
   await applyChangePlan(plan);
   // Depois de aplicar, a skill maker-update já está instalada.
   hint();
+  if (configWarning) console.log(pc.yellow(configWarning));
+  if (transition) announceTransition(transition, { applied: true });
   printAgentReports(reports, "aplicado");
   const merged = plan.changes.filter((change) => change.resolution === "merge").length;
   const updated = plan.changes.filter((change) => (change.action === "update" || change.action === "create") && change.source !== "metadata" && change.resolution !== "merge").length;
@@ -119,6 +164,13 @@ export async function planUpdate(targetDir: string, opts: { merge?: boolean; sta
   const priorState = "state" in opts ? opts.state : await openState(targetDir, { mode: "mutate" });
   if (!priorState) throw new Error(`Nenhum install do maker em ${targetDir}.`);
   const prior = priorState.manifest;
+  // Fonte do formato é maker.config.json do alvo, não a config renderizada (que vem do manifest ou
+  // do --config recuperado) — o `update` de hoje nem lê maker.config.json para renderizar (D6).
+  const configured = await configuredFormatOrAbort(targetDir);
+  const effective = effectiveBasesFormat(configured, priorState.recorded, priorState.inUse);
+  const configWarning = configured.kind === "unreadable"
+    ? `maker.config.json ilegível (${configured.message.replace(/^maker\.config\.json ilegível: /, "")}); formato das bases mantido (${effective.format}) — corrija o arquivo para escolher o formato`
+    : undefined;
   const { config, recovered } = await resolveConfig(targetDir, prior.config, prior.project);
   const agents = enabledAgents(prior);
   const staging = await mkdtemp(join(tmpdir(), "maker-update-plan-"));
@@ -202,6 +254,13 @@ export async function planUpdate(targetDir: string, opts: { merge?: boolean; sta
       } else if (configDependent.has(file.rel) || configDependent.has(sharedRoleOf(file.rel))) {
         preserve(CONFIG_UNKNOWN);
         unresolved.push(file.rel);
+      } else if (!recorded && (GIT_CONTROL_FILES as readonly string[]).includes(file.rel)) {
+        // B2: arquivo de controle do git pré-existente e ainda não rastreado, com conteúdo diferente
+        // do upstream — nunca sobrescrito; vai para mediação com base nula (não há versão anterior
+        // conhecida do maker para essa cópia).
+        const reason = "arquivo pré-existente não rastreado pelo maker";
+        preserve(reason);
+        await mediate("local-edit", reason);
       } else if (!recorded || (!recorded.edited && current.hash === (recorded.baseHash ?? recorded.hash)) ||
           (recorded.edited && await matchesRemovedTemplate(file.rel, current.content!, upstream, recovered ? ctx : undefined))) {
         changes.push(await planWrite({ targetDir, path: file.rel, content: upstream, source: file.entry.source, reason: "nova versão upstream", force: true }));
@@ -251,8 +310,11 @@ export async function planUpdate(targetDir: string, opts: { merge?: boolean; sta
     const content = bases.get(hash) ?? priorState.readBase(hash);
     if (content) finalBases.set(hash, content);
   }
+  // O update sempre grava o formato efetivo (AC-35): registrado nunca fica "esquecido" atrás da config.
+  const transition = planFormatTransition(priorState, effective, referencedBases);
+  next.basesFormat = effective.format;
   changes.push(...await planStateWrite(priorState, targetDir, {
-    manifest: next, format: priorState.inUse, bases: finalBases, prune: true, preserve: referencedBases,
+    manifest: next, format: effective.format, bases: finalBases, consolidate: true, prune: true, preserve: referencedBases,
   }));
   const plan = createPlan(targetDir, changes);
   const reported = new Set(reports.map((report) => report.path));
@@ -268,7 +330,7 @@ export async function planUpdate(targetDir: string, opts: { merge?: boolean; sta
           : "revise o conteúdo local, leve-o para o papel compartilhado e restaure o adapter gerado (maker update --export e a skill maker-update ajudam)" });
     }
   }
-  return { plan, reports, mediation, unresolved, defaulted, config, recovered };
+  return { plan, reports, mediation, unresolved, defaulted, config, recovered, transition, configWarning };
 }
 
 /**

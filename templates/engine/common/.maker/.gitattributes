@@ -1,0 +1,4 @@
+# Bases de reconciliação do maker: sem conversão de fim de linha (o hash tem de conferir byte a byte)
+# e marcadas como geradas (colapsadas no diff do PR).
+maker.lock -text diff merge=text linguist-generated=true
+bases/** -text linguist-generated=true

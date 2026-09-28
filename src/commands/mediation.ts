@@ -12,6 +12,7 @@ import { createPlan, formatPlan, inspectTarget, planWrite, type PlannedChange } 
 import { applyChangePlan } from "../changes/transaction.js";
 import { sha256 } from "../render/manifest.js";
 import { planStateWrite, type InstallState } from "../state/store.js";
+import { GIT_CONTROL_FILES } from "../state/paths.js";
 import { makerVersion } from "../util/version.js";
 
 /**
@@ -392,6 +393,9 @@ export async function applyResolutions(
 function isMediablePath(item: MediationItem, files: Record<string, unknown>): boolean {
   const { path } = item;
   if (path.startsWith("/") || path.split(/[\\/]/).includes("..")) return false;
+  // Arquivos de controle do git dentro de .maker (B1): liberados mesmo sem entrada no manifest
+  // (caso B2, pré-existente ainda não rastreado).
+  if ((GIT_CONTROL_FILES as readonly string[]).includes(path)) return true;
   if (path.startsWith(".maker/") && !path.startsWith(".maker/workflow/")) return false;
   if (Object.hasOwn(files, path)) return true;
   return item.category === "legacy-agent" && /^\.maker\/workflow\/agents\/[a-z0-9-]+\.md$/.test(path);
