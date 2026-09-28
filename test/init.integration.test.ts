@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { existsSync } from "node:fs";
 import { runInit } from "../src/commands/init.js";
-import { readManifest, verifyManifest } from "../src/render/manifest.js";
+import { verifyManifest } from "../src/render/manifest.js";
+import { readManifest } from "./helpers/state.js";
 
 const FIXTURE = join(__dirname, "..", "fixtures", "example.config.json");
 

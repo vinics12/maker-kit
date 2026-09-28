@@ -34,10 +34,11 @@ export async function planLegacyAddonAgents(
   expected: AppliedFile[],
   manifest: Manifest,
   options: { ctx: RenderContext; migrate?: boolean; configKnown?: boolean; configDependent?: Set<string> },
-): Promise<{ changes: PlannedChange[]; handled: Set<string>; reports: LegacyAgentReport[] }> {
+): Promise<{ changes: PlannedChange[]; handled: Set<string>; reports: LegacyAgentReport[]; bases: Map<string, Buffer> }> {
   const changes: PlannedChange[] = [];
   const handled = new Set<string>();
   const reports: LegacyAgentReport[] = [];
+  const bases = new Map<string, Buffer>();
   const states = new Map<string, LoadedState | string>();
   const outputs = new Set(expected.map((file) => file.rel));
 
@@ -116,8 +117,8 @@ export async function planLegacyAddonAgents(
       changes.push({ ...await planWrite({ targetDir, path: sharedPath, content, source: entry.source,
         reason: `migrar agente legado: ${reason}`, force: true }),
         expectedHash: shared.hash, expectedKind: shared.kind });
-      changes.push(...await planAdapter(targetDir, file, current, adapter, adapterUpstream, manifest));
-      changes.push(await planBase(targetDir, base));
+      changes.push(await planAdapter(targetDir, file, current, adapter, adapterUpstream, manifest, bases));
+      recordBase(bases, base);
       manifest.files[sharedPath] = { hash: sha256(content), source: entry.source, baseHash: sha256(base) };
       moveInjectedBlock(loaded.state, file.rel, sharedPath);
       loaded.state.injectedTargets = loaded.state.injectedTargets.map((path) => path === file.rel ? sharedPath : path)
@@ -154,7 +155,7 @@ export async function planLegacyAddonAgents(
         expectedKind: current.kind, expectedHash: current.hash });
       continue;
     }
-    changes.push(...await planAdapter(targetDir, file, current, adapter, adapterUpstream, manifest));
+    changes.push(await planAdapter(targetDir, file, current, adapter, adapterUpstream, manifest, bases));
     handled.add(file.rel);
     report("adapter", reason);
   }
@@ -213,8 +214,8 @@ export async function planLegacyAddonAgents(
       reason: `migrar agente legado: ${reason}`, force: true }),
       expectedHash: shared.hash, expectedKind: shared.kind });
     const adapter = `${agent.frontmatter.replace(/\r\n/g, "\n")}\n${adapterInstruction(sharedPath)}`;
-    changes.push(...await planAdapter(targetDir, file, current, adapter, await readFile(join(staging, file.rel)), manifest));
-    changes.push(await planBase(targetDir, base));
+    changes.push(await planAdapter(targetDir, file, current, adapter, await readFile(join(staging, file.rel)), manifest, bases));
+    recordBase(bases, base);
     manifest.files[sharedPath] = { hash: sha256(content), source: sharedSource, baseHash: sha256(base) };
     handled.add(file.rel);
     handled.add(sharedPath);
@@ -228,24 +229,23 @@ export async function planLegacyAddonAgents(
       reason: "atualizar somente os alvos de injeção dos agentes migrados", force: true }),
       expectedHash: loaded.hash, expectedKind: "file" });
   }
-  return { changes, handled, reports };
+  return { changes, handled, reports, bases };
 }
 
 /** Regenera o adapter e o devolve ao engine no manifest. */
 async function planAdapter(targetDir: string, file: AppliedFile, current: Inspected, adapter: string,
-  upstream: Buffer, manifest: Manifest): Promise<PlannedChange[]> {
+  upstream: Buffer, manifest: Manifest, bases: Map<string, Buffer>): Promise<PlannedChange> {
   manifest.files[file.rel] = { hash: sha256(adapter), source: file.entry.source, baseHash: sha256(upstream) };
-  return [
-    { ...await planWrite({ targetDir, path: file.rel, content: adapter, source: file.entry.source,
-      reason: "converter agente legado em adapter do papel compartilhado", force: true }),
-      expectedHash: current.hash, expectedKind: current.kind },
-    await planBase(targetDir, upstream),
-  ];
+  recordBase(bases, upstream);
+  return { ...await planWrite({ targetDir, path: file.rel, content: adapter, source: file.entry.source,
+    reason: "converter agente legado em adapter do papel compartilhado", force: true }),
+    expectedHash: current.hash, expectedKind: current.kind };
 }
 
-function planBase(targetDir: string, content: Buffer): Promise<PlannedChange> {
-  return planWrite({ targetDir, path: `.maker/bases/${sha256(content)}`, content,
-    source: "metadata", reason: "base upstream do agente migrado" });
+/** Acumula a base num `Map` (hash → conteúdo), devolvido ao chamador em vez de planejar a escrita aqui:
+ *  `planUpdate` decide o formato de armazenamento (`planStateWrite`). */
+function recordBase(bases: Map<string, Buffer>, content: Buffer): void {
+  bases.set(sha256(content), content);
 }
 
 function parseLegacyAgent(raw: Buffer, role: string): LegacyAgent | undefined {

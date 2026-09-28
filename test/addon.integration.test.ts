@@ -6,7 +6,8 @@ import { existsSync } from "node:fs";
 import { runInit } from "../src/commands/init.js";
 import { loadAddon } from "../src/addons/loader.js";
 import { applyAddon, removeAddon } from "../src/addons/apply.js";
-import { readManifest, sha256, verifyManifest } from "../src/render/manifest.js";
+import { sha256, verifyManifest } from "../src/render/manifest.js";
+import { readManifest } from "./helpers/state.js";
 import { isAddonApplied, readAddonState, writeAddonState } from "../src/addons/state.js";
 
 const FIXTURE = join(__dirname, "..", "fixtures", "example.config.json");

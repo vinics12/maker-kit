@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runInit } from "../src/commands/init.js";
 import { mergeText, runUpdate } from "../src/commands/update.js";
-import { readManifest, sha256, writeManifest } from "../src/render/manifest.js";
+import { sha256 } from "../src/render/manifest.js";
+import { readManifest, writeManifest, putBase } from "./helpers/state.js";
 
 const FIXTURE = join(__dirname, "..", "fixtures", "example.config.json");
 
@@ -33,7 +34,7 @@ describe("maker update transacional", () => {
     const local = base.replace(lines[0]!, `${lines[0]} local`);
     const baseHash = sha256(base);
     await mkdir(join(target, ".maker", "bases"), { recursive: true });
-    await writeFile(join(target, ".maker", "bases", baseHash), base);
+    await putBase(target, base);
     await writeFile(join(target, path), local);
     const manifest = (await readManifest(target))!;
     manifest.files[path] = { ...manifest.files[path]!, hash: baseHash, baseHash };
@@ -53,7 +54,7 @@ describe("maker update transacional", () => {
     const local = base.replace(lines[0]!, `${lines[0]} local`);
     const baseHash = sha256(base);
     await mkdir(join(target, ".maker", "bases"), { recursive: true });
-    await writeFile(join(target, ".maker", "bases", baseHash), base);
+    await putBase(target, base);
     await writeFile(join(target, path), local);
     const manifest = (await readManifest(target))!;
     manifest.files[path] = { ...manifest.files[path]!, hash: baseHash, baseHash };
@@ -98,7 +99,7 @@ describe("maker update transacional", () => {
     const base = upstream.replace(first, "BASE");
     const local = upstream.replace(first, "LOCAL");
     const baseHash = sha256(base);
-    await writeFile(join(target, ".maker", "bases", baseHash), base);
+    await putBase(target, base);
     await writeFile(join(target, path), local);
     const manifest = (await readManifest(target))!;
     manifest.files[path] = { ...manifest.files[path]!, hash: baseHash, baseHash };

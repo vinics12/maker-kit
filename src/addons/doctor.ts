@@ -28,11 +28,12 @@ export interface AddonDoctorSummary {
 export async function inspectAddons(
   targetDir: string,
   manifest: Manifest,
+  hasBase: (hash: string) => boolean,
 ): Promise<AddonDoctorSummary> {
   const catalog = await listAddonCatalog();
   const byId = new Map(catalog.map((entry) => [entry.id, entry]));
   const ids = await appliedAddonIds(targetDir);
-  const addons = await Promise.all(ids.map((id) => inspectAddon(targetDir, id, byId.get(id) ?? null, manifest)));
+  const addons = await Promise.all(ids.map((id) => inspectAddon(targetDir, id, byId.get(id) ?? null, manifest, hasBase)));
   return { addons, ok: addons.every((addon) => addon.ok) };
 }
 
@@ -41,6 +42,7 @@ async function inspectAddon(
   id: string,
   catalog: AddonCatalogEntry | null,
   manifest: Manifest,
+  hasBase: (hash: string) => boolean,
 ): Promise<AddonDoctorResult> {
   const issues: AddonDoctorIssue[] = [];
   const name = catalog?.manifest?.name ?? "manifest indisponível";
@@ -73,7 +75,7 @@ async function inspectAddon(
       await checkCreatedFile(targetDir, id, file.path, file.hash, manifest, issues);
     }
     for (const rel of state.injectedTargets) {
-      await checkInjectedTarget(targetDir, id, rel, manifest, issues);
+      await checkInjectedTarget(targetDir, id, rel, manifest, issues, hasBase);
     }
   }
 
@@ -113,6 +115,7 @@ async function checkInjectedTarget(
   rel: string,
   manifest: Manifest,
   issues: AddonDoctorIssue[],
+  hasBase: (hash: string) => boolean,
 ): Promise<void> {
   const abs = join(targetDir, rel);
   if (!existsSync(abs)) {
@@ -135,7 +138,7 @@ async function checkInjectedTarget(
   } else {
     const currentHash = sha256(await readFile(abs));
     // Com base upstream registrada, a edição é customização que o update preserva e mescla.
-    const mergeable = entry.baseHash && existsSync(join(targetDir, ".maker", "bases", entry.baseHash));
+    const mergeable = entry.baseHash && hasBase(entry.baseHash);
     if (entry.hash !== currentHash && !mergeable) {
       issues.push(issue(`alvo injetado modificado sem base registrada: ${rel}`,
         "execute maker update --dry-run: o update registra a base e preserva a customização; não reaplique o add-on para corrigir"));

@@ -37,6 +37,12 @@ export const configSchema = z.object({
       dev: z.string().default("npm run dev"),
     })
     .prefault({}),
+  /** Formato de armazenamento do estado do install (arquivos separados ou lockfile único). Sem default: ausência ≠ "files". */
+  state: z
+    .object({
+      bases: z.enum(["files", "pack"], { error: 'state.bases deve ser "files" ou "pack"' }).optional(),
+    })
+    .optional(),
 });
 
 export type MakerConfig = z.infer<typeof configSchema>;

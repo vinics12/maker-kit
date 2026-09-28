@@ -6,7 +6,10 @@ import { tmpdir } from "node:os";
 import pc from "picocolors";
 import { agentProviderSchema, parseConfig, type AgentProvider, type MakerConfig } from "../config/schema.js";
 import { buildContext } from "../render/engine.js";
-import { enabledAgents, readManifest, writeManifest } from "../render/manifest.js";
+import { enabledAgents } from "../render/manifest.js";
+import { openState, planStateWrite, readManifest } from "../state/store.js";
+import { createPlan } from "../changes/plan.js";
+import { applyChangePlan } from "../changes/transaction.js";
 import { applyAgentProvider } from "../util/engine-scaffold.js";
 import { validateAgentIntegration } from "../agents/validate.js";
 
@@ -18,8 +21,9 @@ export interface AgentAddOptions {
 export async function runAgentAdd(providerInput: string, opts: AgentAddOptions): Promise<void> {
   const provider = agentProviderSchema.parse(providerInput);
   const targetDir = resolve(opts.target ?? process.cwd());
-  const manifest = await readManifest(targetDir);
-  if (!manifest) throw new Error(`Nenhum install do maker em ${targetDir} — rode 'maker init' antes.`);
+  const state = await openState(targetDir, { mode: "mutate" });
+  if (!state) throw new Error(`Nenhum install do maker em ${targetDir} — rode 'maker init' antes.`);
+  const manifest = state.manifest;
 
   const agents = enabledAgents(manifest);
   if (agents.includes(provider)) {
@@ -34,12 +38,16 @@ export async function runAgentAdd(providerInput: string, opts: AgentAddOptions):
     manifest.files,
     buildContext(config, manifest.installedAt),
   );
+  // applyAgentProvider grava os arquivos da integração diretamente (fora do plano transacional);
+  // o `agent add` inteiro transacional (arquivos + bases) é da US-5. Aqui só a persistência do
+  // manifest passa a ser transacional (`planStateWrite` + `applyChangePlan`), sem escrever direto.
   const applied = await applyAgentProvider(targetDir, buildContext(config, manifest.installedAt), provider);
   for (const file of applied) manifest.files[file.rel] = file.entry;
   manifest.schemaVersion = 3;
   manifest.config = config;
   manifest.agents = [...agents, provider];
-  await writeManifest(targetDir, manifest);
+  const changes = await planStateWrite(state, targetDir, { manifest, format: state.inUse, bases: new Map(), prune: false });
+  await applyChangePlan(createPlan(targetDir, changes));
 
   const sigil = provider === "codex" ? "$" : "/";
   console.log(pc.green(`✓ Integração ${provider} adicionada (${applied.length} arquivos).`));

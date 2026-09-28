@@ -3,12 +3,12 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { renderRaw } from "../render/engine.js";
 import {
-  readManifest,
   sha256,
   manifestKey,
   type Manifest,
   type ManifestEntry,
 } from "../render/manifest.js";
+import { openState, planStateWrite } from "../state/store.js";
 import { addonDir } from "./loader.js";
 import type { AddonManifest } from "./schema.js";
 import { upsertBlock, stripBlock, addonBlocks, sameText } from "./inject.js";
@@ -21,7 +21,7 @@ import {
   type AddonState,
 } from "./state.js";
 import { createPlan, formatPlan, inspectTarget, planWrite, type ChangePlan, type PlannedChange } from "../changes/plan.js";
-import { applyChangePlan, assertNoPendingTransactions } from "../changes/transaction.js";
+import { applyChangePlan } from "../changes/transaction.js";
 
 const CONSTITUTION = ".specify/memory/constitution.md";
 const PLACEHOLDER = "_(nenhum princípio de projeto definido ainda)_";
@@ -94,12 +94,11 @@ export async function applyAddon(
   knobs: Record<string, string>,
   options: { dryRun?: boolean } = {},
 ): Promise<{ injectedTargets: string[]; createdFiles: string[]; plan: ChangePlan }> {
-  if (options.dryRun) await assertNoPendingTransactions(targetDir);
-  const currentManifest = await readManifest(targetDir);
-  if (!currentManifest) {
+  const installState = await openState(targetDir, { mode: options.dryRun ? "dry-run" : "mutate" });
+  if (!installState) {
     throw new Error(`Nenhum install do maker em ${targetDir} — rode 'maker init' antes de add-ons.`);
   }
-  const manifest: Manifest = structuredClone(currentManifest);
+  const manifest: Manifest = structuredClone(installState.manifest);
   const dir = addonDir(addon.id);
   const ctx = addonContext(manifest, knobs);
   const injectedTargets: string[] = [];
@@ -206,7 +205,7 @@ export async function applyAddon(
     injectedTargets,
     injectedBlocks,
   };
-  changes.push(await planWrite({ targetDir, path: ".maker/manifest.json", content: JSON.stringify(manifest, null, 2) + "\n", source: "metadata", reason: "publicar manifest do add-on", force: true }));
+  changes.push(...await planStateWrite(installState, targetDir, { manifest, format: installState.inUse, bases: new Map(), prune: false }));
   const stateRel = manifestKey(targetDir, addonStatePath(targetDir, addon.id));
   changes.push(await planWrite({ targetDir, path: stateRel, content: JSON.stringify(state, null, 2) + "\n", source: "metadata", reason: "publicar state do add-on", force: true }));
   const plan = createPlan(targetDir, changes);
@@ -220,10 +219,10 @@ export async function removeAddon(
   id: string,
   options: { dryRun?: boolean } = {},
 ): Promise<{ strippedTargets: string[]; deletedFiles: string[]; keptFiles: string[]; plan: ChangePlan }> {
-  if (options.dryRun) await assertNoPendingTransactions(targetDir);
   const state = await readAddonState(targetDir, id);
   if (!state) throw new Error(`Add-on "${id}" não está aplicado em ${targetDir}.`);
-  const manifest = await readManifest(targetDir);
+  const installState = await openState(targetDir, { mode: options.dryRun ? "dry-run" : "mutate" });
+  const manifest = installState?.manifest;
 
   const strippedTargets: string[] = [];
   const deletedFiles: string[] = [];
@@ -261,7 +260,7 @@ export async function removeAddon(
     }
   }
 
-  if (manifest) changes.push(await planWrite({ targetDir, path: ".maker/manifest.json", content: JSON.stringify(manifest, null, 2) + "\n", source: "metadata", reason: "publicar manifest sem o add-on", force: true }));
+  if (manifest && installState) changes.push(...await planStateWrite(installState, targetDir, { manifest, format: installState.inUse, bases: new Map(), prune: false }));
   const stateRel = manifestKey(targetDir, addonStatePath(targetDir, id));
   const stateTarget = await inspectTarget(targetDir, stateRel);
   changes.push({ path: stateRel, action: "remove", source: "metadata", reason: "remover state do add-on", expectedHash: stateTarget.hash, expectedKind: stateTarget.kind });

@@ -4,13 +4,14 @@ import { tmpdir } from "node:os";
 import pc from "picocolors";
 import { loadConfig } from "../config/load.js";
 import { buildContext } from "../render/engine.js";
-import { type Manifest } from "../render/manifest.js";
+import { type BasesFormat, type Manifest } from "../render/manifest.js";
 import { makerVersion } from "../util/version.js";
 import { applyEngine } from "../util/engine-scaffold.js";
-import { readManifest, enabledAgents } from "../render/manifest.js";
+import { enabledAgents } from "../render/manifest.js";
 import { parseConfig, type AgentProvider } from "../config/schema.js";
 import { createPlan, formatPlan, inspectTarget, planWrite, type PlannedChange } from "../changes/plan.js";
-import { applyChangePlan, assertNoPendingTransactions } from "../changes/transaction.js";
+import { applyChangePlan } from "../changes/transaction.js";
+import { openState, planStateWrite } from "../state/store.js";
 
 export interface InitOptions {
   target?: string;
@@ -30,8 +31,8 @@ interface InitCollision {
 
 export async function runInit(opts: InitOptions): Promise<void> {
   const targetDir = resolve(opts.target ?? process.cwd());
-  if (opts.dryRun) await assertNoPendingTransactions(targetDir);
-  const priorManifest = await readManifest(targetDir);
+  const priorState = await openState(targetDir, { mode: opts.dryRun ? "dry-run" : "mutate" });
+  const priorManifest = priorState?.manifest ?? null;
   const loadedConfig = await loadConfig({
     targetDir,
     configPath: opts.config,
@@ -133,23 +134,9 @@ export async function runInit(opts: InitOptions): Promise<void> {
   };
   const bases = new Map<string, Buffer>();
   for (const file of applied) bases.set(file.entry.hash, renderedByPath.get(file.rel)!);
-  for (const [hash, content] of bases) {
-    changes.push(await planWrite({
-      targetDir,
-      path: `.maker/bases/${hash}`,
-      content,
-      source: "metadata",
-      reason: "base upstream inicial",
-    }));
-  }
-  changes.push(await planWrite({
-    targetDir,
-    path: ".maker/manifest.json",
-    content: JSON.stringify(manifest, null, 2) + "\n",
-    source: "metadata",
-    reason: "publicar manifest da instalação",
-    force: true,
-  }));
+  // Formato "pack" só passa a ser o default na US-2; aqui só se preserva o formato de um install existente.
+  const format: BasesFormat = priorState?.inUse ?? "files";
+  changes.push(...await planStateWrite(priorState, targetDir, { manifest, format, bases, prune: false }));
   const plan = createPlan(targetDir, changes);
   if (opts.dryRun) {
     console.log(formatPlan(plan));

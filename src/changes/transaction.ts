@@ -14,6 +14,7 @@ import {
 import { basename, dirname, join } from "node:path";
 import type { ChangePlan, PlannedChange } from "./plan.js";
 import { hasConflicts, inspectTarget } from "./plan.js";
+import { isStateMetadata } from "../state/paths.js";
 
 interface JournalOperation {
   path: string;
@@ -63,7 +64,34 @@ export async function assertNoPendingTransactions(targetDir: string): Promise<vo
   }
 }
 
-export async function applyChangePlan(plan: ChangePlan, options: { failAfter?: number } = {}): Promise<void> {
+export async function hasPendingTransactions(targetDir: string): Promise<boolean> {
+  try {
+    const ids = await readdir(join(targetDir, TRANSACTIONS));
+    return ids.length > 0;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+/** Adquire o lock, recupera transações pendentes (rollback pelo journal) e libera. Usado antes de ler o estado em modo `mutate` (FR-019, AC-10b). */
+export async function recoverBeforeRead(targetDir: string): Promise<void> {
+  await mkdir(join(targetDir, ".maker"), { recursive: true });
+  const lockPath = join(targetDir, LOCK);
+  const lock = await acquireLock(lockPath);
+  try {
+    await recoverPendingTransactions(targetDir);
+  } finally {
+    await lock.close();
+    await rm(lockPath, { force: true });
+  }
+}
+
+/**
+ * `crashAfter`: depois da operação i, sai lançando sem rollback, deixando journal e um lock com pid
+ * "0" (inativo) — simula processo morto. Só para testes (recuperação é exercitada por `recoverBeforeRead`).
+ */
+export async function applyChangePlan(plan: ChangePlan, options: { failAfter?: number; crashAfter?: number } = {}): Promise<void> {
   if (hasConflicts(plan)) throw new Error("O plano contém conflitos; nenhuma alteração foi feita.");
   await mkdir(join(plan.targetDir, ".maker"), { recursive: true });
   const lockPath = join(plan.targetDir, LOCK);
@@ -74,9 +102,11 @@ export async function applyChangePlan(plan: ChangePlan, options: { failAfter?: n
     (change): change is PlannedChange & { action: "create" | "update" | "remove" } =>
       change.action === "create" || change.action === "update" || change.action === "remove",
   ).sort((a, b) => {
-    const aMetadata = isMetadata(a.path) ? 1 : 0;
-    const bMetadata = isMetadata(b.path) ? 1 : 0;
-    return aMetadata - bMetadata || a.path.localeCompare(b.path);
+    // Metadados de estado (isStateMetadata: manifest do install nos dois formatos + state de add-ons) por último e, entre eles,
+    // create/update antes de remove: um crash no meio de uma migração deixa coexistência (com
+    // journal), nunca ausência de estado autoritativo.
+    const rank = (change: PlannedChange) => (!isStateMetadata(change.path) ? 0 : change.action === "remove" ? 2 : 1);
+    return rank(a) - rank(b) || a.path.localeCompare(b.path);
   });
   const id = randomUUID();
   const transactionDir = join(plan.targetDir, TRANSACTIONS, id);
@@ -90,6 +120,7 @@ export async function applyChangePlan(plan: ChangePlan, options: { failAfter?: n
     })),
   };
 
+  let crashed = false;
   try {
     await recoverPendingTransactions(plan.targetDir);
     await mkdir(join(transactionDir, "backup"), { recursive: true });
@@ -125,16 +156,26 @@ export async function applyChangePlan(plan: ChangePlan, options: { failAfter?: n
         await rename(join(transactionDir, "stage", String(i)), destination);
         if (change.mode !== undefined) await chmod(destination, change.mode & 0o777);
       }
+      if (options.crashAfter === i) {
+        crashed = true;
+        await lock.close();
+        await writeFile(lockPath, "0");
+        throw new Error("Falha simulada (crashAfter); journal e lock preservados para teste de recuperação.");
+      }
       if (options.failAfter === i) throw new Error("Falha injetada durante a aplicação.");
     }
     await rm(transactionDir, { recursive: true, force: true });
   } catch (error) {
-    await rollback(plan.targetDir, transactionDir, journal);
-    await rm(transactionDir, { recursive: true, force: true });
+    if (!crashed) {
+      await rollback(plan.targetDir, transactionDir, journal);
+      await rm(transactionDir, { recursive: true, force: true });
+    }
     throw error;
   } finally {
-    await lock.close();
-    await rm(lockPath, { force: true });
+    if (!crashed) {
+      await lock.close();
+      await rm(lockPath, { force: true });
+    }
   }
 }
 
@@ -156,10 +197,6 @@ async function acquireLock(lockPath: string): Promise<Awaited<ReturnType<typeof 
     await rm(lockPath, { force: true });
     return open(lockPath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY);
   }
-}
-
-function isMetadata(path: string): boolean {
-  return path === ".maker/manifest.json" || /^\.maker\/addons\/[^/]+\.json$/.test(path);
 }
 
 async function writeJournal(dir: string, journal: Journal): Promise<void> {

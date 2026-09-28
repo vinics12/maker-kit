@@ -5,7 +5,8 @@ import fg from "fast-glob";
 import { parse as parseToml } from "smol-toml";
 import { z } from "zod";
 import type { AgentProvider } from "../config/schema.js";
-import { readManifest, type Manifest } from "../render/manifest.js";
+import type { Manifest } from "../render/manifest.js";
+import { readManifest } from "../state/store.js";
 import { sharedRoleReference } from "./reference.js";
 
 export interface AgentValidation {
@@ -42,7 +43,7 @@ export async function validateAgentIntegration(
     manifest = await readManifest(targetDir);
   } catch (error) {
     const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
-    issues.push(`.maker/manifest.json ilegível (${message}); adapters ausentes não puderam ser verificados`);
+    issues.push(`estado do maker ilegível (${message}); adapters ausentes não puderam ser verificados`);
   }
   const adapterRoot = relativeRoot(provider, "agents");
   for (const path of Object.keys(manifest?.files ?? {}).sort()) {

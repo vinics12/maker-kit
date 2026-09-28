@@ -9,8 +9,9 @@ import { sharedRoleReference } from "../agents/reference.js";
 import { addonBlocks } from "../addons/inject.js";
 import { moveInjectedBlock } from "../agents/migrate.js";
 import { createPlan, formatPlan, inspectTarget, planWrite, type PlannedChange } from "../changes/plan.js";
-import { applyChangePlan, assertNoPendingTransactions } from "../changes/transaction.js";
-import { readManifest, sha256 } from "../render/manifest.js";
+import { applyChangePlan } from "../changes/transaction.js";
+import { sha256 } from "../render/manifest.js";
+import { planStateWrite, type InstallState } from "../state/store.js";
 import { makerVersion } from "../util/version.js";
 
 /**
@@ -212,9 +213,9 @@ export async function applyResolutions(
   dirOption: string | true,
   currentConfig: unknown,
   candidates: MediationCandidate[],
+  state: InstallState,
   opts: ApplyResolutionsOptions,
 ): Promise<void> {
-  if (opts.dryRun) await assertNoPendingTransactions(targetDir);
   const byPath = new Map(candidates.map((candidate) => [candidate.path, candidate]));
   const dir = resolve(targetDir, dirOption === true ? DEFAULT_MEDIATION_DIR : dirOption);
   const index = indexSchema.parse(JSON.parse(await readFile(join(dir, INDEX), "utf-8")));
@@ -226,8 +227,7 @@ export async function applyResolutions(
   if (index.configHash !== configHash(currentConfig)) {
     throw new Error("A config do projeto mudou desde a exportação; exporte de novo (maker update --export).");
   }
-  const manifest = await readManifest(targetDir);
-  if (!manifest) throw new Error(`Nenhum install do maker em ${targetDir}.`);
+  const manifest = state.manifest;
 
   const errors: string[] = [];
   const resolved = new Map<string, Buffer>();
@@ -326,6 +326,7 @@ export async function applyResolutions(
   const changes: PlannedChange[] = [];
   const next = structuredClone(manifest);
   next.files = { ...manifest.files };
+  const newBases = new Map<string, Buffer>();
   const stateUpdates = new Map<string, { state: AddonState; hash: string }>();
   for (const item of selected) {
     const content = resolved.get(item.id)!;
@@ -334,8 +335,7 @@ export async function applyResolutions(
     changes.push({ ...await planWrite({ targetDir, path: item.path, content, source,
       reason: `proposta mediada (${item.category})`, force: true }),
       expectedHash: item.localHash, expectedKind: item.localHash ? "file" : "absent" });
-    changes.push(await planWrite({ targetDir, path: `.maker/bases/${item.upstreamHash}`, content: candidate.upstream,
-      source: "metadata", reason: `base upstream de ${item.path}` }));
+    newBases.set(item.upstreamHash, candidate.upstream);
     const { edited: _edited, ...recorded } = manifest.files[item.path] ?? { hash: "", source };
     next.files[item.path] = { ...recorded, source, hash: sha256(content), baseHash: item.upstreamHash };
   }
@@ -366,8 +366,7 @@ export async function applyResolutions(
       reason: "alvos de injeção após mediação do agente legado", force: true }),
       expectedHash: entry.hash, expectedKind: "file" });
   }
-  changes.push(await planWrite({ targetDir, path: ".maker/manifest.json", content: JSON.stringify(next, null, 2) + "\n",
-    source: "metadata", reason: "registrar propostas mediadas", force: true }));
+  changes.push(...await planStateWrite(state, targetDir, { manifest: next, format: state.inUse, bases: newBases, prune: false }));
   const plan = createPlan(targetDir, changes);
   if (opts.dryRun) {
     for (const item of selected) printDiff(item.path, matched.get(item.id)!.local?.toString("utf-8") ?? "", resolved.get(item.id)!.toString("utf-8"));
