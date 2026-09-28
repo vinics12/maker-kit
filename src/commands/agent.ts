@@ -8,7 +8,7 @@ import { agentProviderSchema, parseConfig, type AgentProvider, type MakerConfig 
 import { buildContext } from "../render/engine.js";
 import { enabledAgents } from "../render/manifest.js";
 import { openState, planStateWrite, readManifest } from "../state/store.js";
-import { createPlan } from "../changes/plan.js";
+import { createPlan, planWrite, type PlannedChange } from "../changes/plan.js";
 import { applyChangePlan } from "../changes/transaction.js";
 import { applyAgentProvider } from "../util/engine-scaffold.js";
 import { validateAgentIntegration } from "../agents/validate.js";
@@ -32,20 +32,39 @@ export async function runAgentAdd(providerInput: string, opts: AgentAddOptions):
   }
 
   const config = await resolveRenderConfig(targetDir, manifest.config, opts.config);
-  await assertNoUnmanagedProviderFiles(
-    targetDir,
-    provider,
-    manifest.files,
-    buildContext(config, manifest.installedAt),
-  );
-  // applyAgentProvider ainda grava os arquivos da integração direto no disco (fora do plano
-  // transacional) — só a persistência do manifest passa a ser transacional aqui.
-  const applied = await applyAgentProvider(targetDir, buildContext(config, manifest.installedAt), provider);
-  for (const file of applied) manifest.files[file.rel] = file.entry;
+  const ctx = buildContext(config, manifest.installedAt);
+  await assertNoUnmanagedProviderFiles(targetDir, provider, manifest.files, ctx);
+
+  // Renderiza em staging para planejar contra o alvo real numa única transação (FR-022): nada é
+  // escrito fora do plano, e um crash a meio caminho recupera para o estado anterior.
+  const includeShared = !existsSync(join(targetDir, ".maker/workflow/agents"));
+  const staging = await mkdtemp(join(tmpdir(), "maker-agent-add-"));
+  const changes: PlannedChange[] = [];
+  const bases = new Map<string, Buffer>();
+  let applied: Awaited<ReturnType<typeof applyAgentProvider>>;
+  try {
+    applied = await applyAgentProvider(staging, ctx, provider, { includeShared });
+    for (const file of applied) {
+      const content = await readFile(join(staging, file.rel));
+      bases.set(file.entry.hash, content);
+      changes.push(await planWrite({
+        targetDir,
+        path: file.rel,
+        content,
+        source: file.entry.source,
+        reason: "conteúdo renderizado pelo maker",
+        force: true,
+      }));
+    }
+  } finally {
+    await rm(staging, { recursive: true, force: true });
+  }
+
+  for (const file of applied) manifest.files[file.rel] = { ...file.entry, baseHash: file.entry.hash };
   manifest.schemaVersion = 3;
   manifest.config = config;
   manifest.agents = [...agents, provider];
-  const changes = await planStateWrite(state, targetDir, { manifest, format: state.inUse, bases: new Map(), prune: false });
+  changes.push(...await planStateWrite(state, targetDir, { manifest, format: state.inUse, bases, prune: false }));
   await applyChangePlan(createPlan(targetDir, changes));
 
   const sigil = provider === "codex" ? "$" : "/";

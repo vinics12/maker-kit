@@ -21,14 +21,21 @@ export async function applyEngine(
   return applied;
 }
 
+/**
+ * `includeShared`: quando informado, decide sem consultar o disco de `targetDir` — necessário para
+ * renderizar em staging (`mkdtemp`) e planejar a escrita contra o alvo real à parte (`agent add`
+ * transacional). Sem o parâmetro, mantém o comportamento de sempre: consulta `targetDir` diretamente.
+ */
 export async function applyAgentProvider(
   targetDir: string,
   ctx: RenderContext,
   provider: AgentProvider,
+  opts?: { includeShared?: boolean },
 ): Promise<AppliedFile[]> {
-  const sharedRoot = join(targetDir, ".maker/workflow/agents");
+  const includeShared = opts?.includeShared ??
+    !existsSync(join(targetDir, ".maker/workflow/agents"));
   return [
-    ...(existsSync(sharedRoot) ? [] : await applySharedAgents(targetDir, ctx)),
+    ...(includeShared ? await applySharedAgents(targetDir, ctx) : []),
     ...(await applyProviderAdapter(targetDir, ctx, provider)),
   ];
 }
