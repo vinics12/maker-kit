@@ -139,10 +139,10 @@ describe("mediação de update", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const { dir, items } = await exported(target);
     await writeFile(join(dir, "items", items[0]!.id, "resolved"), proposal);
-    const manifest = await readFile(join(target, ".maker/manifest.json"));
+    const manifest = await readManifest(target);
     await expect(runUpdate({ target, applyResolutions: true })).rejects.toThrow("Propostas de mediação rejeitadas");
     expect(await readFile(join(target, "AGENTS.md"), "utf-8")).toBe(local);
-    expect(await readFile(join(target, ".maker/manifest.json"))).toEqual(manifest);
+    expect(await readManifest(target)).toEqual(manifest);
   });
 
   it("rejeita proposta quando o arquivo mudou depois da exportação", async () => {

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { runInit } from "../src/commands/init.js";
 import { mergeText, runUpdate } from "../src/commands/update.js";
 import { sha256 } from "../src/render/manifest.js";
-import { readManifest, writeManifest, putBase } from "./helpers/state.js";
+import { readManifest, writeManifest, putBase, snapshotTree } from "./helpers/state.js";
 
 const FIXTURE = join(__dirname, "..", "fixtures", "example.config.json");
 
@@ -104,20 +104,17 @@ describe("maker update transacional", () => {
     const manifest = (await readManifest(target))!;
     manifest.files[path] = { ...manifest.files[path]!, hash: baseHash, baseHash };
     await writeManifest(target, manifest);
-    const manifestBefore = await readFile(join(target, ".maker", "manifest.json"));
+    const manifestBefore = await readManifest(target);
     await expect(runUpdate({ target })).rejects.toThrow("plano contém conflitos");
     expect(await readFile(join(target, path), "utf-8")).toBe(local);
-    expect(await readFile(join(target, ".maker", "manifest.json"))).toEqual(manifestBefore);
+    expect(await readManifest(target)).toEqual(manifestBefore);
   });
 
   it("dry-run não altera conteúdo nem timestamp controlado", async () => {
     const target = await initialized("maker-update-dry-");
-    const manifestPath = join(target, ".maker", "manifest.json");
-    const before = await readFile(manifestPath);
-    const mtime = (await stat(manifestPath)).mtimeMs;
+    const before = await snapshotTree(target);
     await runUpdate({ target, dryRun: true });
-    expect(await readFile(manifestPath)).toEqual(before);
-    expect((await stat(manifestPath)).mtimeMs).toBe(mtime);
+    expect(await snapshotTree(target)).toEqual(before);
   });
 
   it("sem install, --dry-run lança e não cria .maker/ (regressão: antes deixava o diretório)", async () => {

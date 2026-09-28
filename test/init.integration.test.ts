@@ -70,7 +70,9 @@ describe("maker init (integração)", () => {
     const stubMarkers = /A PREENCHER|STUB|_\(nenhum|a preencher/i;
     const offenders: string[] = [];
     for (const f of files) {
-      if (f.includes("/.maker/bases/")) continue;
+      // bases de reconciliação (soltas ou empacotadas no lockfile) carregam o conteúdo renderizado
+      // dos stubs de memória byte a byte — mesmo texto já coberto pela verificação do arquivo real.
+      if (f.includes("/.maker/bases/") || f.endsWith("/.maker/maker.lock")) continue;
       // stubs de memória são onde o projeto autora negócio — permitido lá
       const isMemoryStub = /\/\.specify\/memory\/(project-rules|product-overview)\.md$/.test(f);
       const content = await readFile(f, "utf-8").catch(() => "");

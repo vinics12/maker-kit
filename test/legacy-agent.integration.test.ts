@@ -169,11 +169,11 @@ describe("migração de agentes legados", () => {
     expect(await readFile(join(target, ".maker/workflow/agents/architect.md"), "utf-8")).toContain("Consulte também");
   });
 
-  it("reporta manifest ilegível sem interromper a validação", async () => {
+  it("reporta estado ilegível sem interromper a validação", async () => {
     const target = await legacy("0.4.0");
-    await writeFile(join(target, ".maker/manifest.json"), "{broken");
+    await writeFile(join(target, ".maker/maker.lock"), "{broken");
     const issues = (await validateAgentIntegration(target, "claude")).issues.join("\n");
-    expect(issues).toContain(".maker/manifest.json ilegível");
+    expect(issues).toContain("estado do maker ilegível");
     expect(issues).toContain("referência ao papel compartilhado ausente");
   });
 
@@ -647,8 +647,8 @@ describe("instalação real 0.2.0", () => {
     await writeFile(indexPath, JSON.stringify(index));
     await rm(join(dir, "items", adapterItem.id), { recursive: true });
     await writeFile(join(dir, "items", sharedItem.id, "resolved"), await readFile(join(dir, "items", sharedItem.id, "local")));
-    const before = await readFile(join(target, ".maker/manifest.json"));
+    const before = await readManifest(target);
     await expect(runUpdate({ target, applyResolutions: true })).rejects.toThrow("Propostas de mediação rejeitadas");
-    expect(await readFile(join(target, ".maker/manifest.json"))).toEqual(before);
+    expect(await readManifest(target)).toEqual(before);
   });
 });
