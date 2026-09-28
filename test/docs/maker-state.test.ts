@@ -18,7 +18,7 @@ async function readDoc(): Promise<string> {
   return readFile(DOC_PATH, "utf-8");
 }
 
-/** Itens (coluna 1) da tabela de taxonomia do §1 — uma linha por item (C1). */
+/** Itens (coluna 1) da tabela de taxonomia do §1 — uma linha por item. */
 function taxonomyItems(doc: string): string[] {
   return doc.split("\n")
     .filter((line) => line.startsWith("| `.maker/"))
@@ -82,7 +82,7 @@ describe("docs/maker-state.md — AC-28: taxonomia contra o install de referênc
       expect(itemSet.has(item), `item ${item} sem linha na tabela do §1`).toBe(true);
     }
 
-    // maker.lock aparece em exatamente uma linha (C1: nunca duas linhas para o mesmo item).
+    // maker.lock aparece em exatamente uma linha.
     expect(items.filter((item) => item === ".maker/maker.lock")).toHaveLength(1);
 
     // 16 arquivos versionados: tudo, menos os temporários (cobertos pelo .gitignore).
@@ -120,7 +120,7 @@ describe("docs/maker-state.md — AC-29: escolha, troca de formato e diagnóstic
     expect(doc).toContain('"files"');
     expect(doc.toLowerCase()).toMatch(/default/);
 
-    // Trade-offs obrigatórios (FR-002).
+    // Trade-offs obrigatórios.
     expect(doc.toLowerCase()).toContain("legibilidade");
     expect(doc.toLowerCase()).toContain("ruído de diff");
     expect(doc).toContain("linguist-generated");
@@ -147,7 +147,7 @@ describe("docs/maker-state.md — AC-29: escolha, troca de formato e diagnóstic
     expect(doc).toContain("maker doctor");
     expect(doc.toLowerCase()).toContain("íntegro");
 
-    // A saída do doctor citada é a real (C2).
+    // A saída do doctor citada é a real.
     expect(doc).toContain("Estado (.maker): íntegro");
     expect(doc).toContain("✓ Install íntegro.");
   });
@@ -161,7 +161,7 @@ describe("docs/maker-state.md — AC-29: escolha, troca de formato e diagnóstic
     expect(doc.toLowerCase()).toContain("atualize o maker em todo o time e na ci antes de migrar");
     expect(doc).toContain("init --force");
 
-    // A saída do doctor citada é a real (C2), não "Install íntegro (pack)".
+    // A saída do doctor citada é a real, não "Install íntegro (pack)".
     expect(doc).not.toContain("Install íntegro (pack)");
     expect(doc).toContain("Estado (.maker): íntegro (pack)");
     expect(doc).toContain("✓ Install íntegro.");
