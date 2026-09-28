@@ -1,13 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { mkdtemp, readFile, unlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { runInit } from "../src/commands/init.js";
-import { loadAddon } from "../src/addons/loader.js";
-import { applyAddon } from "../src/addons/apply.js";
+import type { BasesFormat } from "../src/render/manifest.js";
 import { runDoctor } from "../src/commands/doctor.js";
+import { initInstall } from "./helpers/state.js";
 
-const FIXTURE = join(__dirname, "..", "fixtures", "example.config.json");
 const REF = ".specify/memory/saas-reference.md";
 const CONST = ".specify/memory/constitution.md";
 
@@ -19,18 +16,13 @@ async function outputOf(action: () => Promise<void>): Promise<string> {
   return messages.join("\n").replace(/\x1B(?:\[[0-?]*[ -/]*[@-~]|[@-_])/g, "");
 }
 
-async function installedAddon() {
-  const target = await mkdtemp(join(tmpdir(), "maker-doctor-addon-"));
-  await runInit({ target, config: FIXTURE, yes: true });
-  await applyAddon(target, await loadAddon("saas"), {
-    tenantColumn: "org_id", brandVarPrefix: "--tema-", roles: "owner,staff",
-  });
-  return target;
+async function installedAddon(format: BasesFormat) {
+  return initInstall("maker-doctor-addon-", { format, addon: "saas" });
 }
 
-describe("maker doctor: add-ons", () => {
+describe.each<BasesFormat>(["files", "pack"])("maker doctor: add-ons (formato %s)", (format) => {
   it("lista um add-on íntegro", async () => {
-    const target = await installedAddon();
+    const target = await installedAddon(format);
     const output = await outputOf(() => runDoctor({ target }));
     expect(output).toContain("Add-ons aplicados:");
     expect(output).toContain("saas · Base SaaS · v0.1.0 · íntegro");
@@ -38,7 +30,7 @@ describe("maker doctor: add-ons", () => {
   });
 
   it("reporta arquivo ausente e retorna exit code degradado", async () => {
-    const target = await installedAddon();
+    const target = await installedAddon(format);
     await unlink(join(target, REF));
     const output = await outputOf(() => runDoctor({ target }));
     expect(output).toContain("arquivo criado ausente: .specify/memory/saas-reference.md");
@@ -47,7 +39,7 @@ describe("maker doctor: add-ons", () => {
   });
 
   it("reporta state inválido, versão divergente e marcador incompleto", async () => {
-    const target = await installedAddon();
+    const target = await installedAddon(format);
     const statePath = join(target, ".maker/addons/saas.json");
     const state = JSON.parse(await readFile(statePath, "utf-8"));
     await writeFile(statePath, JSON.stringify({ ...state, version: "9.9.9" }), "utf-8");
@@ -60,8 +52,7 @@ describe("maker doctor: add-ons", () => {
   });
 
   it("mantém instalação sem add-ons íntegra", async () => {
-    const target = await mkdtemp(join(tmpdir(), "maker-doctor-no-addon-"));
-    await runInit({ target, config: FIXTURE, yes: true });
+    const target = await initInstall("maker-doctor-no-addon-", { format });
     const output = await outputOf(() => runDoctor({ target }));
     expect(output).not.toContain("Add-ons aplicados:");
     expect(output).toContain("✓ Install íntegro.");

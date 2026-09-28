@@ -2,8 +2,10 @@ import { resolve } from "node:path";
 import pc from "picocolors";
 import { verifyManifest } from "../render/manifest.js";
 import { enabledAgents } from "../render/manifest.js";
-import { openState } from "../state/store.js";
+import { inspectState, openState } from "../state/store.js";
 import { LOCKFILE, MANIFEST_FILE } from "../state/paths.js";
+import { configuredBasesFormat } from "../state/format.js";
+import { diagnoseState, type DoctorFinding } from "../state/diagnose.js";
 import { validateAgentIntegration } from "../agents/validate.js";
 import { inspectAddons } from "../addons/doctor.js";
 import { planUpdate, skillInstalled } from "./update.js";
@@ -13,14 +15,39 @@ export interface DoctorOptions {
   target?: string;
 }
 
+function printStateFindings(findings: readonly DoctorFinding[]): void {
+  for (const finding of findings) {
+    const label = finding.severity === "fail" ? pc.red("falha")
+      : finding.severity === "warn" ? pc.yellow("aviso")
+        : pc.dim("info ");
+    console.log(`  ${label}  ${finding.message}`);
+    console.log(`         ${pc.dim("ação:")} ${finding.action}`);
+  }
+}
+
 /** Verifica integridade de um install contra seu manifest. Sai com código 1 se degradado. */
 export async function runDoctor(opts: DoctorOptions): Promise<void> {
   const targetDir = resolve(opts.target ?? process.cwd());
-  const state = await openState(targetDir, { mode: "read" });
-  if (!state) {
+  const snapshot = await inspectState(targetDir);
+  const configured = await configuredBasesFormat(targetDir, { inspect: true });
+  const findings = diagnoseState(snapshot, configured);
+
+  // Transação pendente ou estado ilegível: nada mais a verificar (não há manifest confiável).
+  if (snapshot.pendingTransactions || snapshot.error) {
+    console.log(pc.bold("Estado (.maker):"));
+    printStateFindings(findings);
+    process.exitCode = 1;
+    return;
+  }
+
+  if (!snapshot.manifest) {
     throw new Error(`Nenhum install do maker encontrado em ${targetDir} (${MANIFEST_FILE} e ${LOCKFILE} ausentes).`);
   }
+
+  // Sem error/pendingTransactions, a releitura via openState não lança e não recupera nada (mode "read").
+  const state = (await openState(targetDir, { mode: "read" }))!;
   const manifest = state.manifest;
+  const hasFailFinding = findings.some((finding) => finding.severity === "fail");
 
   const result = await verifyManifest(targetDir, manifest);
   const integrations = await Promise.all(
@@ -35,6 +62,13 @@ export async function runDoctor(opts: DoctorOptions): Promise<void> {
       `  ${integration.provider}: ${status} · ${integration.skills} skills · ${integration.agents} agentes`,
     );
     for (const issue of integration.issues) console.log(pc.red(`    ${issue}`));
+  }
+
+  if (findings.length) {
+    console.log(pc.bold("\nEstado (.maker):"));
+    printStateFindings(findings);
+  } else {
+    console.log(pc.dim(`\nEstado (.maker): íntegro (${state.inUse})`));
   }
 
   if (addons.addons.length) {
@@ -68,7 +102,7 @@ export async function runDoctor(opts: DoctorOptions): Promise<void> {
   for (const path of customized) console.log(pc.dim(`  personalizado: ${path} (preservado e mesclado pelo update)`));
 
   if (!result.missing.length && !modified.length && integrations.every((integration) => integration.issues.length === 0) &&
-      addons.ok && !("error" in pending)) {
+      addons.ok && !("error" in pending) && !hasFailFinding) {
     console.log(pc.green("✓ Install íntegro."));
     return;
   }
