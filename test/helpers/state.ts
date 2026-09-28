@@ -1,9 +1,9 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import type { AgentProvider } from "../../src/config/schema.js";
 import { runInit } from "../../src/commands/init.js";
 import { runAgentAdd } from "../../src/commands/agent.js";
@@ -13,11 +13,51 @@ import { createPlan } from "../../src/changes/plan.js";
 import { applyChangePlan } from "../../src/changes/transaction.js";
 import type { BasesFormat } from "../../src/render/manifest.js";
 import type { Manifest } from "../../src/render/manifest.js";
-import { openState, planStateWrite } from "../../src/state/store.js";
-import { basePath, LOCKFILE } from "../../src/state/paths.js";
+import { inspectState, openState, planStateWrite } from "../../src/state/store.js";
+import { addonStateFile, basePath, LOCKFILE } from "../../src/state/paths.js";
 import { serializeLockfile } from "../../src/state/lockfile.js";
+import type { AddonStateRecord } from "../../src/state/addon-state.js";
 
 export { readManifest } from "../../src/state/store.js";
+
+/** Estado de todos os add-ons no formato em uso (agnóstico de formato). `StateError` propaga. */
+export async function readAddonStates(target: string): Promise<Map<string, AddonStateRecord>> {
+  const snapshot = await inspectState(target);
+  if (snapshot.error) throw snapshot.error;
+  return snapshot.addons;
+}
+
+/** Grava um estado de add-on transacionalmente, no formato em uso. */
+export async function writeAddonState(target: string, state: AddonStateRecord): Promise<void> {
+  const opened = await openState(target, { mode: "mutate" });
+  if (!opened) throw new Error(`Nenhum install do maker em ${target}.`);
+  const addons = new Map(opened.addons);
+  addons.set(state.id, state);
+  const changes = await planStateWrite(opened, target, {
+    manifest: opened.manifest, format: opened.inUse, bases: new Map(), addons, prune: false,
+  });
+  await applyChangePlan(createPlan(target, changes));
+}
+
+/** Remove um estado de add-on transacionalmente, no formato em uso. */
+export async function removeAddonState(target: string, id: string): Promise<void> {
+  const opened = await openState(target, { mode: "mutate" });
+  if (!opened) throw new Error(`Nenhum install do maker em ${target}.`);
+  const addons = new Map(opened.addons);
+  addons.delete(id);
+  const changes = await planStateWrite(opened, target, {
+    manifest: opened.manifest, format: opened.inUse, bases: new Map(), addons, prune: false,
+  });
+  await applyChangePlan(createPlan(target, changes));
+}
+
+/** Grava cru `.maker/addons/<id>.json` (fixture de coexistência/JSON inválido; fora da transação de propósito). */
+export async function writeAddonStateFile(target: string, id: string, content: string | AddonStateRecord): Promise<void> {
+  const path = join(target, addonStateFile(id));
+  await mkdir(dirname(path), { recursive: true });
+  const text = typeof content === "string" ? content : `${JSON.stringify(content, null, 2)}\n`;
+  await writeFile(path, text, "utf-8");
+}
 
 const FIXTURE_CONFIG = join(__dirname, "..", "..", "fixtures", "example.config.json");
 

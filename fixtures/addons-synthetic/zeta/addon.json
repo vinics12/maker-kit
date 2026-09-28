@@ -1,0 +1,14 @@
+{
+  "id": "zeta",
+  "name": "Add-on sintético Zeta",
+  "description": "Add-on sintético de teste (AC-45): fragmento de agente + arquivo criado, alvos disjuntos de alpha e saas.",
+  "version": "0.1.0",
+  "knobs": [],
+  "principles": [],
+  "agentFragments": [
+    { "agent": "e2e-planner", "file": "agents/e2e-planner.fragment.md.hbs" }
+  ],
+  "files": [
+    { "from": "memory/zeta-reference.md.hbs", "to": ".specify/memory/zeta-reference.md" }
+  ]
+}
