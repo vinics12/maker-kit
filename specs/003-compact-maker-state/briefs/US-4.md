@@ -42,6 +42,18 @@ mesclam o lockfile sem conflito nos casos cobertos pelo desenho. Provar a meta d
 - FR-030: compare o `.gitattributes` de raiz com o template e confirme que nenhum `.gitignore` de raiz
   foi criado.
 
+- **Emenda autorizada pelo humano no Gate 3 da Fase C (T406–T408)**:
+  - T406: a validação de integração (`src/agents/validate.ts`) aceita CRLF — frontmatter de skills e
+    agentes Claude (e qualquer outro parse de texto do arquivo que dependa de `\n`) passa com fim de
+    linha `\r\n`. Motivo: com `core.autocrlf=true` o git converte `.claude/**` (fora de `.maker`, raiz
+    intocada por FR-030) e o `doctor` ficava vermelho — bug pré-existente desde a 1.0.0 que impede o
+    AC-20 ("doctor verde"). Teste em `test/agents/validate.test.ts` (novo, espelha `src/agents/`).
+  - T407: AC-20 refeito com `git clone -c core.autocrlf=true` (conversão real), nos dois formatos:
+    lockfile/bases byte a byte em LF, arquivos de `.claude/**` de fato em CRLF, `doctor` verde.
+  - T408: `test/commands/update.rollback.test.ts` — timeout explícito (60 s) no caso de crash com vários
+    installs; `reference-install.test.ts` usa os padrões do `.maker/.gitignore` real e troca a asserção
+    vazia por "nenhum caminho começa com `bases/`".
+
 ## Runbook
 1. SKILL.md (T401) e `package-smoke` (T402).
 2. `test/commands/update.gitcontrol.test.ts` (AC-23, FR-029, FR-030) (T404).
@@ -54,9 +66,10 @@ mesclam o lockfile sem conflito nos casos cobertos pelo desenho. Provar a meta d
 - `test/state/git-interop.test.ts`
 - `test/state/reference-install.test.ts`
 - `test/commands/update.gitcontrol.test.ts`
+- `src/agents/validate.ts`, `test/agents/validate.test.ts`, `test/commands/update.rollback.test.ts` (só T406–T408)
 
 ## NÃO tocar
-`src/**` (se algo no código impedir um AC, pare e reporte — é retorno ao Gate 2),
+`src/**` exceto `src/agents/validate.ts` (se algo no código impedir um AC, pare e reporte — é retorno ao Gate 2),
 `test/helpers/state.ts`, `templates/engine/common/**` (templates de controle são da US-2; o
 `.gitattributes` de raiz não muda), `docs/**`, `dist/**`, arquivos da US-5 (`src/commands/agent.ts`,
 `src/util/engine-scaffold.ts`, `src/addons/apply.ts`, `test/commands/agent.state.test.ts`,

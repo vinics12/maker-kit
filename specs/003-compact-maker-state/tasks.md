@@ -94,6 +94,9 @@ Brief: `briefs/US-4.md` · depende de US-1, US-2, US-3 · **arquivos disjuntos d
 - [ ] T403 — `test/state/git-interop.test.ts` (`it.skipIf(!hasGit())` com motivo): AC-20 (autocrlf, nos dois formatos), AC-21, AC-22, AC-40 (entradas não adjacentes, **adjacentes**, campo novo × edição vizinha, unidade `file` nova × edição vizinha — todos sem conflito e doctor verde).
 - [ ] T404 — `test/commands/update.gitcontrol.test.ts`: AC-23 (edição local rastreada preservada/mesclada); FR-029 (update cria os dois em install existente e os registra no manifest com base); FR-030 (`.gitattributes` de raiz inalterado, nenhum `.gitignore` de raiz).
 - [ ] T405 — `test/state/reference-install.test.ts`: SC-001 (Claude + Codex + `saas`, default, sem opt-in: ≤ 16 arquivos versionados em `.maker`, contando só o que não é ignorado), SC-008 (tamanho do lockfile ≤ soma das bases + overhead de cabeçalhos + base64).
+- [ ] T406 — Emenda (Gate 3, Fase C): `src/agents/validate.ts` aceita CRLF no frontmatter e demais parses de texto; teste em `test/agents/validate.test.ts`.
+- [ ] T407 — AC-20 refeito com `git clone -c core.autocrlf=true` (conversão real) nos dois formatos: lockfile/bases em LF, `.claude/**` em CRLF, `doctor` verde.
+- [ ] T408 — Timeout explícito (60 s) no caso de crash de `test/commands/update.rollback.test.ts`; SC-001 com o `.maker/.gitignore` real e asserção de nenhum caminho sob `bases/`.
 
 ### [US-5 — backend] `agent add`, `add` e `remove` no formato em uso (P1)
 
