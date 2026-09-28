@@ -118,6 +118,9 @@ BREAKING CHANGE: o formato padrão das bases passa a ser "pack": o manifest e as
 arquivo, .maker/maker.lock, e o próximo maker update migra installs existentes sem formato declarado
 (.maker/manifest.json e .maker/bases/ deixam de existir). Para manter as bases por arquivo, declare
 "state": { "bases": "files" } em maker.config.json antes do update. Atualize o maker em todo o time e
-na CI antes de migrar: versões anteriores não leem o lockfile (param sem escrever), e
-"maker init --force" de versões anteriores reinstalaria por cima.
+na CI antes de migrar: comandos mutantes de versões anteriores não leem o lockfile e param sem
+escrever, mas "maker init" sem "--force" de uma versão anterior não vê colisão e grava um segundo
+estado ao lado do lockfile (a versão atual detecta essa coexistência e aborta até ser resolvida
+manualmente); "maker init --force" de uma versão anterior reinstalaria por cima independentemente do
+formato.
 ```

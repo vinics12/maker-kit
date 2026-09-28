@@ -117,12 +117,12 @@ Brief: `briefs/US-5.md` · depende de US-1, US-2 · **arquivos disjuntos de US-4
 
 Brief: `briefs/US-6.md` · depende de US-1..US-5
 
-- [ ] T601 — `docs/maker-state.md`: taxonomia (4 categorias, cada item de `.maker`, versionar ou não, nos dois formatos, explícito que em pack não existem `manifest.json`/`bases/`), formatos, default, trade-offs (inclusive `linguist-generated` colapsando o manifest e como expandir; conflitos residuais e conflito intercalado), escolha/troca de formato, diagnóstico e recuperação (FR-001, FR-002, AC-28, AC-29).
-- [ ] T602 — `README.md` (seção de `.maker` e link) e `docs/MIGRATION.md` (seção "Bases no formato pack por padrão": opt-out, atualizar o maker em todo o time/CI antes de migrar, limitações da 1.0.0 com `init`/`init --force`).
-- [ ] T603 — `test/docs/maker-state.test.ts`: cada item presente em `.maker` num install de referência (pack e files, com temporários criados) aparece na tabela da taxonomia com exatamente uma categoria (AC-28); o doc contém `state.bases`, `"pack"`, `"files"` e o procedimento de migração (AC-29, parte de docs).
-- [ ] T604 — Texto de commit/PR da entrega para **as duas opções** de Q1 (`contracts/cli-output.md` §5): opção A (`feat(state)!:` + rodapé `BREAKING CHANGE:`) e opção B (`feat(state):` + seção `## Notas de release` no corpo do PR para colar nas release notes do Release PR). O orquestrador usa a opção decidida no Gate 2 (AC-29, parte CHANGELOG/release notes). `CHANGELOG.md` **não** é editado à mão.
-- [ ] T606 — Emenda autorizada no Gate 3: constante `FORMAT_OPT_OUT_SNIPPET` em `src/state/format.ts` como fonte única da dica de opt-out; `src/commands/update.ts` e `src/state/diagnose.ts` passam a importá-la (saída do CLI inalterada).
-- [ ] T605 — `pnpm build` (atualiza `dist/cli.js` versionado), `pnpm verify`, `pnpm package:smoke`.
+- [X] T601 — `docs/maker-state.md`: taxonomia (4 categorias, cada item de `.maker`, versionar ou não, nos dois formatos, explícito que em pack não existem `manifest.json`/`bases/`), formatos, default, trade-offs (inclusive `linguist-generated` colapsando o manifest e como expandir; conflitos residuais e conflito intercalado), escolha/troca de formato, diagnóstico e recuperação (FR-001, FR-002, AC-28, AC-29).
+- [X] T602 — `README.md` (seção de `.maker` e link) e `docs/MIGRATION.md` (seção "Bases no formato pack por padrão": opt-out, atualizar o maker em todo o time/CI antes de migrar, limitações da 1.0.0 com `init`/`init --force`).
+- [X] T603 — `test/docs/maker-state.test.ts`: cada item presente em `.maker` num install de referência (pack e files, com temporários criados) aparece na tabela da taxonomia com exatamente uma categoria (AC-28); o doc contém `state.bases`, `"pack"`, `"files"` e o procedimento de migração (AC-29, parte de docs).
+- [X] T604 — Texto de commit/PR da entrega para **as duas opções** de Q1 (`contracts/cli-output.md` §5): opção A (`feat(state)!:` + rodapé `BREAKING CHANGE:`) e opção B (`feat(state):` + seção `## Notas de release` no corpo do PR para colar nas release notes do Release PR). O orquestrador usa a opção decidida no Gate 2 (AC-29, parte CHANGELOG/release notes). `CHANGELOG.md` **não** é editado à mão.
+- [X] T606 — Emenda autorizada no Gate 3: constante `FORMAT_OPT_OUT_SNIPPET` em `src/state/format.ts` como fonte única da dica de opt-out; `src/commands/update.ts` e `src/state/diagnose.ts` passam a importá-la (saída do CLI inalterada).
+- [X] T605 — `pnpm build` (atualiza `dist/cli.js` versionado), `pnpm verify`, `pnpm package:smoke`.
 
 ---
 
