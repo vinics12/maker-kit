@@ -1,7 +1,7 @@
 import type { BaseProblem } from "./lockfile.js";
 import { BASES_DIR, LOCKFILE, MANIFEST_FILE } from "./paths.js";
 import type { StateSnapshot } from "./store.js";
-import { pendingDefaultMigration, type ConfiguredFormat } from "./format.js";
+import { pendingDefaultMigration, FORMAT_OPT_OUT_SNIPPET, type ConfiguredFormat } from "./format.js";
 
 // Sem constante dedicada em paths.ts (não é manifest/lockfile/bases): mantido local, único uso.
 const TRANSACTIONS_DIR = ".maker/transactions";
@@ -182,7 +182,7 @@ function pendingDefaultMigrationFinding(snapshot: StateSnapshot, configured: Con
   return {
     severity: "info", code: "pending-default-migration",
     message: `o próximo maker update migrará as bases para o formato "pack"`,
-    action: `para manter bases por arquivo, declare "state": { "bases": "files" } em maker.config.json`,
+    action: `para manter bases por arquivo, declare ${FORMAT_OPT_OUT_SNIPPET} em maker.config.json`,
   };
 }
 

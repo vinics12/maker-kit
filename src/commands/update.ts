@@ -15,7 +15,7 @@ import { resolveConfig } from "../util/upstream.js";
 import { createPlan, formatPlan, inspectTarget, planWrite, type ChangePlan, type PlannedChange } from "../changes/plan.js";
 import { applyChangePlan } from "../changes/transaction.js";
 import { openState, planStateWrite, type InstallState } from "../state/store.js";
-import { configuredBasesFormat, effectiveBasesFormat, planFormatTransition, type ConfiguredFormat, type FormatTransition } from "../state/format.js";
+import { configuredBasesFormat, effectiveBasesFormat, planFormatTransition, FORMAT_OPT_OUT_SNIPPET, type ConfiguredFormat, type FormatTransition } from "../state/format.js";
 import { GIT_CONTROL_FILES } from "../state/paths.js";
 import type { BaseProblem } from "../state/lockfile.js";
 import { planLegacyAddonAgents, type LegacyAgentReport } from "../agents/migrate.js";
@@ -95,7 +95,7 @@ export function announceTransition(transition: FormatTransition, opts: { applied
     console.log(pc.yellow(`  descartada ${problemLabel(problem)} [${problem.origin}] ${problem.detail}${files.length ? ` → afeta: ${files.join(", ")}` : ""}`));
   }
   if (transition.reason === "default") {
-    console.log(`  O formato "${transition.to}" é o padrão; para manter as bases por arquivo, declare ${optOutSnippet()} em maker.config.json.`);
+    console.log(`  O formato "${transition.to}" é o padrão; para manter as bases por arquivo, declare ${FORMAT_OPT_OUT_SNIPPET} em maker.config.json.`);
   }
 }
 
@@ -104,11 +104,6 @@ function announceInvalidEntries(problems: readonly BaseProblem[]): void {
   if (!problems.length) return;
   const list = problems.map((problem) => `${problemLabel(problem)} (${problem.detail})`).join(", ");
   console.log(pc.yellow(`${problems.length} entrada(s) inválida(s) do lockfile descartada(s): ${list}`));
-}
-
-/** Trecho de config do opt-out de formato, montado a partir da própria estrutura (nunca um literal de caminho). */
-function optOutSnippet(): string {
-  return JSON.stringify({ state: { bases: "files" } }, null, 1).replace(/\s*\n\s*/g, " ").slice(2, -2);
 }
 
 export async function runUpdate(opts: UpdateOptions): Promise<void> {

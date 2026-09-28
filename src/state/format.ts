@@ -7,6 +7,9 @@ import type { BaseProblem } from "./lockfile.js";
 
 const CONFIG_FILE = "maker.config.json";
 
+/** Dica de opt-out do formato pack, mostrada pelo update (ao migrar) e pelo doctor (antes de migrar). */
+export const FORMAT_OPT_OUT_SNIPPET = '"state": { "bases": "files" }';
+
 export type ConfiguredFormat =
   | { kind: "unset" }
   | { kind: "set"; format: BasesFormat }
