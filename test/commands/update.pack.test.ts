@@ -4,10 +4,10 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runInit } from "../../src/commands/init.js";
-import { runUpdate } from "../../src/commands/update.js";
+import { PENDING_EXIT_CODE, runUpdate } from "../../src/commands/update.js";
 import { runDoctor } from "../../src/commands/doctor.js";
-import { LOCKFILE, MANIFEST_FILE, BASES_DIR } from "../../src/state/paths.js";
-import { initInstall, lockfileText, readManifest, snapshotTree, writeManifest } from "../helpers/state.js";
+import { LOCKFILE, MANIFEST_FILE, BASES_DIR, GIT_CONTROL_FILES } from "../../src/state/paths.js";
+import { corruptBase, initInstall, lockfileText, readManifest, snapshotTree, writeManifest } from "../helpers/state.js";
 
 const FIXTURE = join(__dirname, "..", "..", "fixtures", "example.config.json");
 const directories: string[] = [];
@@ -99,6 +99,25 @@ describe("update em pack: default, migração e relatório", () => {
     expect(log.mock.calls.flat().join("\n")).toContain("Install íntegro");
   });
 
+  it("pack sem migração: entrada corrompida no lockfile é anunciada ao ser descartada, não em silêncio (dry-run e aplicado)", async () => {
+    const target = await initInstall("maker-update-pack-invalid-entry-");
+    directories.push(target);
+    const manifest = await readManifest(target);
+    const [, entry] = Object.entries(manifest!.files).find(([, e]) => e.baseHash)!;
+    await corruptBase(target, entry.baseHash!);
+
+    const dryLog = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runUpdate({ target, dryRun: true });
+    expect(dryLog.mock.calls.flat().join("\n")).toMatch(/1 entrada\(s\) inválida\(s\) do lockfile descartada\(s\): .+\(.+\)/);
+    dryLog.mockRestore();
+
+    // A entrada continua corrompida (o arquivo dependente vai a mediação, não é sobrescrito): o
+    // update aplicado também regrava o lockfile sem ela e precisa anunciar o descarte.
+    const applyLog = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runUpdate({ target });
+    expect(applyLog.mock.calls.flat().join("\n")).toMatch(/1 entrada\(s\) inválida\(s\) do lockfile descartada\(s\): .+\(.+\)/);
+  });
+
   it("FR-003: state.bases inválido em maker.config.json aborta update antes de escrever", async () => {
     const target = await temp("maker-update-pack-invalid-");
     await runInit({ target, config: FIXTURE, yes: true });
@@ -119,31 +138,40 @@ describe("update em pack: default, migração e relatório", () => {
     expect((await readManifest(target))?.basesFormat).toBe("pack");
   });
 
-  it("B2: arquivo de controle do git pré-existente e idêntico ao upstream passa a ser rastreado", async () => {
-    const target = await initInstall("maker-update-pack-b2-same-");
-    directories.push(target);
-    const before = await readManifest(target);
-    // Simula um install anterior aos templates de controle do git: sem entrada no manifest, mas
-    // o arquivo em disco já é byte a byte igual ao que o engine geraria.
-    const { [".maker/.gitignore"]: _removed, ...rest } = before!.files;
-    await writeManifest(target, { ...before!, files: rest });
-    await runUpdate({ target });
-    const after = await readManifest(target);
-    expect(after?.files[".maker/.gitignore"]).toBeDefined();
-    expect(after?.files[".maker/.gitignore"]?.baseHash).toBeTruthy();
-  });
+  describe.each(["files", "pack"] as const)("B1/B2 no formato %s", (format) => {
+    describe.each(GIT_CONTROL_FILES)("caminho %s", (controlPath) => {
+      it("idêntico ao upstream passa a ser rastreado", async () => {
+        const target = await initInstall(`maker-update-pack-b2-same-${format}-`, { format });
+        directories.push(target);
+        const before = await readManifest(target);
+        // Simula um install anterior aos templates de controle do git: sem entrada no manifest, mas
+        // o arquivo em disco já é byte a byte igual ao que o engine geraria.
+        const rest = { ...before!.files };
+        delete rest[controlPath];
+        await writeManifest(target, { ...before!, files: rest });
+        await runUpdate({ target });
+        const after = await readManifest(target);
+        expect(after?.files[controlPath]).toBeDefined();
+        expect(after?.files[controlPath]?.baseHash).toBeTruthy();
+      });
 
-  it("B2: arquivo de controle do git pré-existente e diferente é preservado e mediado (base nula)", async () => {
-    const target = await initInstall("maker-update-pack-b2-diff-");
-    directories.push(target);
-    const before = await readManifest(target);
-    const { [".maker/.gitignore"]: _removed, ...rest } = before!.files;
-    await writeManifest(target, { ...before!, files: rest });
-    await writeFile(join(target, ".maker/.gitignore"), "# customizado pelo dono\n/algo-local/\n");
-    const log = vi.spyOn(console, "log").mockImplementation(() => {});
-    await runUpdate({ target, dryRun: true });
-    expect(log.mock.calls.flat().join("\n")).toContain("precisam de mediação");
-    expect(await readFile(join(target, ".maker/.gitignore"), "utf-8")).toContain("customizado pelo dono");
-    expect((await readManifest(target))?.files[".maker/.gitignore"]).toBeUndefined();
+      it("diferente é preservado e mediado no update aplicado, nunca sobrescrito", async () => {
+        const target = await initInstall(`maker-update-pack-b2-diff-${format}-`, { format });
+        directories.push(target);
+        const before = await readManifest(target);
+        const rest = { ...before!.files };
+        delete rest[controlPath];
+        await writeManifest(target, { ...before!, files: rest });
+        const customized = "# customizado pelo dono\n/algo-local/\n";
+        await writeFile(join(target, controlPath), customized);
+
+        const log = vi.spyOn(console, "log").mockImplementation(() => {});
+        await runUpdate({ target });
+        expect(log.mock.calls.flat().join("\n")).toContain("precisam de mediação");
+        expect(process.exitCode).toBe(PENDING_EXIT_CODE);
+        expect(await readFile(join(target, controlPath), "utf-8")).toBe(customized);
+        expect((await readManifest(target))?.files[controlPath]).toBeUndefined();
+      });
+    });
   });
 });

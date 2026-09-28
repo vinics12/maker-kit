@@ -1,12 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { existsSync } from "node:fs";
 import { rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { createPlan } from "../../src/changes/plan.js";
 import { applyChangePlan } from "../../src/changes/transaction.js";
-import { openState } from "../../src/state/store.js";
-import { LOCKFILE, MANIFEST_FILE } from "../../src/state/paths.js";
-import { planUpdate, runUpdate } from "../../src/commands/update.js";
+import { inspectState, openState } from "../../src/state/store.js";
+import { planUpdate } from "../../src/commands/update.js";
 import { initInstall, snapshotTree } from "../helpers/state.js";
 
 const directories: string[] = [];
@@ -39,25 +36,32 @@ describe("rollback da migração (AC-10, AC-11)", () => {
     expect(await snapshotTree(target)).toEqual(before);
   });
 
-  it("AC-10(b): crash em cada ponto da migração deixa coexistência recuperável — próximo comando mutante recupera exatamente o estado anterior", async () => {
-    const target = await initInstall("maker-update-rollback-crash-", { format: "unset" });
-    directories.push(target);
-    const before = await snapshotTree(target);
-    const state = await openState(target, { mode: "mutate" });
-    const { plan } = await planUpdate(target, { state });
-    const actionable = plan.changes.filter((change) => change.action === "create" || change.action === "update" || change.action === "remove");
-    for (let i = 0; i < actionable.length; i++) {
+  it("AC-10(b): crash em cada ponto da migração é detectável e a recuperação restaura o alvo exatamente ao estado anterior", async () => {
+    // Só para contar quantas operações acionáveis a migração tem (mesmo plano em qualquer install igual).
+    const probe = await initInstall("maker-update-rollback-crash-probe-", { format: "unset" });
+    directories.push(probe);
+    const probeState = await openState(probe, { mode: "mutate" });
+    const { plan: probePlan } = await planUpdate(probe, { state: probeState });
+    const actionableCount = probePlan.changes.filter((change) => change.action === "create" || change.action === "update" || change.action === "remove").length;
+
+    for (let i = 0; i < actionableCount; i++) {
       const fresh = await initInstall(`maker-update-rollback-crash-point-${i}-`, { format: "unset" });
       directories.push(fresh);
+      const beforeFresh = await snapshotTree(fresh);
       const freshState = await openState(fresh, { mode: "mutate" });
       const freshPlan = (await planUpdate(fresh, { state: freshState })).plan;
       await expect(applyChangePlan(freshPlan, { crashAfter: i })).rejects.toThrow(/Falha simulada/);
-      // Recupera antes de ler: o próximo comando mutante limpa o journal e conclui a transação.
-      await runUpdate({ target: fresh });
-      expect(existsSync(join(fresh, LOCKFILE))).toBe(true);
-      expect(existsSync(join(fresh, MANIFEST_FILE))).toBe(false);
+
+      // Crash detectável: transação pendente no snapshot bruto do alvo que sofreu o crash.
+      const crashed = await inspectState(fresh);
+      expect(crashed.pendingTransactions).toBe(true);
+
+      // openState(mutate) recupera (rollback pelo journal) antes de ler — nunca completa a migração
+      // pela metade; o alvo volta byte a byte ao estado anterior ao crash.
+      await openState(fresh, { mode: "mutate" });
+      expect(await inspectState(fresh)).toMatchObject({ pendingTransactions: false });
+      expect(await snapshotTree(fresh)).toEqual(beforeFresh);
     }
-    expect(await snapshotTree(target)).toEqual(before);
   });
 
   it("AC-11: falha no update em pack (sem migração) não deixa alteração", async () => {

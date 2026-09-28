@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { runUpdate } from "../../src/commands/update.js";
 import { DEFAULT_MEDIATION_DIR } from "../../src/commands/mediation.js";
 import { sha256 } from "../../src/render/manifest.js";
-import { BASES_DIR, MANIFEST_FILE, LOCKFILE } from "../../src/state/paths.js";
+import { BASES_DIR, MANIFEST_FILE, LOCKFILE, GIT_CONTROL_FILES } from "../../src/state/paths.js";
 import { initInstall, lockfileText, putBase, readManifest, writeManifest } from "../helpers/state.js";
 
 const directories: string[] = [];
@@ -62,23 +62,29 @@ describe("mediação em pack (AC-30, AC-13) e B1", () => {
     expect((await readManifest(target))!.files["AGENTS.md"]!.baseHash).toBe(sha256(Buffer.from(upstream)));
   });
 
-  it("B1: proposta para .maker/.gitignore e .maker/.gitattributes é aceita e aplicada", async () => {
-    const target = await initInstall("maker-mediation-pack-b1-accept-");
-    directories.push(target);
-    const before = await readManifest(target);
-    const { [".maker/.gitignore"]: _removed, ...rest } = before!.files;
-    await writeManifest(target, { ...before!, files: rest });
-    await writeFile(join(target, ".maker/.gitignore"), "# customizado\n/algo/\n");
-    vi.spyOn(console, "log").mockImplementation(() => {});
-    await runUpdate({ target, export: true });
-    const dir = join(target, DEFAULT_MEDIATION_DIR);
-    const index = JSON.parse(await readFile(join(dir, "mediation.json"), "utf-8"));
-    const item = index.items.find((i: { path: string }) => i.path === ".maker/.gitignore");
-    expect(item).toBeDefined();
-    const upstream = await readFile(join(dir, "items", item.id, "upstream"), "utf-8");
-    await writeFile(join(dir, "items", item.id, "resolved"), upstream);
-    await runUpdate({ target, applyResolutions: true, acceptDropped: true });
-    expect((await readManifest(target))!.files[".maker/.gitignore"]).toBeDefined();
+  describe.each(GIT_CONTROL_FILES)("B1: proposta para %s", (controlPath) => {
+    it("é aceita e aplicada, registrando baseHash do upstream", async () => {
+      const target = await initInstall(`maker-mediation-pack-b1-accept-${controlPath.replace(/\W/g, "-")}-`);
+      directories.push(target);
+      const before = await readManifest(target);
+      const rest = { ...before!.files };
+      delete rest[controlPath];
+      await writeManifest(target, { ...before!, files: rest });
+      await writeFile(join(target, controlPath), "# customizado\n/algo/\n");
+      vi.spyOn(console, "log").mockImplementation(() => {});
+      await runUpdate({ target, export: true });
+      const dir = join(target, DEFAULT_MEDIATION_DIR);
+      const index = JSON.parse(await readFile(join(dir, "mediation.json"), "utf-8"));
+      const item = index.items.find((i: { path: string }) => i.path === controlPath);
+      expect(item).toBeDefined();
+      const upstream = await readFile(join(dir, "items", item.id, "upstream"));
+      await writeFile(join(dir, "items", item.id, "resolved"), upstream);
+      await runUpdate({ target, applyResolutions: true, acceptDropped: true });
+      const entry = (await readManifest(target))!.files[controlPath];
+      expect(entry).toBeDefined();
+      expect(entry!.baseHash).toBe(sha256(upstream));
+      expect(await readFile(join(target, controlPath))).toEqual(upstream);
+    });
   });
 
   it("B1: caminhos de metadados do estado continuam recusados ('fora dos arquivos gerenciados')", async () => {

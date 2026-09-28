@@ -67,4 +67,17 @@ describe("init em pack: formato efetivo e comportamento sobre install existente"
     expect(existsSync(join(target, MANIFEST_FILE))).toBe(false);
     expect(existsSync(join(target, LOCKFILE))).toBe(true);
   });
+
+  it("FR-003: state.bases inválido na config carregada aborta o init antes de escrever", async () => {
+    const target = await temp("maker-init-pack-invalid-");
+    const configPath = join(target, "config.json");
+    await writeFile(configPath, JSON.stringify({ project: { name: "X" }, state: { bases: "zip" } }));
+    const before = await snapshotTree(target);
+    await expect(runInit({ target, config: configPath, yes: true })).rejects.toThrow(
+      /maker\.config\.json: state\.bases deve ser "files" ou "pack"/,
+    );
+    expect(await snapshotTree(target)).toEqual(before);
+    expect(existsSync(join(target, LOCKFILE))).toBe(false);
+    expect(existsSync(join(target, MANIFEST_FILE))).toBe(false);
+  });
 });
