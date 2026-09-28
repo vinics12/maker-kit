@@ -98,21 +98,25 @@ git commit -qam "customizações locais"
    ```bash
    find .maker -type f | sort
    ls .maker/manifest.json .maker/bases 2>&1     # ambos: No such file or directory
+   ls .maker/addons 2>&1                                     # No such file or directory (US-7)
    ls -la .gitattributes; git diff HEAD -- .gitattributes   # raiz intocada (Q2/FR-030)
    ls .gitignore 2>&1                                       # nenhum .gitignore de raiz criado
    ```
-   Esperado: exatamente `.maker/.gitattributes`, `.maker/.gitignore`, `.maker/addons/saas.json`,
-   `.maker/maker.lock` e os 12 `.maker/workflow/agents/*.md`. O `.gitattributes` da raiz (que o engine
-   já instalava na 1.0.0) não aparece no diff.
+   Esperado: exatamente `.maker/.gitattributes`, `.maker/.gitignore`, `.maker/maker.lock` e os 12
+   `.maker/workflow/agents/*.md` — **sem** `.maker/addons/saas.json`: o estado do add-on `saas` migrou
+   junto para a seção `[addons]` do lockfile, na mesma transação. O `.gitattributes` da raiz (que o
+   engine já instalava na 1.0.0) não aparece no diff.
 6. **Doctor verde lendo só o lockfile** — `$NEW doctor --target "$P1"` → `Estado (.maker): íntegro (pack)`,
-   add-on `saas · … · íntegro`, `✓ Install íntegro.`, código 0.
+   add-on `saas · … · íntegro` (lido da seção `[addons]`, sem `.maker/addons`), `✓ Install íntegro.`,
+   código 0.
 7. **Commit e contagem de versionados (SC-001)**:
    ```bash
    git add -A && git commit -qm "maker: migra estado para pack"
-   git ls-files .maker | wc -l                   # esperado: 16
+   git ls-files .maker | wc -l                   # esperado: 15
    git show --stat HEAD | tail -1
    ```
-   Esperado: **16** (de 101). O commit remove `manifest.json` e ~86 bases e cria `maker.lock`.
+   Esperado: **15** (de 101). O commit remove `manifest.json`, `addons/saas.json` e ~86 bases, e cria
+   `maker.lock`.
 8. **Idempotência** — `$NEW update --target "$P1"` de novo → `✓ 0 arquivo(s) atualizado(s), 0 mesclado(s).`,
    sem bloco de migração; `git status --porcelain` vazio.
 9. **Auditabilidade do lockfile (AC-05, leitura humana)** — `sed -n 1,20p .maker/maker.lock` e
@@ -121,6 +125,10 @@ git commit -qam "customizações locais"
    `project`, `schemaVersion`) e blocos `file "<path>"` com `baseHash`/`hash`/`source`; seção `[bases]`
    com `@base sha256=… size=… encoding=utf8` seguido do texto legível. **Julgamento**: dá para auditar
    uma mudança de estado lendo o arquivo num editor?
+10. **Auditabilidade da seção `[addons]` (AC-41, US-7)** — `sed -n '/\[addons\]/,/\[bases\]/p' .maker/maker.lock`:
+   uma unidade `addon "saas"` entre `[manifest]` e `[bases]`, com `appliedAt`, `createdFiles`,
+   `injectedBlocks`, `injectedTargets`, `knobs` e `version` — os mesmos campos que
+   `.maker/addons/saas.json` teria em `files`, um por linha.
 
 ---
 
@@ -345,20 +353,25 @@ Esperado: doctor `rc=0` com `aviso  bases por arquivo em .maker/bases junto ao l
    ```
    Esperado (observado na preparação): todos `rc=1` com `erro: Nenhum install do maker em …`
    (doctor: `… (.maker/manifest.json ausente).`), e `git status` **vazio**.
-2. **`maker remove` da 1.0.0** — execute separadamente:
+2. **`maker remove` da 1.0.0 (gatilho original desta emenda, Clarification 23)** — execute separadamente:
    ```bash
    $OLD remove saas --target "$P1"; echo "remove rc=$?"
    git status --porcelain
    ```
-   Esperado pela spec (Clarification 20, `docs/maker-state.md` §5, texto do BREAKING CHANGE): parar
-   sem escrever. **Observado na preparação deste guia: a 1.0.0 conclui o remove com `rc=0` e escreve**
-   — apaga `.maker/addons/saas.json` e `.specify/memory/saas-reference.md` e remove os blocos do add-on
-   da constitution e de `architect.md`/`code-reviewer.md`, sem tocar o `maker.lock` (o `removeAddon` da
-   1.0.0 lê o estado do add-on e trata o manifest como opcional). Depois disso, `$NEW doctor` ainda diz
-   `Estado (.maker): íntegro (pack)`, lista os três arquivos como `personalizado` e
-   `.specify/memory/saas-reference.md` como `ausente`. **Decisão do humano necessária** (ver "Achados"
-   no fim). Restaure com `git checkout -- . && git status --porcelain`.
-3. **`maker init` sem `--force` da 1.0.0**:
+   Esperado (corrigido pela emenda): `rc=1` com `erro: Add-on "saas" não está aplicado em …` e
+   `git status --porcelain` **vazio**. Antes da emenda, `.maker/addons/saas.json` sobrevivia à migração
+   e a 1.0.0 (que lê esse arquivo antes do manifest, `v1.0.0:src/commands/remove.ts:13`) concluía o
+   remove com `rc=0`, apagando arquivos e blocos por baixo do estado real em `maker.lock` — o bug que
+   motivou esta emenda. Agora `.maker/addons/` não existe mais em pack (o estado do add-on migrou para
+   a seção `[addons]` do lockfile na mesma transação), então a 1.0.0 não encontra nada para "ler antes
+   do manifest" e para sem escrever.
+3. **`maker list` da 1.0.0 (só leitura)**:
+   ```bash
+   $OLD list --target "$P1"; echo "list rc=$?"
+   ```
+   Esperado: `rc=0`, `saas` aparece como `available` (não `applied` — a 1.0.0 enumera
+   `.maker/addons/*.json`, que não existe em pack), e nada é escrito.
+4. **`maker init` sem `--force` da 1.0.0**:
    ```bash
    $OLD init --target "$P1" --yes --name Nimbus --agent claude; echo "rc=$?"
    ls .maker/manifest.json 2>&1; git status --porcelain
@@ -368,7 +381,7 @@ Esperado: doctor `rc=0` com `aviso  bases por arquivo em .maker/bases junto ao l
    cria `.maker/manifest.json`. Isso é **mais seguro** que o descrito em `docs/maker-state.md` §5
    ("grava um segundo estado"); o caminho de coexistência que a doc descreve continua coberto pela
    detecção da J5c. Julgue se a doc deve ficar como está (conservadora) ou ser ajustada.
-4. **(Opcional) `init --force` da 1.0.0** — limitação conhecida e documentada: reinstala por cima.
+5. **(Opcional) `init --force` da 1.0.0** — limitação conhecida e documentada: reinstala por cima.
    Rode só se quiser ver o efeito e restaure com `git checkout -- . && git clean -fd`.
 
 ---
@@ -383,12 +396,13 @@ $NEW init --target "$P7" --yes --name "Novo" --agent claude
 ls -A "$P7/.maker"                                   # .gitattributes .gitignore maker.lock transactions workflow
 grep '^basesFormat' "$P7/.maker/maker.lock"          # basesFormat "pack"
 $NEW agent add codex --target "$P7" && $NEW add saas --yes --target "$P7"
-ls "$P7/.maker/bases" "$P7/.maker/manifest.json" 2>&1   # ambos ausentes
+ls "$P7/.maker/bases" "$P7/.maker/manifest.json" "$P7/.maker/addons" 2>&1   # todos ausentes
 $NEW doctor --target "$P7"; echo "rc=$?"
-(cd "$P7" && git init -q && git add -A && git ls-files .maker | wc -l)   # 16
+(cd "$P7" && git init -q && git add -A && git ls-files .maker | wc -l)   # 15
 ```
-Esperado: nenhuma base por arquivo em momento algum; doctor verde (`íntegro (pack)`); 16 arquivos
-versionados em `.maker` no install de referência (Claude + Codex + saas) sem nenhum opt-in.
+Esperado: nenhuma base por arquivo nem `.maker/addons` em momento algum (o `add saas` grava a unidade
+direto na seção `[addons]` do lockfile); doctor verde (`íntegro (pack)`); 15 arquivos versionados em
+`.maker` no install de referência (Claude + Codex + saas) sem nenhum opt-in.
 
 ---
 
@@ -398,13 +412,16 @@ versionados em `.maker` no install de referência (Claude + Codex + saas) sem ne
 
 1. Abra `docs/maker-state.md` e confronte a tabela §1 com `ls -A` de `P1/.maker` (pack) e de
    `P3/.maker` (files), mais os temporários de J2: cada item em **exatamente uma** linha/categoria, com
-   "Versionar?". Confira que a doc diz explicitamente que em pack não existem `manifest.json`/`bases/`.
-2. Confira os números da doc contra o observado: pack **16** (J1/J7). Para `files` a doc diz **137**
-   arquivos no install de referência; o install 1.0.0 de J1 tinha **101** (sem `.gitattributes`/
-   `.gitignore` e com menos bases) — julgue se a diferença de contexto está clara para o leitor.
+   "Versionar?". Confira que a doc diz explicitamente que em pack não existem
+   `manifest.json`/`bases/`/`addons/` (US-7).
+2. Confira os números da doc contra o observado: pack **15** (J1/J7, com a emenda US-7 — antes eram 16,
+   com `addons/saas.json` fora do lockfile). Para `files` a doc diz **137** arquivos no install de
+   referência; o install 1.0.0 de J1 tinha **101** (sem `.gitattributes`/`.gitignore` e com menos
+   bases) — julgue se a diferença de contexto está clara para o leitor.
 3. Em `docs/MIGRATION.md`, seção "Bases no formato pack por padrão": opt-out, "atualize o maker em todo
-   o time e na CI antes de migrar", limitações de `init`/`init --force` da 1.x. Compare com o que você
-   observou na J6 (em especial o `remove`).
+   o time e na CI antes de migrar", limitações de `init`/`init --force`/`remove` da 1.x (inclusive o
+   `remove` lendo `.maker/addons/<id>.json` antes do manifest). Compare com o que você observou na J6
+   (em especial o `remove`, agora corrigido).
 4. Notas de release (Q1 = BREAKING CHANGE): o texto de `contracts/cli-output.md` §5 deve entrar como
    rodapé `BREAKING CHANGE:` do commit/PR de entrega (`feat(state)!: …`), para o Release Please gerar
    2.0.0 e a seção "⚠ BREAKING CHANGES". Confira no PR antes do merge. `CHANGELOG.md` não é editado à mão.
@@ -413,16 +430,17 @@ versionados em `.maker` no install de referência (Claude + Codex + saas) sem ne
 
 ## Achados da preparação (para decisão no aceite)
 
-1. **`maker remove` da 1.0.0 escreve num install em pack** (J6 passo 2). Contradiz a premissa da
-   Clarification 20 / FR-006b ("todos os comandos mutantes da 1.0.0 abortam sem `.maker/manifest.json`"),
-   o §5 de `docs/maker-state.md`, a seção de `docs/MIGRATION.md` e o texto do BREAKING CHANGE. O AC-37
-   passa porque testa o **contrato simulado**, não o binário. Impacto: um colega/CI com 1.x que rode
-   `maker remove <addon>` num projeto já migrado remove o add-on dos arquivos de conteúdo sem atualizar
-   o lockfile; o doctor novo não acusa degradação (só `personalizado`/`ausente`). Opções: (a) corrigir a
-   documentação e o texto de release para incluir `remove` entre as exceções, junto de `init --force`;
-   (b) aceitar como limitação conhecida; (c) investigar mitigação técnica (fora do escopo desta feature).
+1. **`maker remove` da 1.0.0 escreve num install em pack** (J6 passo 2). **Resolvido pela Clarification
+   23 (esta emenda, US-7)**: o estado de cada add-on aplicado passa a viver na seção `[addons]` do
+   `maker.lock` em pack, e `.maker/addons/` deixa de existir — o `remove` da 1.0.0
+   (`v1.0.0:src/commands/remove.ts:13`, que decide o fluxo por `.maker/addons/<id>.json` antes do
+   manifest) não encontra mais nada para ler e conclui "não está aplicado" sem escrever. `AC-42`/`AC-37`
+   passam a provar isso tanto pelo simulador quanto pelo **binário real da tag** (S7,
+   `test/commands/legacy-reader.test.ts`). Documentação e texto de release corrigidos (D12).
 2. **`maker init` sem `--force` da 1.0.0 recusa por colisão** em vez de gravar um segundo estado
-   (J6 passo 3). É mais seguro que o documentado; a doc é conservadora. Decidir se ajusta o texto.
+   (J6 passo 4). É mais seguro que o documentado; a doc é conservadora. **Resolvido**: `docs/maker-state.md`
+   §5, `docs/MIGRATION.md` e o texto do BREAKING CHANGE (`contracts/cli-output.md` §5) foram corrigidos
+   para descrever o comportamento real e condicional da 1.x (D12).
 
 ---
 

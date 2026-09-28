@@ -280,7 +280,9 @@ Se a skill recém-instalada não aparecer, reinicie o Codex para recarregar a de
 
 Add-ons sobrepõem **pacotes de regras opcionais** a um projeto que já tem o motor — injetando
 princípios na constitution, fragmentos nos papéis compartilhados e arquivos de referência, de forma **idempotente e
-reversível** (rastreada por marcadores e por um estado em `.maker/addons/<id>.json`).
+reversível** (rastreada por marcadores e por um estado por add-on: `.maker/addons/<id>.json` no
+formato `files`, ou uma unidade na seção `[addons]` de `.maker/maker.lock` no formato `pack`, padrão —
+ver [Estado do maker](docs/maker-state.md)).
 
 ```bash
 maker list
@@ -290,7 +292,8 @@ maker remove saas
 
 `maker list` funciona mesmo fora de um projeto inicializado e mostra o catálogo local, versões,
 knobs e o próximo comando. Dentro de um projeto, também classifica cada add-on como `available`,
-`applied` ou `degraded` a partir do estado em `.maker/addons/`.
+`applied` ou `degraded` a partir do estado no formato em uso (lockfile em `pack`; `.maker/addons/` em
+`files`).
 
 ### `saas` — base multi-tenant / whitelabel / service-roles
 
@@ -377,7 +380,7 @@ pnpm package:smoke
 - [ ] **Novos add-ons sobre o mesmo framework:**
   - [ ] `observability` — princípios de logging/erros/eventos com contexto, neutros quanto a sink.
   - [ ] `i18n` — princípios de internacionalização (label maps, sem string hard-coded).
-- [x] **`maker list`** — listar add-ons disponíveis e quais estão aplicados no projeto (via `.maker/addons/`).
+- [x] **`maker list`** — listar add-ons disponíveis e quais estão aplicados no projeto (via o estado no formato em uso).
 - [x] **`maker update` com merge inteligente** — 3-way merge que preserva edições locais.
 - [x] **`maker doctor` ciente de add-ons** — reportar add-ons aplicados e reconciliar as injeções.
 - [x] **Publicação no npm** — `npm i -g @vinicius.cerqueira/maker` (v0.2.0 publicada).
