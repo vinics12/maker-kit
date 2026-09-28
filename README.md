@@ -219,7 +219,10 @@ sintoma (agentes degradados, add-on reaplicado, config ausente, conflitos) e a c
   constitution do projeto** — nenhuma regra de negócio é codificada no motor.
 - `.specify/memory/` — `constitution.md` (Processo PR1–PR6 + seções vazias) e os stubs guiados
   `project-rules.md` / `product-overview.md`.
-- `.maker/manifest.json` — inventário sha256 usado por `doctor`/`update`.
+- `.maker/` — estado do install (inventário sha256 usado por `doctor`/`update`, bases de merge e
+  papéis do pipeline), no formato compacto `.maker/maker.lock` por padrão ou por arquivo
+  (`.maker/manifest.json` + `.maker/bases/`) via opt-out. Veja [taxonomia de `.maker` e formatos de
+  estado](docs/maker-state.md).
 
 ---
 

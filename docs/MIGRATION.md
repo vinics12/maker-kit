@@ -177,6 +177,40 @@ constitution e dos papéis que tinham bloco de add-on. Se isso aconteceu, recupe
 histórico do git (`git log -p -- <arquivo>`) e reaplique-o à mão ou por mediação; a versão atual não
 repete o problema.
 
+## Bases no formato pack por padrão
+
+A partir desta versão, o formato padrão de armazenamento do manifest e das bases é `"pack"`: tudo
+vive num único arquivo, `.maker/maker.lock`, em vez de `.maker/manifest.json` + uma base por arquivo
+em `.maker/bases/`. Detalhes completos (taxonomia, trade-offs, diagnóstico e recuperação) em
+[`docs/maker-state.md`](maker-state.md).
+
+- **Quem é afetado:** qualquer install sem `state.bases` declarado em `maker.config.json` e sem
+  formato já registrado no manifest (a maioria dos installs existentes). O primeiro `maker update`
+  depois de atualizar a CLI migra automaticamente: `.maker/manifest.json` e `.maker/bases/` deixam de
+  existir e o conteúdo passa a viver em `.maker/maker.lock`. O `--dry-run` mostra o relatório da
+  migração antes de aplicar (contagem de bases migradas/descartadas).
+- **Opt-out:** para manter bases por arquivo, declare em `maker.config.json` antes de rodar o
+  `update`:
+
+  ```json
+  { "state": { "bases": "files" } }
+  ```
+
+- **Atualize o maker em todo o time e na CI antes de migrar.** Versões anteriores (1.x) identificam um
+  install pela presença de `.maker/manifest.json`; num install já em `pack` esse arquivo não existe, e
+  um `maker init` (sem `--force`) de uma versão antiga não vê colisão — grava
+  `.maker/manifest.json` + `.maker/bases/` ao lado do `maker.lock`, criando uma coexistência que a
+  versão atual detecta e recusa a resolver sozinha (`maker doctor` falha, comandos mutantes abortam).
+  `maker init --force` de uma versão antiga, por sua vez, reinstalaria por cima independentemente do
+  formato (limitação conhecida). Depois do update, `maker doctor` deve terminar em
+  `✓ Install íntegro (pack).`
+
+```bash
+maker update --dry-run   # confere o relatório de migração antes de aplicar
+maker update
+maker doctor             # ✓ Install íntegro (pack).
+```
+
 ## 4. Verificação final
 
 - [ ] `maker doctor` termina com `✓ Install íntegro.` e sem arquivos aguardando mediação. Arquivos que
@@ -202,6 +236,10 @@ repete o problema.
 - **Manifest:** entradas podem ganhar `baseHash` (base do próximo merge) e `edited` (arquivo com
   customização sem base exata). Não edite esses campos à mão.
 - **Nova skill** `maker-update` instalada para Claude (`.claude/skills/`) e Codex (`.agents/skills/`).
+- **Doctor no Windows:** a validação de integração do frontmatter em `.claude/**` passa a tolerar
+  `\r\n` (CRLF). Corrige um falso-positivo em projetos com `core.autocrlf=true` no Windows, onde o
+  git converte esses arquivos para CRLF no checkout e o `doctor` reportava a integração Claude como
+  quebrada mesmo em installs íntegros — bug presente desde a 1.0.0.
 
 ## 6. Se algo der errado
 
