@@ -56,8 +56,11 @@ export function readManifest(targetDir: string): Promise<Manifest | null>;
  * Planeja a escrita do estado no `format` pedido. Não escreve nada.
  * - bases: bases que o resultado deve conter além das mantidas.
  * - prune=false: mantém todas as bases válidas já presentes (pack: carrega-as no lockfile;
- *   files: não remove nenhum arquivo). prune=true: o resultado contém exatamente `bases`
- *   (files: remove arquivos com nome de hash fora do conjunto).
+ *   files: não remove nenhum arquivo). prune=true: o resultado contém exatamente `bases` ∪
+ *   `preserve` (files: remove arquivos com nome de hash fora desse conjunto).
+ * - preserve (opcional): hashes ainda referenciados pelo manifest cujo arquivo não verifica
+ *   (corrompido) — nunca são podados; diagnóstico é do doctor. Só afeta o formato files: em pack,
+ *   entradas que não verificam não são reescritas no lockfile (cli-output §1).
  * - consolidate=true: remove o armazenamento do outro formato (pack → manifest.json e bases/;
  *   files → lockfile). consolidate=false com format ≠ state.inUse é erro de programação.
  * - Sempre: manifest.config sem `state`; base files gravadas com force (conteúdo endereçado);
@@ -68,7 +71,7 @@ export function readManifest(targetDir: string): Promise<Manifest | null>;
 export function planStateWrite(
   state: InstallState | null,
   targetDir: string,
-  next: { manifest: Manifest; format: BasesFormat; bases: ReadonlyMap<string, Buffer>; consolidate?: boolean; prune?: boolean },
+  next: { manifest: Manifest; format: BasesFormat; bases: ReadonlyMap<string, Buffer>; consolidate?: boolean; prune?: boolean; preserve?: ReadonlySet<string> },
 ): Promise<PlannedChange[]>;
 
 /** União de bases válidas (helper para chamadores). */
