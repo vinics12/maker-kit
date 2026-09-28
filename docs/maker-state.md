@@ -1,50 +1,60 @@
 # Estado do maker em `.maker`
 
 Este documento explica o que existe dentro de `.maker` no projeto-alvo, o que versionar, os dois
-formatos de armazenamento das bases de merge, como escolher/trocar entre eles e como diagnosticar e
-recuperar o estado quando algo dá errado. A referência completa da gramática do lockfile fica em
-`specs/003-compact-maker-state/contracts/lockfile-format.md`; este documento é a versão para consumo
-externo, orientada a decisão e operação.
+formatos de armazenamento (manifest + bases), como escolher/trocar entre eles e como diagnosticar e
+recuperar o estado quando algo dá errado.
 
 ## 1. As quatro categorias de itens em `.maker`
 
-| Categoria | Formato `files` | Formato `pack` | Versionar? |
-|---|---|---|---|
-| **Estado autoritativo** (manifest: metadados do install + entrada de cada arquivo gerenciado; estado de add-ons) | `.maker/manifest.json` | `.maker/maker.lock` (seção `[manifest]`) | **Sim** |
-| **Snapshots de base** (conteúdo original de cada arquivo gerenciado, usado no merge 3-way) | um arquivo por hash em `.maker/bases/<hash>` | `.maker/maker.lock` (seção `[bases]`, dentro do mesmo arquivo do manifest) | **Sim** |
-| **Arquivos gerenciados** (papéis do pipeline compartilhados pelos adaptadores) | `.maker/workflow/agents/*.md` | idem | **Sim** |
-| **Temporários** (nunca versionar) | `.maker/transactions/`, `.maker/transaction.lock`, `.maker/mediation/`, `.maker/runs/` | idem | **Não** — cobertos por `.maker/.gitignore` |
+Uma linha por item, nos dois formatos:
 
-Em `pack`, o lockfile (`.maker/maker.lock`) é **um único arquivo** que contém as duas primeiras
-categorias — o manifest (estado autoritativo) e as bases (snapshots). Ele é listado uma única vez na
-tabela acima como estado autoritativo porque essa é a categoria que domina sua natureza (é ele quem
-identifica o install e quem os comandos mutantes leem/travam primeiro); a linha deixa explícito que
-ele **também contém** os snapshots. **Nesse formato, `.maker/manifest.json` e `.maker/bases/` não
-existem** — um leitor que procura por `.maker/manifest.json` (ex.: maker 1.0.0) conclui "nenhum
-install" e não escreve nada por cima (ver §4).
+| Item | Categoria | `files` | `pack` | Versionar? |
+|---|---|---|---|---|
+| `.maker/maker.lock` | Estado autoritativo (contém também os snapshots) | — | ✓ | Sim |
+| `.maker/manifest.json` | Estado autoritativo | ✓ | — | Sim |
+| `.maker/bases/<hash>` | Snapshots de base | ✓ | — | Sim |
+| `.maker/addons/<id>.json` | Estado autoritativo | ✓ | ✓ | Sim |
+| `.maker/workflow/agents/*.md` | Arquivos gerenciados | ✓ | ✓ | Sim |
+| `.maker/.gitattributes` | Arquivos gerenciados | ✓ | ✓ | Sim |
+| `.maker/.gitignore` | Arquivos gerenciados | ✓ | ✓ | Sim |
+| `.maker/transactions/` | Temporários | ✓ | ✓ | Não |
+| `.maker/transaction.lock` | Temporários | ✓ | ✓ | Não |
+| `.maker/mediation/` | Temporários | ✓ | ✓ | Não |
+| `.maker/runs/` | Temporários | ✓ | ✓ | Não |
 
-Dois arquivos adicionais, de controle do git, são gerenciados como arquivos comuns (com merge 3-way e
-preservação de customização) e sempre versionados nos dois formatos:
+- **Estado autoritativo**: metadados do install e uma entrada por arquivo gerenciado (manifest), mais
+  o estado de cada add-on aplicado. Em `pack` o manifest vive dentro do `.maker/maker.lock`, numa seção
+  de texto `[manifest]` com uma linha por metadado e um bloco por arquivo; em `files` é
+  `.maker/manifest.json`.
+- **Snapshots de base**: o conteúdo original de cada arquivo gerenciado (o "base" do merge 3-way),
+  endereçado por hash sha256. Em `pack` fica na seção `[bases]` do mesmo `.maker/maker.lock` — por
+  isso esse arquivo tem uma única linha na tabela, como estado autoritativo, com a ressalva "contém
+  também os snapshots"; em `files` é um arquivo por hash em `.maker/bases/`.
+- **Arquivos gerenciados**: papéis do pipeline compartilhados pelos adaptadores
+  (`.maker/workflow/agents/*.md`) e os dois arquivos de controle do git, também mantidos por merge
+  3-way com preservação de customização: `.maker/.gitattributes` (`maker.lock -text diff merge=text
+  linguist-generated=true` e `bases/** -text linguist-generated=true` — impede conversão de fim de
+  linha e marca lockfile/bases como gerados no PR) e `.maker/.gitignore` (`/transactions/`,
+  `/transaction.lock`, `/mediation/`, `/runs/` — os temporários da linha seguinte).
+- **Temporários**: nunca versionados, cobertos pelo `.maker/.gitignore` acima —
+  `.maker/transactions/` (journal de transações), `.maker/transaction.lock` (mutex), `.maker/mediation/`
+  (exports/propostas em andamento) e `.maker/runs/` (event-stream do pipeline gerado).
 
-| Arquivo | Papel |
-|---|---|
-| `.maker/.gitattributes` | `maker.lock -text diff merge=text linguist-generated=true` e `bases/** -text linguist-generated=true` — impede conversão de fim de linha (o hash tem de conferir byte a byte) e marca o lockfile/as bases como gerados no PR. |
-| `.maker/.gitignore` | `/transactions/`, `/transaction.lock`, `/mediation/`, `/runs/` — os temporários da categoria acima. |
+**Em `pack`, `.maker/manifest.json` e `.maker/bases/` não existem**: um leitor que procura por
+`.maker/manifest.json` (ex.: maker 1.0.0) conclui "nenhum install" e não escreve nada por cima
+(ver §5).
 
 ### Install de referência
 
-Um install com Claude + Codex + o add-on `saas`, no formato `pack` (o default), versiona **16
-arquivos** em `.maker`:
+Um install com Claude + Codex + o add-on `saas` versiona, em `.maker`:
 
-- `maker.lock` (1)
-- `addons/<id>.json` (1 por add-on aplicado — 1 para `saas`)
-- `workflow/agents/*.md` (12 — um por papel do pipeline: `architect`, `code-reviewer`, `dev`,
-  `e2e-planner`, `e2e-runner`, `feature-cataloguer`, `plan-reviewer`, `pm-validator`, `spec-author`,
-  `spec-reviewer`, `ux-designer`, `visual-reviewer`)
-- `.gitattributes`, `.gitignore` (2)
-
-No formato `files`, o mesmo install versiona os mesmos 16 mais `manifest.json` e uma base por arquivo
-gerenciado (`.maker/bases/<hash>`) em vez do único `maker.lock`.
+- **`pack`** (o default): **16 arquivos** — `maker.lock` (1), `addons/saas.json` (1),
+  `workflow/agents/*.md` (12: `architect`, `code-reviewer`, `dev`, `e2e-planner`, `e2e-runner`,
+  `feature-cataloguer`, `plan-reviewer`, `pm-validator`, `spec-author`, `spec-reviewer`, `ux-designer`,
+  `visual-reviewer`), `.gitattributes` e `.gitignore` (2).
+- **`files`**: **137 arquivos** — os mesmos 15 acima (tudo, exceto o `maker.lock`) mais
+  `manifest.json` (1) e uma base por arquivo gerenciado em `.maker/bases/<hash>` (121, incluindo os
+  arquivos do SpecKit stock e os demais arquivos comuns do engine, não só os 12 papéis).
 
 ## 2. Formatos de armazenamento das bases
 
@@ -124,8 +134,9 @@ cada achado com severidade e ação. Casos cobertos:
 | Situação | O que acontece | Como recuperar |
 |---|---|---|
 | **Coexistência** (`.maker/manifest.json` **e** `.maker/maker.lock` presentes ao mesmo tempo — típico de merge entre branches em formatos diferentes) | Comandos mutantes abortam antes de escrever; `doctor` falha | Escolha um dos dois estados e remova o outro, ou restaure `.maker` do histórico do git |
-| **Lockfile ilegível** (JSON/arquivo corrompido, cabeçalho ausente) | Comandos mutantes abortam; `doctor` falha | Restaure `.maker/maker.lock` do histórico do git |
-| **Versão de formato desconhecida** (cabeçalho `maker-lockfile N` com `N` maior que o suportado) | Comandos mutantes abortam; `doctor` falha | Atualize o maker |
+| **Manifest ilegível** (`.maker/manifest.json` com JSON malformado, formato `files`) | Comandos mutantes abortam; `doctor` falha | Restaure `.maker/manifest.json` do histórico do git |
+| **Lockfile ilegível** (`.maker/maker.lock` com cabeçalho ausente ou conteúdo que não segue a gramática do formato, formato `pack`) | Comandos mutantes abortam; `doctor` falha | Restaure `.maker/maker.lock` do histórico do git |
+| **Versão de formato desconhecida** (cabeçalho `maker-lockfile N` com `N` diferente da versão suportada por este maker) | Comandos mutantes abortam; `doctor` falha | Atualize o maker |
 | **Base ausente** (hash referenciado pelo manifest sem conteúdo correspondente, em nenhum dos dois formatos) | O `update` preserva o arquivo dependente e pede mediação | Restaure a base do histórico do git; sem ela, a mediação resolve o arquivo dependente |
 | **Base corrompida** (conteúdo não confere com o hash declarado) | `doctor` falha | Restaure a base do histórico do git; confira `.maker/.gitattributes` (fim de linha) |
 | **CRLF** (o lockfile ou uma base foram convertidos para `\r\n`, ex.: clone sem o `.maker/.gitattributes` aplicado ainda) | A leitura tenta a variante `\r\n → \n`; se o sha256 conferir depois da conversão, a base é recuperada e utilizável para merge, mas o `doctor` **continua** reportando `base-corrupt` (o armazenamento está, de fato, corrompido) | Confira que `.maker/.gitattributes` está presente e aplicado (`git check-attr -a -- .maker/maker.lock`); rode `maker update` — ele regrava a base correta (em `files`: sobrescreve; em `pack`: o lockfile inteiro é regravado) |
@@ -137,7 +148,8 @@ cada achado com severidade e ação. Casos cobertos:
 | **Transação pendente** (comando interrompido no meio de uma escrita, inclusive de uma migração) | O próximo comando mutante recupera a transação **antes** de ler o resto do estado; o `doctor` reporta isso antes de qualquer outro achado, inclusive antes de concluir "nenhum install" | Rode qualquer comando que altera o install (ex.: `maker update`) — a recuperação é automática |
 
 Instalação íntegra (qualquer formato): a seção do doctor imprime só
-`Estado (.maker): íntegro (<formato>)`.
+`Estado (.maker): íntegro (<formato>)` (ex.: `Estado (.maker): íntegro (pack)`) e o doctor termina em
+`✓ Install íntegro.`.
 
 ## 5. Compatibilidade com a 1.0.0
 
@@ -146,14 +158,16 @@ A CLI publicada como 1.0.0 não valida `schemaVersion` e todos os seus comandos 
 arquivo não existe — a única mitigação possível para quem ainda roda a 1.0.0 é a orientação nas notas
 de release (ver o texto completo em `CHANGELOG.md`, a partir do commit desta mudança):
 
-- **`maker init` (sem `--force`) da 1.0.0 sobre um install em `pack`**: não encontra colisão (não há
-  `.maker/manifest.json`) e grava `.maker/manifest.json` + `.maker/bases/` ao lado do `maker.lock`. A
-  versão atual detecta essa **coexistência** no próximo comando e aborta com a ação de resolver
-  manualmente (ver tabela do §4) — não há degradação silenciosa, mas o dano (dois estados presentes)
-  já aconteceu antes de o maker poder avisar. Por isso: **atualize o maker em todo o time e na CI antes
-  de migrar** um projeto para o formato compacto.
-- **`maker init --force` da 1.0.0 sobre um install em `pack`** (limitação conhecida): `--force` não
-  depende do manifest para decidir se reinstala, então reinstala por cima independentemente do
+- **Comandos mutantes da 1.0.0** (`update`, `add`, `remove`, `agent add`) sobre um install em `pack`:
+  não encontram `.maker/manifest.json`, concluem "nenhum install" e **param sem escrever nada**.
+- **`maker init` sem `--force` da 1.0.0** sobre um install em `pack`: pelo mesmo motivo, não vê
+  colisão com o install existente e **grava um segundo estado** — `.maker/manifest.json` +
+  `.maker/bases/` ao lado do `maker.lock`. A versão atual **detecta essa coexistência** no próximo
+  comando e aborta com a ação de resolver manualmente (ver tabela do §4) — não há degradação
+  silenciosa, mas o dano (dois estados presentes) já aconteceu antes de o maker poder avisar. Por isso:
+  **atualize o maker em todo o time e na CI antes de migrar** um projeto para o formato compacto.
+- **`maker init --force` da 1.0.0** sobre um install em `pack` (limitação conhecida): `--force` não
+  depende do manifest para decidir se reinstala, então **reinstala por cima** independentemente do
   formato. É uma ação explícita de força; a mitigação é a mesma orientação acima.
 
 Veja `docs/MIGRATION.md` para o passo a passo completo de atualização de um install existente,
