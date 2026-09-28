@@ -59,7 +59,9 @@ export async function validateAgentIntegration(
 
   for (const rel of skillFiles) {
     const path = join(skillRoot, rel);
-    const content = await readFile(path, "utf-8");
+    // Normaliza antes de validar: git com core.autocrlf=true converte .claude/** (fora de .maker,
+    // raiz intocada por FR-030) para CRLF, e as âncoras `^`/`$` do frontmatter exigem `\n` puro.
+    const content = (await readFile(path, "utf-8")).replace(/\r\n/g, "\n");
     if (!/^---\n[\s\S]*?^name:\s*.+$[\s\S]*?^description:\s*.+$[\s\S]*?^---$/m.test(content)) {
       issues.push(`${relativeRoot(provider, "skills")}/${rel}: frontmatter name/description inválido`);
     }
@@ -70,7 +72,7 @@ export async function validateAgentIntegration(
 
   for (const rel of agentFiles) {
     const path = join(agentRoot, rel);
-    const content = await readFile(path, "utf-8");
+    const content = (await readFile(path, "utf-8")).replace(/\r\n/g, "\n");
     if (provider === "codex") {
       try {
         codexAgentSchema.parse(parseToml(content));
