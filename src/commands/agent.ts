@@ -35,8 +35,8 @@ export async function runAgentAdd(providerInput: string, opts: AgentAddOptions):
   const ctx = buildContext(config, manifest.installedAt);
   await assertNoUnmanagedProviderFiles(targetDir, provider, manifest.files, ctx);
 
-  // Renderiza em staging para planejar contra o alvo real numa única transação (FR-022): nada é
-  // escrito fora do plano, e um crash a meio caminho recupera para o estado anterior.
+  // Renderiza em staging para planejar contra o alvo real numa única transação: nada é escrito
+  // fora do plano, e um crash a meio caminho recupera para o estado anterior.
   const includeShared = !existsSync(join(targetDir, ".maker/workflow/agents"));
   const staging = await mkdtemp(join(tmpdir(), "maker-agent-add-"));
   const changes: PlannedChange[] = [];
