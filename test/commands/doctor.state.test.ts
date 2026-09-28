@@ -3,8 +3,9 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { BasesFormat } from "../../src/render/manifest.js";
 import { runDoctor } from "../../src/commands/doctor.js";
+import { addonStateFile, ADDONS_DIR } from "../../src/state/paths.js";
 import {
-  corruptBase, initInstall, lockfileText, putBase, readManifest, removeBase, snapshotTree, writeManifest,
+  corruptBase, initInstall, writeAddonStateFile, lockfileText, putBase, readManifest, removeBase, snapshotTree, writeManifest,
 } from "../helpers/state.js";
 
 const AGENTS = "AGENTS.md";
@@ -185,6 +186,51 @@ describe("maker doctor — Estado (.maker): migração pendente (AC-17/AC-35)", 
 
     const output = await outputOf(() => runDoctor({ target }));
     expect(output).not.toContain("migrará as bases");
+    expect(process.exitCode).not.toBe(1);
+  });
+});
+
+describe("maker doctor — estado de add-on (AC-44, AC-47)", () => {
+  it.each<[string, string | Record<string, unknown>]>([
+    ["JSON ilegível", "{ json inválido"],
+    ["JSON fora do schema", { id: "saas", version: 1 }],
+  ])("AC-47: %s com migração pendente files → pack — aviso citando o arquivo e a ação; o opt-out remove o aviso", async (_label, content) => {
+    const target = await initInstall("maker-doctor-state-addon-invalid-", { format: "unset" });
+    await writeAddonStateFile(target, "saas", content as never);
+
+    const output = await outputOf(() => runDoctor({ target }));
+    expect(output).toContain(`estado de add-on não migrável em ${addonStateFile("saas")}`);
+    expect(output).toContain('a migração para "pack" está bloqueada');
+    expect(output).toContain('declare "state": { "bases": "files" } em maker.config.json');
+    expect(output).toMatch(/aviso.*estado de add-on não migrável/);
+    // O estado inválido do add-on em si também é reportado pela checagem de add-ons; o aviso é da migração.
+    process.exitCode = 0;
+
+    await writeFile(join(target, "maker.config.json"), JSON.stringify({ state: { bases: "files" } }), "utf-8");
+    const optedOut = await outputOf(() => runDoctor({ target }));
+    expect(optedOut).not.toContain("não migrável");
+    expect(optedOut).not.toContain("bloqueada");
+  });
+
+  it("AC-44: .maker/addons/<id>.json junto ao lockfile — falha com addon-coexistence, exit 1", async () => {
+    const target = await initInstall("maker-doctor-state-addon-coexist-", { format: "pack" });
+    await writeAddonStateFile(target, "saas", "{}");
+
+    const output = await outputOf(() => runDoctor({ target }));
+    expect(output).toContain(".maker/addons/<id>.json e .maker/maker.lock coexistem (saas)");
+    expect(output).toContain("escolha um estado e remova o outro, ou restaure .maker do histórico do git");
+    expect(process.exitCode).toBe(1);
+    process.exitCode = 0;
+  });
+
+  it("AC-44: pack com .maker/addons/ vazio — verde, sem aviso", async () => {
+    const target = await initInstall("maker-doctor-state-addon-empty-", { format: "pack", addon: "saas" });
+    await mkdir(join(target, ADDONS_DIR), { recursive: true });
+
+    const output = await outputOf(() => runDoctor({ target }));
+    expect(output).toContain("✓ Install íntegro.");
+    expect(output).not.toContain("coexistem");
+    expect(output).not.toMatch(/aviso|falha/i);
     expect(process.exitCode).not.toBe(1);
   });
 });

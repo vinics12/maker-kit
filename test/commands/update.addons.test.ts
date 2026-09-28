@@ -5,13 +5,19 @@ import { join } from "node:path";
 import { runInit } from "../../src/commands/init.js";
 import { runUpdate } from "../../src/commands/update.js";
 import { runAgentAdd } from "../../src/commands/agent.js";
+import { runAdd } from "../../src/commands/add.js";
+import { runRemove } from "../../src/commands/remove.js";
 import { runDoctor } from "../../src/commands/doctor.js";
-import { addonStateFile, LOCKFILE, MANIFEST_FILE } from "../../src/state/paths.js";
+import { addonStateFile, ADDONS_DIR, isStateMetadata, LOCKFILE, MANIFEST_FILE } from "../../src/state/paths.js";
+import { openState } from "../../src/state/store.js";
 import {
   initInstall, lockfileText, readAddonStates, readManifest, snapshotTree, writeAddonStateFile,
 } from "../helpers/state.js";
 
-const injected = vi.hoisted(() => ({ options: undefined as { failAfter?: number; crashAfter?: number } | undefined }));
+const injected = vi.hoisted(() => ({
+  options: undefined as { failAfter?: number; crashAfter?: number } | undefined,
+  lastPlan: [] as { path: string; action: string }[],
+}));
 vi.mock("../../src/changes/transaction.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/changes/transaction.js")>();
   return {
@@ -19,6 +25,7 @@ vi.mock("../../src/changes/transaction.js", async (importOriginal) => {
     applyChangePlan: async (plan: Parameters<typeof actual.applyChangePlan>[0], options?: Parameters<typeof actual.applyChangePlan>[1]) => {
       const forced = injected.options;
       injected.options = undefined;
+      injected.lastPlan = plan.changes.map((change) => ({ path: change.path, action: change.action }));
       return actual.applyChangePlan(plan, forced ? { ...options, ...forced } : options);
     },
   };
@@ -88,21 +95,80 @@ describe("update: estado de add-ons na migração de formato (US-7)", () => {
     expect(second).toBe(first);
   });
 
-  it("crashAfter na migração files→pack: recupera exatamente o estado anterior, inclusive o do add-on", async () => {
+  it("crashAfter na migração files→pack: a recuperação devolve exatamente o estado anterior, inclusive o do add-on", async () => {
     const target = await initInstall("maker-update-addons-crash-", { format: "unset", addon: "saas" });
     directories.push(target);
     const before = await snapshotTree(target);
     vi.spyOn(console, "log").mockImplementation(() => {});
     injected.options = { crashAfter: 0 };
-    await expect(runUpdate({ target })).rejects.toThrow();
+    await expect(runUpdate({ target })).rejects.toThrow(/crashAfter/);
+    expect(await snapshotTree(target)).not.toEqual(before);
 
-    // Próximo comando mutante recupera a transação pendente antes de ler.
+    // Abrir o estado para mutar recupera a transação pendente antes de ler.
+    await openState(target, { mode: "mutate" });
+    expect(await snapshotTree(target)).toEqual(before);
+    expect((await readAddonStates(target)).has("saas")).toBe(true);
+
     await runUpdate({ target });
-    const finalTree = await snapshotTree(target);
-    expect(finalTree).not.toEqual(before); // a segunda tentativa migra de verdade
     expect(existsSync(join(target, LOCKFILE))).toBe(true);
     expect(existsSync(join(target, ".maker", "addons"))).toBe(false);
     await doctorGreen(target);
+  });
+
+  type PlannedOp = { path: string; action: string };
+
+  /** Mesma ordem em que `applyChangePlan` executa: metadados de estado por último, create/update antes de remove. */
+  function executionOrder(plan: PlannedOp[]): PlannedOp[] {
+    const rank = (change: PlannedOp) => (!isStateMetadata(change.path) ? 0 : change.action === "remove" ? 2 : 1);
+    return plan.filter((change) => ["create", "update", "remove"].includes(change.action))
+      .sort((a, b) => rank(a) - rank(b) || a.path.localeCompare(b.path));
+  }
+
+  /** Falha logo depois de cada operação de estado indicada; cada falha tem de devolver a árvore inicial. */
+  async function failAfterEachOperation(target: string, before: Map<string, string>, operations: PlannedOp[]): Promise<void> {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    injected.options = { failAfter: 0 };
+    await expect(runUpdate({ target })).rejects.toThrow(/Falha injetada/);
+    expect(await snapshotTree(target)).toEqual(before);
+    const order = executionOrder(injected.lastPlan);
+    for (const operation of operations) {
+      const index = order.findIndex((change) => change.path === operation.path && change.action === operation.action);
+      expect(index, `${operation.action} ${operation.path} está no plano`).toBeGreaterThanOrEqual(0);
+      injected.options = { failAfter: index };
+      await expect(runUpdate({ target })).rejects.toThrow(/Falha injetada/);
+      expect(await snapshotTree(target)).toEqual(before);
+    }
+  }
+
+  it("failAfter depois de criar maker.lock, de remover .maker/addons e de remover manifest.json (files→pack): árvore idêntica à inicial", async () => {
+    const target = await initInstall("maker-update-addons-fail-forward-", { format: "unset", addon: "saas" });
+    directories.push(target);
+    const before = await snapshotTree(target);
+    await failAfterEachOperation(target, before, [
+      { path: LOCKFILE, action: "create" },
+      { path: ADDONS_DIR, action: "remove" },
+      { path: MANIFEST_FILE, action: "remove" },
+    ]);
+
+    await runUpdate({ target });
+    expect(existsSync(join(target, LOCKFILE))).toBe(true);
+    expect(existsSync(join(target, ".maker", "addons"))).toBe(false);
+  });
+
+  it("failAfter depois de criar manifest.json, de criar o JSON do add-on e de remover maker.lock (pack→files): árvore idêntica à inicial", async () => {
+    const target = await initInstall("maker-update-addons-fail-back-", { format: "pack", addon: "saas" });
+    directories.push(target);
+    await writeFile(join(target, "maker.config.json"), JSON.stringify({ state: { bases: "files" } }));
+    const before = await snapshotTree(target);
+    await failAfterEachOperation(target, before, [
+      { path: MANIFEST_FILE, action: "create" },
+      { path: addonStateFile("saas"), action: "create" },
+      { path: LOCKFILE, action: "remove" },
+    ]);
+
+    await runUpdate({ target });
+    expect(existsSync(join(target, LOCKFILE))).toBe(false);
+    expect(existsSync(join(target, addonStateFile("saas")))).toBe(true);
   });
 
   it("AC-36: pack + .maker/addons/ vazio → o próximo update remove o diretório", async () => {
@@ -146,14 +212,30 @@ describe("update: estado de add-ons na migração de formato (US-7)", () => {
     expect(await snapshotTree(target)).toEqual(before);
   });
 
-  it("AC-44: agent add com coexistência de add-on aborta, árvore idêntica", async () => {
-    const target = await initInstall("maker-update-addons-agent-coexist-", { format: "pack" });
-    directories.push(target);
-    await mkdir(join(target, ".maker", "addons"), { recursive: true });
-    await writeFile(join(target, ".maker", "addons", "saas.json"), "{}");
-    const before = await snapshotTree(target);
-    await expect(runAgentAdd("codex", { target })).rejects.toThrow(/coexistem/);
-    expect(await snapshotTree(target)).toEqual(before);
+  describe.each([["com", "saas"], ["sem", undefined]] as const)("AC-44: lockfile + .maker/addons/saas.json (%s unidade correspondente no lockfile)", (_label, addon) => {
+    const FIXTURE = join(__dirname, "..", "..", "fixtures", "example.config.json");
+    const commands: [string, (target: string) => Promise<unknown>][] = [
+      ["add", (target) => runAdd("saas", { target, yes: true })],
+      ["remove", (target) => runRemove("saas", { target })],
+      ["agent add", (target) => runAgentAdd("codex", { target })],
+      ["init sobre o install existente", (target) => runInit({ target, config: FIXTURE, yes: true })],
+      ["update", (target) => runUpdate({ target })],
+      ["update --apply-resolutions", (target) => runUpdate({ target, applyResolutions: true })],
+    ];
+
+    it.each(commands)("%s aborta por coexistência, com ação recomendada e árvore idêntica", async (_name, run) => {
+      const target = await initInstall("maker-update-addons-coexist-", { format: "pack", addon });
+      directories.push(target);
+      await writeAddonStateFile(target, "saas", "{}");
+      const before = await snapshotTree(target);
+
+      const error = await run(target).then(() => null, (thrown: Error) => thrown);
+      expect(error).not.toBeNull();
+      expect(error!.message).toMatch(/\.maker\/addons\/<id>\.json e \.maker\/maker\.lock coexistem \(saas\)/);
+      expect(error!.message).toContain("escolha um estado e remova o outro, ou restaure .maker do histórico do git");
+      expect(error!.message).not.toContain("não está aplicado");
+      expect(await snapshotTree(target)).toEqual(before);
+    });
   });
 
   it("S1/AC-47: files com chave fora da gramática do lockfile → update default aborta com opt-out; com state.bases: files segue", async () => {
@@ -174,13 +256,47 @@ describe("update: estado de add-ons na migração de formato (US-7)", () => {
     expect(existsSync(join(target, addonStateFile("saas")))).toBe(true);
   });
 
-  it("addon-state-invalid: files com JSON inválido + migração default → aborta sem escrita", async () => {
-    const target = await initInstall("maker-update-addons-json-invalid-", { format: "unset" });
+  const INVALID_STATES: [string, string | Record<string, unknown>][] = [
+    ["JSON ilegível", "{ json inválido"],
+    ["JSON fora do schema do estado de add-on", { id: "saas", version: 1 }],
+  ];
+
+  it.each(INVALID_STATES)("AC-47: %s em files + migração default → aborta sem escrita, citando o arquivo, a ação e o opt-out", async (_label, content) => {
+    const target = await initInstall("maker-update-addons-invalid-state-", { format: "unset" });
     directories.push(target);
-    await writeAddonStateFile(target, "saas", "{ json inválido");
+    await writeAddonStateFile(target, "saas", content as never);
     const before = await snapshotTree(target);
-    await expect(runUpdate({ target })).rejects.toThrow(/estado de add-on não migrável/);
+
+    const error = await runUpdate({ target }).then(() => null, (thrown: Error) => thrown);
+    expect(error).not.toBeNull();
+    expect(error!.message).toContain("estado de add-on não migrável em .maker/addons/saas.json");
+    expect(error!.message).toContain("nenhuma alteração foi feita");
+    expect(error!.message).toContain("corrija ou restaure o arquivo");
+    expect(error!.message).toContain('"state": { "bases": "files" }');
     expect(await snapshotTree(target)).toEqual(before);
+    expect(existsSync(join(target, LOCKFILE))).toBe(false);
+  });
+
+  it.each(INVALID_STATES)("AC-47: update --dry-run com %s reporta a migração como bloqueada, sem escrever", async (_label, content) => {
+    const target = await initInstall("maker-update-addons-invalid-dry-", { format: "unset" });
+    directories.push(target);
+    await writeAddonStateFile(target, "saas", content as never);
+    const before = await snapshotTree(target);
+
+    await expect(runUpdate({ target, dryRun: true }))
+      .rejects.toThrow(/estado de add-on não migrável em \.maker\/addons\/saas\.json.*"state": \{ "bases": "files" \}/s);
+    expect(await snapshotTree(target)).toEqual(before);
+  });
+
+  it.each(INVALID_STATES)("AC-47: %s com state.bases: files explícito → nenhuma migração é tentada e o update segue", async (_label, content) => {
+    const target = await initInstall("maker-update-addons-invalid-optout-", { format: "unset" });
+    directories.push(target);
+    await writeAddonStateFile(target, "saas", content as never);
+    await writeFile(join(target, "maker.config.json"), JSON.stringify({ state: { bases: "files" } }));
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    await runUpdate({ target });
+    expect(existsSync(join(target, LOCKFILE))).toBe(false);
+    expect(existsSync(join(target, addonStateFile("saas")))).toBe(true);
   });
 
   it("S3: .maker/addons não-diretório + pack → files → aborta com addons-dir-invalid", async () => {

@@ -85,10 +85,9 @@ function legacyRemoveSimulator(target: string, id: string): RemoveOutcome {
 }
 
 /** v1.0.0:src/commands/add.ts:53 (log) → v1.0.0:src/addons/apply.ts:98-100 (`readManifest`, aborta). */
-function legacyAddSimulator(target: string, id: string): "aborts-no-install" {
+function legacyAddSimulator(target: string, id: string): "aborts-no-install" | "would-proceed" {
   legacyIsAddonApplied(target, id);
-  legacySeesManifest(target);
-  return "aborts-no-install";
+  return legacySeesManifest(target) ? "would-proceed" : "aborts-no-install";
 }
 
 /** v1.0.0:src/commands/list.ts:58-61: enumera `.maker/addons/*.json`; sem escrita. */
@@ -124,6 +123,12 @@ describe("leitor legado da 1.0.0 (AC-37): install em pack é 'nenhum install' pa
     const before = await snapshotTree(target);
     expect(legacyAddSimulator(target, "saas")).toBe("aborts-no-install");
     expect(await snapshotTree(target)).toEqual(before);
+  });
+
+  it("add (fixture de controle): num install em files, o leitor legado vê o manifest e prossegue", async () => {
+    const target = await initInstall("maker-legacy-reader-add-control-", { format: "files", addon: "saas" });
+    directories.push(target);
+    expect(legacyAddSimulator(target, "saas")).toBe("would-proceed");
   });
 
   it("remove (AC-42): sem .maker/addons/saas.json → not-applied, nunca escreve", async () => {
@@ -193,10 +198,10 @@ describe("um install em pack continua operando pelo maker atual (contraste com o
 });
 
 describe("reforço com o binário real da 1.0.0 (S7)", () => {
-  it("remove/update/add/agent add/doctor/list/init contra um install em pack — sem escrita, mensagens do contrato 1.x", async () => {
+  it("remove/update/add/agent add/doctor/list/init contra um install em pack — sem escrita, mensagens do contrato 1.x", async (ctx) => {
     const handle = await legacyCli();
     if ("skip" in handle) {
-      console.log(`pulado: ${handle.skip}`);
+      ctx.skip(handle.skip);
       return;
     }
     const target = await initInstall("maker-legacy-binary-", { format: "pack", addon: "saas" });
