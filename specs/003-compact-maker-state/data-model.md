@@ -160,3 +160,103 @@ pack + bases soltas ──update──▶ pack                  (união verifica
 - **INV-7** Numa transação, metadados de estado são aplicados por último e, entre eles, criar/atualizar
   antes de remover: um crash deixa coexistência (com journal), nunca ausência de estado autoritativo.
 - **INV-8** Base recuperada por normalização `\r\n`→`\n` só é aceita se o sha256 conferir.
+
+## 4. Emenda — estado de add-ons (Clarification 23, US-7)
+
+### AddonStateRecord (`src/state/addon-state.ts`)
+
+Mesmo conteúdo lógico do `.maker/addons/<id>.json` de hoje. O schema é o da 1.0.0, sem mudança
+(`v1.0.0:src/addons/state.ts:7-22`); a leitura usa `passthrough` para que campos desconhecidos
+sobrevivam ao round-trip.
+
+| Campo | Tipo | Ordem no JSON (files) | No lockfile (pack) |
+|---|---|---|---|
+| `id` | `string` (`/^[a-z0-9-]+$/`) | 1º | linha-chave `addon "<id>"` (não repetido como campo) |
+| `version` | `string` | 2º | `  version "<v>"` |
+| `appliedAt` | `string` (ISO) | 3º | `  appliedAt "<iso>"` |
+| `knobs` | `Record<string,string>` | 4º | `  knobs {…}` (chaves em code unit) |
+| `createdFiles` | `{ path; hash }[]` | 5º (itens `{ path, hash }`) | `  createdFiles [{"hash":…,"path":…}]` (ordem do array preservada) |
+| `injectedTargets` | `string[]` | 6º | `  injectedTargets [...]` (ordem preservada) |
+| `injectedBlocks` | `Record<string,string>?` | 7º, omitido quando ausente | `  injectedBlocks {…}` só quando presente |
+| extras | desconhecidos | depois, na ordem de inserção | `  <chave> <json>` (ordenados com os demais campos) |
+
+```ts
+type AddonStateRecord = AddonState & Record<string, unknown>;
+const ADDON_STATE_FIELDS = ["id", "version", "appliedAt", "knobs", "createdFiles", "injectedTargets", "injectedBlocks"] as const;
+function addonStateJson(record: AddonStateRecord): string;           // JSON.stringify(ordenado, null, 2) + "\n"
+function parseAddonStateRecord(raw: unknown): AddonStateRecord;       // lança ZodError
+function isAddonId(id: string): boolean;                              // /^[a-z0-9-]+$/
+function isLockfileSerializable(record: AddonStateRecord): string | null;  // null = ok; senão o motivo (ex.: campo "my-field" fora da gramática [A-Za-z][A-Za-z0-9]*)
+```
+
+Onde vive: `files` → `.maker/addons/<id>.json`; `pack` → seção `[addons]` de `.maker/maker.lock`. Nunca
+nos dois (FR-006b/FR-033).
+
+### AddonStateProblem (files)
+```ts
+interface AddonStateProblem {
+  id: string;             // nome do arquivo sem .json
+  path: string;           // ".maker/addons/<id>.json" (montado com addonStateFile)
+  detail: string;         // mensagem do JSON.parse/zod ou `state declara id "<x>"`
+}
+```
+
+### StateSnapshot / InstallState (acréscimos)
+```ts
+interface StateSnapshot {
+  // …campos existentes…
+  addons: Map<string, AddonStateRecord>;   // do formato em uso (files: .maker/addons; pack: lockfile); vazio sem install
+  orphanAddonStateFiles: string[];         // sem manifest nem lockfile: ids com .maker/addons/<id>.json regular (JSON órfão)
+  unmigratableAddons: AddonStateProblem[]; // files: registros válidos que não cabem no lockfile (chave fora da gramática, id ≠ nome) — bloqueiam files → pack
+  addonProblems: AddonStateProblem[];      // só files/sem install
+  addonStateFiles: string[];               // ids com .maker/addons/<id>.json regular, ordenados (qualquer formato)
+  addonsDir: "absent" | "empty" | "entries" | "not-directory" | "unreadable";
+  addonsDirIssue?: string;                 // mensagem de hoje do list para not-directory/unreadable
+}
+interface InstallState {
+  // …campos existentes…
+  addons: ReadonlyMap<string, AddonStateRecord>;
+  addonProblems: readonly AddonStateProblem[];
+}
+```
+
+### StateError / LockfileError / DoctorFinding (acréscimos)
+```ts
+type LockfileErrorKind = … | "addons-invalid" | "addons-conflict";
+type StateErrorKind = … | "addon-coexistence" | "addons-invalid" | "addons-conflict" | "addon-state-invalid" | "addons-dir-invalid";
+// DoctorFinding.code += "addon-coexistence" | "addons-invalid" | "addons-conflict" (fail) | "addon-state-invalid" (warn)
+```
+`addon-state-invalid` é lançado por `planStateWrite(pack)` a partir de files quando há
+`addonProblems` ou `unmigratableAddons` (FR-035, AC-47); o `doctor` emite o achado homônimo como
+**aviso** quando essa migração está pendente (files em uso, efetivo pack). `addon-coexistence` também é
+lançado por `planStateWrite(null, …)` (`init` sem install) com JSON órfão no disco.
+`addons-dir-invalid` é lançado no planejamento quando é preciso escrever `.maker/addons/<id>.json` e
+`.maker/addons` existe sem ser diretório.
+
+### Estados do install (acréscimos à tabela §2)
+
+| Estado | Arquivos presentes | `inUse` | Mutantes | doctor |
+|---|---|---|---|---|
+| **pack com add-on** | `maker.lock` com unidade em `[addons]`; **sem** `.maker/addons/*.json` | pack | operam | verde |
+| **pack + `.maker/addons/` sem `*.json`** | `maker.lock` + diretório vazio (ou só com alheios) | pack | operam; `init`/`update` removem o diretório **se vazio** | verde, sem aviso |
+| **coexistência de add-on** | `maker.lock` + ≥ 1 `.maker/addons/*.json` | — | **abortam** antes de escrever | **fail** (`addon-coexistence`) |
+| **seção `[addons]` ilegível/em conflito** | `maker.lock` | — | **abortam**; nunca "sem install"/"não aplicado" | **fail** (`addons-invalid`/`addons-conflict`); `list` sai com erro |
+| **files com estado de add-on inválido ou não migrável + migração pendente** | `manifest.json` + `.maker/addons/<id>.json` inválido, `id` ≠ nome ou com chave fora da gramática | files | `update`/`init` que migrariam abortam (`addon-state-invalid`, com ação + opt-out); os demais como hoje | **warn** `addon-state-invalid`; JSON inválido também falha na verificação de add-ons (como hoje) |
+| **JSON de add-on órfão** | `.maker/addons/*.json` sem `manifest.json` nem `maker.lock` | — | `init` aborta (`addon-coexistence`, variante órfã); `remove` "não está aplicado"; demais "nenhum install" | erro "nenhum install" + menção aos órfãos; `list` mostra `degraded` |
+| **`.maker/addons` não-diretório** | arquivo/symlink em `.maker/addons` | qualquer | pack: tolerado; escrita de JSON de add-on (pack → files, `add` em files) aborta no planejamento (`addons-dir-invalid`) | sem achado em pack |
+
+Transições (acréscimo): files → pack move cada `.maker/addons/<id>.json` para uma unidade `[addons]` e
+remove `.maker/addons`; pack → files recria `.maker/addons/<id>.json` (`addonStateJson`) e remove o
+lockfile — mesma transação da migração de manifest e bases.
+
+### Invariantes (acréscimos)
+
+- **INV-9** Em pack, nenhum comando do maker cria `.maker/addons/` nem `.maker/addons/*.json`; depois de
+  qualquer comando bem-sucedido não existe `.maker/addons/*.json` (FR-006b).
+- **INV-10** Estado de add-on só é escrito por `planStateWrite` dentro de `applyChangePlan`
+  (`writeAddonState`/`deleteAddonState` não existem em `src/`).
+- **INV-11** `serializeLockfile` com os mesmos `(manifest, bases, addons)` produz os mesmos bytes; a
+  seção `[addons]` existe sempre (vazia sem add-ons); só recebe registros `isLockfileSerializable`, e
+  para eles `parseLockfile(serializeLockfile(…)).addons` é profundamente igual à entrada.
+- **INV-12** Round-trip files → pack → files de um estado de add-on preserva campos e valores
+  (igualdade profunda) e a ordem de topo do JSON; o arquivo recriado valida no schema da 1.0.0.

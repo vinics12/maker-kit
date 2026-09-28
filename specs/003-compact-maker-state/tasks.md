@@ -9,7 +9,8 @@ que não espelham um arquivo de `src/` estão listados em `plan.md §4` (padrão
 Sem shell-out em `src/` (P1). Cada US tem brief autocontido em `briefs/US-N.md` com `Tocar SOMENTE:`.
 Contratos: `contracts/lockfile-format.md`, `contracts/state-api.md`, `contracts/cli-output.md`,
 `contracts/git-control-files.md`. **Congelados após US-1**: `src/state/{paths,lockfile,store,format}.ts`
-e `test/helpers/state.ts`.
+e `test/helpers/state.ts` — **descongelados pela US-7** (emenda da Clarification 23; mudanças em
+`contracts/state-api.md` "Emenda US-7").
 
 ## Mapa brief ↔ spec
 
@@ -21,6 +22,7 @@ e `test/helpers/state.ts`.
 | US-4 | skill maker-update + interop git + contagem | US4 (+ AC-40 de US1, SC-001/008) | AC-20, 21, 22, 23, 40 |
 | US-5 | agent add / add / remove no formato em uso | US1 | AC-30 (agent add), AC-33, 19/38/39 (agent add, add, remove) |
 | US-6 | documentação, notas de release, build | US6 | AC-28, AC-29 |
+| US-7 | **emenda**: estado de add-ons no lockfile em pack; docs/números/release corrigidos; build | US1, US3, US6 (Clarification 23) | AC-41, 42, 43, 44, 45, 46; alterados AC-01, 28, 36, 37, 39; SC-001 |
 
 ---
 
@@ -126,6 +128,67 @@ Brief: `briefs/US-6.md` · depende de US-1..US-5
 
 ---
 
+## Fase E — Emenda da aceitação: estado de add-ons no lockfile (1 slot, serial)
+
+### [US-7 — backend] Estado de add-ons dentro do lockfile em pack; docs, números e release corrigidos (P1)
+
+Brief: `briefs/US-7.md` · depende de US-1..US-6 · decisões em `plan.md` §10 (D9–D13) · **serial**
+
+**Ordem de execução**: T701–T725, depois **T727–T731** (revisão do plano, S1–S8), e **T726 por último**
+(build/verify/smoke sobre o código final).
+
+**Camada de estado**
+
+- [ ] T701 — `src/state/paths.ts`: `ADDONS_DIR`, `addonStateFile(id)`, `isAddonStateFile(path)`; `isStateMetadata` passa a reconhecer também o diretório `.maker/addons`. `test/changes/transaction.test.ts`: `isStateMetadata(".maker/addons")`; numa migração files → pack com add-on, a ordem aplicada é `maker.lock` criado → `.maker/addons` removido → `manifest.json` removido, e `crashAfter` em cada ponto deixa coexistência com journal (nunca "add-on não aplicado").
+- [ ] T702 — `src/state/addon-state.ts` (novo): `addonStateSchema` (movido, idêntico à 1.0.0), `AddonState`, `AddonStateRecord`, `ADDON_STATE_FIELDS`, `isAddonId`, `parseAddonStateRecord`, `addonStateJson`. `src/addons/state.ts` vira fachada (re-export; `readAddonState`/`isAddonApplied` assíncronos via estado); saem `writeAddonState`, `deleteAddonState`, `addonStatePath`. `test/state/addon-state.test.ts`: `addonStateJson` byte a byte igual ao JSON que `applyAddon` grava hoje (string literal esperada, capturada do código atual antes da troca); cópia **congelada** do schema de `v1.0.0:src/addons/state.ts:7-22` valida o JSON recriado; extras preservados; `createdFiles` como `{ path, hash }`; `injectedBlocks` ausente não vira chave.
+- [ ] T703 — `src/state/lockfile.ts`: seção `[addons]` (serialize: sempre presente, unidades por id, campos ordenados, sem `id`; parse §3/§3a/§5 com `addons-invalid`/`addons-conflict`); `ParsedLockfile.addons`; 3º parâmetro opcional de `serializeLockfile`; comentário do cabeçalho novo.
+- [ ] T704 — `test/state/lockfile.test.ts`: L16–L22 (L21 proxy sem conflito para add-ons distintos em intervalos distintos; L22 mesmo intervalo **com** conflito → `addons-conflict`); ajustar asserções existentes ao cabeçalho novo e à seção `[addons]`.
+- [ ] T705 — `src/state/store.ts`: `StateSnapshot`/`InstallState` com add-ons (files: `.maker/addons/*.json` → `addons`/`addonProblems`/`addonsDir`/`addonsDirIssue`; pack: do lockfile); `StateErrorKind` + `addon-coexistence`, `addons-invalid`, `addons-conflict`, `addon-state-invalid` com mensagens/ações de `cli-output.md` §3; `planStateWrite(next.addons?)` nos dois formatos (default = `state.addons`; files só escreve o que mudou e remove só ids conhecidos; pack com `consolidate` remove os JSON conhecidos e o diretório vazio; bloqueio `addon-state-invalid`).
+- [ ] T706 — `test/state/store.test.ts`: add-ons lidos nos dois formatos; lockfile + `.maker/addons/x.json` → `addon-coexistence` (com e sem unidade correspondente), sem escrita, nunca `null`; manifest.json + lockfile + addons JSON → `coexistence` (precedência); `.maker/addons` vazio/só alheios/não-diretório em pack → sem erro; `planStateWrite` files → pack move os estados (unidade com os mesmos campos) e remove o diretório; pack → files recria `addonStateJson` e remove o lockfile; idempotência (segundo plano sem mudança nos dois formatos, inclusive JSON com formatação manual em files); `addons` omitido carrega intacto; diretório vazio removido só com `consolidate`; files com JSON inválido ou `id` ≠ nome + destino pack → `addon-state-invalid` sem plano; `addons-invalid`/`addons-conflict` via lockfile.
+- [ ] T707 — `src/state/diagnose.ts` (códigos `addon-coexistence`, `addons-invalid`, `addons-conflict`) + `src/commands/doctor.ts` e `src/addons/doctor.ts` (`inspectAddons(targetDir, state)` a partir de `InstallState`; mensagens de caminho com `addonStateFile`). Testes: `test/state/diagnose.test.ts` (um caso por código novo) e `test/commands/doctor.state.test.ts` — AC-44 (fail), AC-39 com seção de add-ons em conflito/malformada (fail), AC-36 (pack com `.maker/addons/` vazio → `íntegro (pack)` sem aviso, árvore inalterada), AC-41 parte doctor (verificação de add-ons verde lendo o lockfile).
+
+**Consumidores**
+
+- [ ] T708 — `src/addons/apply.ts`: `applyAddon` usa `installState.addons.get(id)` como `prior` e grava via `planStateWrite({ …, addons })` (sem `planWrite` de JSON); `removeAddon` idem, sem install ou sem o id → `Add-on "<id>" não está aplicado em <dir>.`, id com problema de leitura (files) → erro com o detalhe (como hoje).
+- [ ] T709 — `src/commands/add.ts` (`await isAddonApplied`, só log) e `src/commands/remove.ts` (sem pré-checagem; `StateError` de `removeAddon` propaga antes de qualquer "não aplicado").
+- [ ] T710 — `src/commands/list.ts`: `inspectState`; `snapshot.error` → lança o `StateError`; pack lê `[addons]` e ignora `.maker/addons`; files/sem install mantém classificação e textos atuais, com `ADDONS_DIR`.
+- [ ] T711 — `src/agents/migrate.ts` (`planLegacyAddonAgents` recebe `options.addons` e devolve `addons` atualizado; `loadState` lê do mapa) + `src/commands/update.ts` (passa `priorState.addons` e grava `migration.addons` via `planStateWrite`).
+- [ ] T712 — `src/commands/mediation.ts` (`applyResolutions`): alvos de injeção movidos atualizam o mapa de `state.addons` entregue a `planStateWrite`, sem `planWrite` de `.maker/addons/<id>.json`.
+
+**Helpers, fixtures e suítes existentes**
+
+- [ ] T713 — `test/helpers/state.ts`: `readAddonStates`, `writeAddonState` (transacional), `removeAddonState`, `writeAddonStateFile` (fixture crua); `initInstall`/`toLegacyFiles` levam os add-ons na conversão (verificar). `test/helpers/addons.ts` + `fixtures/addons-synthetic/{alpha,zeta}/` (addon.json, 1 fragmento de agente, 1 arquivo criado; alvos disjuntos entre si e do `saas`).
+- [ ] T714 — Adaptar ao estado de add-on formato-agnóstico: `test/addon.integration.test.ts`, `test/legacy-agent.integration.test.ts` (trocar `readAddonState`/`writeAddonState`/`statePath` pelos helpers), `test/list.command.test.ts` (casos de diretório/JSON inválido passam a `initInstall({ format: "files" })`), `test/doctor.addon.test.ts` (estado removido/corrompido por formato: arquivo em files, unidade via helper em pack), `test/commands/{add,agent,doctor}.state.test.ts` e `test/commands/mediation.pack.test.ts` (só onde manipulam o texto do lockfile ou `.maker/addons`).
+- [ ] T715 — `test/state/encapsulation.test.ts`: fora de `src/state/`, zero `\.maker\/addons` e `["']\.maker["']\s*,\s*["']addons["']`; identificadores `writeAddonState`/`deleteAddonState` inexistentes em `src/`.
+
+**Provas dos ACs da emenda**
+
+- [ ] T716 — `test/commands/add.state.test.ts`: **AC-41** (init Claude+Codex sem `state.bases` → `add saas`: unidade no lockfile, `.maker/addons` inexistente, `list` mostra `applied`, doctor verde; `remove saas`: blocos retirados, arquivo criado intacto apagado, editado preservado, unidade some); **AC-44** para `add` e `remove` (aborta, árvore idêntica); **AC-39** seção de add-ons malformada/em conflito para `add`/`remove` (aborta, nunca "não aplicado", não cria `.maker/addons`); AC-33 segue verde.
+- [ ] T717 — `test/commands/update.addons.test.ts` (novo): **AC-43** (files com `saas` → update migra: unidade com os mesmos campos/valores do JSON original, `.maker/addons` inexistente, `list`/doctor reconhecem; config `"files"` → update recria `.maker/addons/saas.json` igual em campos/valores ao original, válido no schema congelado da 1.0.0, lockfile removido; `failAfter` e `crashAfter` em cada sentido → estado anterior exato, inclusive o de add-on); **AC-01** alterado (sem `.maker/addons` após migrar); **AC-36** (pack + `.maker/addons/` vazio → próximo update remove; com conteúdo alheio → mantido, sem abortar); **AC-44** para `init` sobre install existente, `update`, `update --apply-resolutions` e `agent add` (aborta, árvore idêntica) e diretório vazio não aborta; **AC-39** seção de add-ons para `init`/`update`/`--apply-resolutions`/`agent add`; FR-032 idempotência (segundo update sem mudança); `addon-state-invalid` (files com JSON inválido + migração default → aborta sem escrita, mensagem de §3).
+- [ ] T718 — `test/commands/list.state.test.ts` (novo): pack com `saas` → `applied` lido do lockfile, árvore inalterada; **AC-39** (`[addons]` e `[manifest]` malformadas/em conflito → erro com ação, nada listado como `available`); **AC-44** (coexistência → erro); `.maker/addons/` vazio ignorado; sem install → tudo `available`.
+- [ ] T719 — `test/commands/legacy-reader.test.ts` (reescrito): **AC-37** — simuladores por comando na ordem real da 1.0.0 (`update`/`--export`/`--apply-resolutions`, `agent add`, `doctor`, `add` [log por `.maker/addons/<id>.json` e aborto no `readManifest`], `remove`, `list` só leitura), com referência `v1.0.0:<arquivo>:<linhas>` em cada um, contra install em pack com `saas`: cada um para no primeiro teste de existência ("nenhum install"/"não está aplicado"), `snapshotTree` idêntico. **AC-42** — simulador do `remove` (`isAddonApplied` → `readAddonState` → `readManifest` opcional) conclui `not-applied` sem alterar nada; fixture de controle (mesmo install + `.maker/addons/saas.json` recriado) → `would-proceed`. Pino opcional das linhas da tag (`it.skipIf` sem git/tag, com motivo).
+- [ ] T720 — `test/state/git-interop.test.ts`: **AC-45** (`it.skipIf(!hasGit())` com motivo) — base em pack com `saas`; branch A `add alpha`, branch B `add zeta` → merge sem conflito, doctor verde (catálogo sintético via `vi.mock`), pré-condição de intervalos distintos asserida; variante de remoção (base com os três; A remove `alpha`, B remove `zeta`); determinismo: mesmo estado lógico serializado duas vezes/ordens de inserção diferentes → seção `[addons]` byte a byte igual.
+- [ ] T721 — `test/commands/addon.parity.test.ts` (novo): **AC-46** — dois installs equivalentes com `saas` (files × pack) rodando `list`, `agent add codex` (partindo de Claude só), `update` com upstream novo (inclui reinjeção do add-on) e, num cenário com conflito, `--export` + `--apply-resolutions` de uma proposta que move bloco de agente legado, `doctor` e `remove saas`: arquivos gerenciados, saídas relevantes (status do add-on, alvos com bloco, apagados/preservados), códigos de saída e estado de add-on campo a campo idênticos (só o local de armazenamento difere).
+- [ ] T722 — `test/state/reference-install.test.ts`: **SC-001 ≤ 15** e nenhum caminho sob `.maker/addons/` nem `.maker/bases/` no default.
+
+**Documentação e entrega**
+
+- [ ] T723 — `docs/maker-state.md`: taxonomia com `.maker/addons/<id>.json` só em files e o estado de add-on dentro do lockfile em pack (linha do `maker.lock` atualizada; seção `[addons]` no formato); números atrelados ao install (1.0.0 real = 101/86; referência desta versão: pack 15, files 137); §5 (versões 1.x) corrigido conforme D12; coexistência de add-on e diretório vazio na recuperação; risco de merge de unidades novas no mesmo intervalo e como resolver. `docs/MIGRATION.md` (seção "Bases no formato pack por padrão": `.maker/addons/` também sai; `init` 1.x sem `--force` recusa por colisão enquanto houver arquivos que diferem; `--force` reinstala → coexistência detectada; `remove`/`add` 1.x param). `README.md` (linhas sobre `.maker/addons` e `maker list`: estado no lockfile em pack, `.maker/addons/<id>.json` em files).
+- [ ] T724 — `test/docs/maker-state.test.ts`: AC-28 com a taxonomia nova (pack sem `.maker/addons`; files com `addons/saas.json`), números da doc conferidos contra o install de referência (15 em pack) e presença do contexto "1.0.0" para 101/86.
+- [ ] T725 — `specs/003-compact-maker-state/acceptance-guide.md`: J1 (depois da migração: 15 arquivos, sem `.maker/addons`, 86 bases migradas), J6 (`$OLD remove saas` → `rc=1` "não está aplicado", árvore intacta; `$OLD list` mostra `saas` disponível sem escrever; `init` sem `--force` recusa), J7 (`ls -A` sem `addons`; 15), J8 (números e texto de release corrigidos); "Achados da preparação" 1 e 2 marcados como resolvidos pela Clarification 23 e pela correção da doc.
+- [ ] T726 — (executar por último, depois de T731) `pnpm build` (atualiza `dist/cli.js` versionado), `pnpm verify`, `pnpm package:smoke`; entregar ao orquestrador o texto de `contracts/cli-output.md` §5 (versão corrigida) para o rodapé `BREAKING CHANGE:`.
+
+**Revisão do plano (aprovada) — S1–S8, FR-035/AC-47**
+
+- [ ] T727 — **S1** `src/state/addon-state.ts` `isLockfileSerializable`; `src/state/store.ts`: registros de files válidos com chave de topo fora de `[A-Za-z][A-Za-z0-9]*` ou `id` ≠ nome → `unmigratableAddons` (continuam em `addons`); `planStateWrite(pack)` lança `addon-state-invalid` para `addonProblems`/`unmigratableAddons` ou registro não serializável (inclusive vindo de `migrate`/`mediation`); `src/state/lockfile.ts`: `serializeLockfile` lança para chave inválida. Testes: `test/state/lockfile.test.ts` L23 (e L17 só com registros serializáveis), `test/state/addon-state.test.ts` (`isLockfileSerializable`), `test/state/store.test.ts` (chave `"my-field"` em files: `list`-ável, bloqueia pack) e `test/commands/update.addons.test.ts` (**AC-47**: files com chave fora da gramática → `update` default aborta com ação + opt-out, árvore idêntica; com `state.bases: "files"` o update segue).
+- [ ] T728 — **S2/S4** JSON órfão sem install: `store.ts` (`orphanAddonStateFiles`; `addons` vazio sem install; `planStateWrite(null, …)` com JSON órfão → `addon-coexistence` variante órfã), `src/commands/list.ts` (órfão `degraded`), `src/commands/doctor.ts` (sufixo nos "nenhum install"), `src/addons/apply.ts` (`remove` → "não está aplicado"). Testes: `test/state/store.test.ts` (T706 estendido: `planStateWrite(null, …, pack)` e `files` com órfão lançam), `test/commands/init.addons.test.ts` (novo: `init` sem install com `.maker/addons/x.json` aborta nos dois formatos, árvore idêntica; **AC-47** parte init), `test/commands/list.state.test.ts` (órfão `degraded`), `test/commands/add.state.test.ts` (`remove` com órfão → "não está aplicado", nada apagado).
+- [ ] T729 — **S3** `store.ts`: `addons-dir-invalid` no planejamento quando é preciso escrever `.maker/addons/<id>.json` e `.maker/addons` não é diretório. Testes: `test/state/store.test.ts` e `test/commands/update.addons.test.ts` (pack com `saas` + arquivo `.maker/addons` → config `"files"` → update aborta com a mensagem de `cli-output.md` §3, árvore idêntica; em pack sem migração o mesmo arquivo é tolerado).
+- [ ] T730 — **FR-035** `src/state/diagnose.ts`: achado `addon-state-invalid` (**warn**) quando files em uso, efetivo pack e há estado não migrável. Testes: `test/state/diagnose.test.ts` e `test/commands/doctor.state.test.ts` (**AC-47** parte doctor: aviso com ação + opt-out; com opt-out `"files"` não há aviso).
+- [ ] T731 — **S7** reforço com o binário real: `test/helpers/legacy-binary.ts` (novo; `git archive v1.0.0 dist addons templates package.json` para `mkdtemp` em `<repo>/node_modules/.cache/`, confere `dependencies` da tag = atuais, senão `skip` com motivo) e `test/commands/legacy-reader.test.ts`: contra install em pack com `saas`, `node <tmp>/dist/cli.js` — `remove saas` (≠ 0, `não está aplicado`) (**AC-42**); `update`, `update --export`, `add saas --yes`, `agent add codex` (≠ 0, `Nenhum install do maker`), `doctor` (≠ 0), `list` (0, `saas` disponível), `init` sem `--force` (≠ 0, colisão) (**AC-37**); `snapshotTree` idêntico após cada um; `it.skipIf` sem git/tag. Simuladores citam também `v1.0.0:src/commands/update.ts:58-59`.
+- [ ] (T723, acréscimo **S8**) `docs/maker-state.md`: trade-off FR-002 — `linguist-generated` do `maker.lock` colapsa no PR também o estado de add-on; recuperação: aviso `addon-state-invalid` do doctor (migração bloqueada) e como destravar (corrigir/restaurar o JSON ou opt-out `"files"`); JSON órfão e `.maker/addons` não-diretório.
+
+---
+
 ## Matriz de cobertura AC → task
 
 | AC | Task(s) | AC | Task(s) |
@@ -151,7 +214,21 @@ Brief: `briefs/US-6.md` · depende de US-1..US-5
 | AC-19 | T104, T107, T111; T210, T211, T504, T505, T305 | AC-39 | T104, T107, T111; T210, T211, T504, T505, T305 |
 | AC-20 | T214, T403 | AC-40 | T103, T105 (proxy L12), T403 |
 
-SC: SC-001 T405 · SC-002 T205 · SC-003 T208 · SC-004 T206 · SC-005 T305 · SC-006 T403 · SC-007 T207 · SC-008 T405.
+**Emenda (US-7, Clarification 23)**:
+
+| AC | Task(s) | AC | Task(s) |
+|---|---|---|---|
+| AC-41 | T705, T708, T709, T710, T707, T716 | AC-01 (alterado) | T705, T717 |
+| AC-42 | T719, T731 | AC-28 (alterado) | T723, T724 |
+| AC-43 | T701, T702, T705, T706, T717 | AC-36 (alterado) | T705, T706, T707, T717 |
+| AC-44 | T705, T706, T707, T716, T717, T718 | AC-37 (alterado) | T719, T731 |
+| AC-45 | T703, T704 (L16, L21, L22), T713, T720 | AC-39 (alterado) | T703, T704, T705, T707, T716, T717, T718 |
+| AC-46 | T708, T711, T712, T721 | SC-001 (alterado) | T722, T725 |
+| AC-47 (novo, FR-035) | T705, T706, T717, T727, T728, T729, T730 | AC-37/AC-42 (binário real) | T731 |
+
+FR-031 T702, T703, T705 · FR-032 T701, T705, T706, T717 · FR-033 T705, T706, T707, T716–T718 · FR-034 T708–T712, T721 · FR-006a T723, T725, T726 (+ `contracts/cli-output.md` §5) · FR-035 T727–T730, T723 (S8) · FR-002 (trade-off com add-ons) T723 · FR-006b T705, T715, T719, T722 · FR-010a T703–T705, T716–T718.
+
+SC: SC-001 T405 (≤ 16, superado por T722: ≤ 15) · SC-002 T205 · SC-003 T208 · SC-004 T206 · SC-005 T305 · SC-006 T403 · SC-007 T207 · SC-008 T405.
 FR-003 (config inválida lida de `maker.config.json`): T102, T111, T205, T305.
 
 ## Paralelização
@@ -162,6 +239,7 @@ FR-003 (config inválida lida de `maker.config.json`): T102, T111, T205, T305.
 | B | US-2 ‖ US-3 | ∅ (US-2: init/update/mediation, templates `.maker/*`, testes de comando de update/init/mediação e suítes legadas deles, `test/engine.test.ts`; US-3: diagnose/doctor/addons-doctor + testes de doctor) |
 | C | US-4 ‖ US-5 | ∅ (US-4: SKILL.md, package-smoke, testes git/contagem/gitcontrol; US-5: agent/engine-scaffold/addons-apply + testes de agent/add) |
 | D | US-6 sozinho | — |
+| E | US-7 sozinho (emenda) | — (serial; ver `plan.md` §10 "Paralelismo") |
 
 Acoplamento só em tempo de execução (sem edição concorrente): testes de US-2 chamam `runDoctor` (AC-36)
 e US-3 altera o doctor; US-3 cria installs por `initInstall({ format })`, independente do default que a

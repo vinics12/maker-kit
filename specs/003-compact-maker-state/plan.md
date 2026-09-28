@@ -2,7 +2,10 @@
 
 **Feature Branch**: `003-compact-maker-state` · **Depth**: FULL · **Spec**: `specs/003-compact-maker-state/spec.md`
 **Constitution**: `.specify/memory/constitution.md` · **Regras**: `.specify/memory/project-rules.md`
-**Artefatos**: `data-model.md`, `contracts/*.md`, `tasks.md`, `briefs/US-1..6.md`
+**Artefatos**: `data-model.md`, `contracts/*.md`, `tasks.md`, `briefs/US-1..7.md`
+**Emenda 2026-09-28 (Clarification 23)**: estado de add-ons dentro do lockfile em pack — §10 (D9..D12),
+fase E, `briefs/US-7.md`. As seções 1–9 descrevem US-1..US-6 como implementadas; onde a §10 as revê,
+há uma nota *(revisto em Dn)*.
 
 ---
 
@@ -90,8 +93,10 @@ file ".maker/workflow/agents/architect.md"
   existentes: `installedAt` é fixado no primeiro `init` e nunca reescrito por `update`/`add`/`agent add`
   (estável); `makerVersion` só muda quando a versão do maker muda — duas branches na mesma versão
   produzem a mesma linha, e se só uma subiu a versão a mudança é unilateral (merge limpo). Nenhum
-  timestamp de execução, id de transação ou caminho temporário entra no lockfile (`appliedAt` fica no
-  estado do add-on, fora do lockfile). `config` só muda quando a config muda.
+  timestamp de execução, id de transação ou caminho temporário entra no lockfile. `config` só muda
+  quando a config muda. *(Revisto em D9: em pack o estado de add-on entra no lockfile com o seu
+  `appliedAt`, que só muda quando o próprio add-on é (re)aplicado — a mudança fica restrita à unidade
+  daquele add-on.)*
 - **Codificação**: `utf8` para conteúdo UTF-8 válido (gravado bruto, inclusive `\r`), `base64` para o
   resto (FR-008). A leitura de `utf8` depende do `size` declarado, nunca de busca por delimitador
   (edge case "conteúdo que imita o delimitador"). `base64` é lido até a linha `@end` (o alfabeto
@@ -230,6 +235,10 @@ Regras que fecham o ponto 4:
 
 ### D5 — Compatibilidade com a 1.0.0 (FR-006a, FR-006b, AC-37)
 
+> *(Revisto em D9/D12: o `remove` da 1.0.0 lê `.maker/addons/<id>.json` antes do manifest, e o `init`
+> sem `--force` da 1.x recusa por colisão enquanto houver arquivos que diferem — o segundo bullet
+> abaixo estava errado. A garantia para o `remove` vem de D9; o texto corrigido está em D12.)*
+
 A 1.0.0 publicada não valida `schemaVersion`; todos os seus comandos mutantes e o `doctor` abortam
 quando `.maker/manifest.json` não existe. Em pack esse arquivo não existe (FR-006b), o que faz a 1.0.0
 parar sem escrever. **Para a 1.0.0, a única mitigação além dessa ausência é o CHANGELOG/release notes
@@ -306,7 +315,7 @@ a ser mescláveis no próximo `update`).
 | P3 templates espelham o alvo | `.maker/.gitattributes` e `.maker/.gitignore.hbs` em `templates/engine/common/.maker/` | `test/init.integration.test.ts`, `test/state/reference-install.test.ts` |
 | P4 (arquivos do consumidor) | `.maker/.gitignore`/`.gitattributes` pré-existentes nunca sobrescritos (B2) | `test/commands/update.pack.test.ts` (T216) |
 | P4 idempotência/reversibilidade | Migração transacional, idempotente, reversível nos dois sentidos; `agent add` passa a ser transacional | AC-03, AC-10, AC-11, AC-24, AC-25, FR-022 |
-| PR3 testes espelhados | `test/state/*`, `test/commands/*`, `test/config/*`, `test/changes/*`. **Testes que não espelham um arquivo de `src/`** (provas arquiteturais/de aceite, mesmo padrão de `test/runs/no-shellout.test.ts`): `test/state/encapsulation.test.ts`, `test/state/git-interop.test.ts`, `test/state/reference-install.test.ts`, `test/commands/legacy-reader.test.ts`, `test/docs/maker-state.test.ts`, e os de comando com sufixo de cenário (`update.pack`, `update.parity`, …) que exercitam `src/commands/<cmd>.ts`; `test/helpers/state.ts` é helper, não teste | layout |
+| PR3 testes espelhados | `test/state/*`, `test/commands/*`, `test/config/*`, `test/changes/*`. **Testes que não espelham um arquivo de `src/`** (provas arquiteturais/de aceite, mesmo padrão de `test/runs/no-shellout.test.ts`): `test/state/encapsulation.test.ts`, `test/state/git-interop.test.ts`, `test/state/reference-install.test.ts`, `test/commands/legacy-reader.test.ts`, `test/docs/maker-state.test.ts`, `test/commands/addon.parity.test.ts` (US-7: exercita `add`/`remove`/`list`/`agent add`/`update`/`doctor` juntos, sem arquivo-espelho único), e os de comando com sufixo de cenário (`update.pack`, `update.parity`, …) que exercitam `src/commands/<cmd>.ts`; `test/helpers/{state,addons,legacy-binary}.ts` são helpers, não testes | layout |
 | PR5 comentários mínimos | Comentário só onde o porquê não é óbvio (ex.: `.gitignore.hbs`, ordem por code unit, `merge=text`) | code review |
 | PR6 fixtures | Valores exatos `"files"`, `"pack"`, `utf8`, `base64`, `maker-lockfile 1` | testes |
 | Bases técnicas: leitura pura | doctor/dry-run usam `openState` em modo `read`/`dry-run`; nenhum escreve | AC-08, AC-12 (hash da árvore antes/depois) |
@@ -360,10 +369,12 @@ invariantes de integridade desta feature são provados por testes de nível Node
 | B | **US-2** init/update/mediação: formato efetivo + migração + templates de controle git (B1/B2) | **US-3** doctor | Arquivos disjuntos; ambos só consomem `src/state/` congelado. Os templates entram na US-2 porque B1/B2 (em `update.ts`/`mediation.ts`) só são testáveis com eles, e os ajustes de contagem que eles provocam caem em testes da própria US-2 |
 | C | **US-4** skill maker-update + interop git + contagem | **US-5** agent add/add/remove | Disjuntos; AC-20/AC-40/SC-001 dependem de pack, dos templates (US-2) e do doctor (US-3) |
 | D | **US-6** docs, notas de release, `pnpm build` | — | Documenta o comportamento final; `dist/` só no fim |
+| E | **US-7** estado de add-ons no lockfile (emenda, Clarification 23) | — | Descongela `src/state/**` e `test/helpers/state.ts`; serial (§10) |
 
 Interseção de `Tocar SOMENTE:` — B: US-2 ∩ US-3 = ∅. C: US-4 ∩ US-5 = ∅. Detalhe em `tasks.md`.
 `src/state/{paths,lockfile,store,format}.ts` e `test/helpers/state.ts` ficam **congelados** após US-1;
-se uma US precisar mudar a API, é retorno ao Gate 2.
+se uma US precisar mudar a API, é retorno ao Gate 2. *(A emenda da fase E é esse retorno: a US-7 descongela a
+API, com as mudanças listadas em `contracts/state-api.md` "Emenda US-7".)*
 
 ## 8. Riscos
 
@@ -398,3 +409,262 @@ se uma US precisar mudar a API, é retorno ao Gate 2.
   de FR-030 prova que o conteúdo dele não mudou e que nenhum `.gitignore` de raiz é criado. Se a
   intenção era remover o de raiz, é retorno ao Gate 1.
 - **Q3 (informativo)**: D8 — `agent add` passa a registrar bases (a spec já assume que registra).
+
+---
+
+## 10. Emenda — Clarification 23: estado de add-ons dentro do lockfile (US-7)
+
+**Gatilho**: no aceite, o `maker remove saas` da **1.0.0 publicada** concluiu com `rc=0` num install em
+pack — apagou `.maker/addons/saas.json`, `.specify/memory/saas-reference.md` e os blocos injetados, e
+deixou o lockfile desatualizado. Motivo, no código da tag: `v1.0.0:src/commands/remove.ts:13`
+(`isAddonApplied` = `existsSync(.maker/addons/<id>.json)`) decide o fluxo **antes** de qualquer leitura
+do manifest, e `v1.0.0:src/addons/apply.ts:224-226` lê o estado do add-on e trata o manifest como
+opcional (`readManifest` → `null`, e os `if (manifest)` seguintes só pulam a atualização do manifest).
+Decisão do humano (opção b): em pack, o estado de add-on vive no lockfile e `.maker/addons/` não existe.
+
+Escopo técnico fixado pelo orquestrador: o formato pack **nunca foi publicado** (tudo é pré-2.0.0) —
+continua `maker-lockfile 1`, sem normalização para lockfiles "de desenvolvimento"; a seção `[addons]` é
+**obrigatória** na v1. A US-7 descongela `src/state/**` e `test/helpers/state.ts` (assinaturas que mudam
+em `contracts/state-api.md`, seção "Emenda US-7").
+
+### D9 — Estado de add-on como parte do estado do install (FR-031, FR-032, FR-034, AC-41, AC-43, AC-46)
+
+- **Onde vive**: `files` → `.maker/addons/<id>.json` (bytes idênticos aos que o maker grava hoje,
+  legível pela 1.0.0); `pack` → seção `[addons]` do `.maker/maker.lock`, entre `[manifest]` e `[bases]`,
+  uma unidade `addon "<id>"` por add-on, ordenada por id (code unit), um campo por linha (`  <campo>
+  <JSON canônico>`, campos ordenados por nome, `id` implícito na linha-chave). Gramática em
+  `contracts/lockfile-format.md` §1/§5.
+- **Uma só abstração**: o estado de add-on passa a ser lido e escrito **só** pela camada de estado,
+  como o manifest e as bases. `inspectState` lê os add-ons do formato em uso; `InstallState` ganha
+  `addons: ReadonlyMap<string, AddonStateRecord>` e `addonProblems`; `planStateWrite` ganha
+  `next.addons?` — **omitido = carrega `state.addons` intacto**. Com isso `init`, `agent add` e o
+  `update` sem mudança de add-on não mudam de código: a migração files ↔ pack leva os estados de add-on
+  junto, na mesma transação, porque é o mesmo `planStateWrite({ consolidate: true })` que já move
+  manifest e bases.
+- **Quem muda o estado de add-on** passa a entregar o mapa novo a `planStateWrite` em vez de planejar
+  `.maker/addons/<id>.json` à mão: `applyAddon`/`removeAddon` (`src/addons/apply.ts`),
+  `planLegacyAddonAgents` (`src/agents/migrate.ts`, chamado pelo `update`) e `applyResolutions`
+  (`src/commands/mediation.ts`). Leitores passam a consultar o estado: `list` (`inspectState`), a
+  verificação de add-ons do `doctor` (`inspectAddons` recebe o estado), `add` (log "já aplicado").
+  `writeAddonState`/`deleteAddonState` **saem de `src/`** (eram escritores fora da transação, sem
+  chamador em `src/`); o helper de teste ganha um `writeAddonState` transacional.
+- **Esquema e JSON**: `addonStateSchema` sai de `src/addons/state.ts` para `src/state/addon-state.ts`
+  (sem mudança — idêntico a `v1.0.0:src/addons/state.ts:7-22`) para que `lockfile.ts`/`store.ts` o usem
+  sem ciclo de import; `src/addons/state.ts` vira fachada (re-export + leitores assíncronos). Registro =
+  `AddonStateRecord` (schema com `passthrough`: campos desconhecidos sobrevivem ao round-trip, como hoje
+  em `migrate.ts`/`mediation.ts`). `addonStateJson(record)` reproduz o JSON que o maker grava hoje:
+  campos de topo na ordem `id, version, appliedAt, knobs, createdFiles, injectedTargets,
+  injectedBlocks` (extras depois, na ordem de inserção), itens de `createdFiles` como `{ path, hash }`,
+  `JSON.stringify(…, null, 2) + "\n"`.
+- **Ordem estável das listas**: arrays (`createdFiles`, `injectedTargets`) mantêm a ordem que o maker
+  produziu (é parte do estado lógico e é determinística — vem da ordem do `addon.json`); objetos
+  (`knobs`, `injectedBlocks`, itens de `createdFiles`) saem com chaves em code unit pelo JSON canônico.
+  Consequência documentada: pack → files recria o JSON com os **mesmos campos e valores** (igualdade
+  profunda, ordem de topo igual à do maker, arrays na mesma ordem); só a ordem das chaves dentro de
+  `knobs`/`injectedBlocks` pode diferir da gravação original (não é valor). A 1.0.0 lê o arquivo
+  recriado (`addonStateSchema` idêntico).
+- **Idempotência em files (FR-014)**: `planStateWrite` em files só planeja escrita de
+  `.maker/addons/<id>.json` quando o registro difere (por `canonicalJson`) do lido do disco; um `update`
+  sem mudança não reescreve estados de add-on (nem reformata JSON escrito à mão).
+- **Remoção**: em files, `planStateWrite` remove `.maker/addons/<id>.json` só para ids que estavam em
+  `state.addons` e saíram de `next.addons` — nunca arquivos com problema de leitura nem ids desconhecidos.
+- **JSON de add-on órfão (sem install)** — comportamento coerente (D13): `.maker/addons/*.json` sem
+  manifest nem lockfile não é estado de install. `inspectState` o reporta em `orphanAddonStateFiles` e
+  não popula `addons`. `remove` → `Add-on "<id>" não está aplicado em <dir>.`; `add`/`update`/`agent add`
+  → "Nenhum install do maker" (como hoje); `doctor` → o erro "nenhum install" de hoje acrescido de
+  `(.maker/addons/<ids>.json órfão(s))`; `list` → cada órfão aparece `degraded` com o problema
+  `estado de add-on sem install do maker (.maker/addons/<id>.json)`; `init` → aborta com
+  `addon-coexistence` (variante órfã, `cli-output.md` §3) em vez de adotar ou ignorar o arquivo.
+- **`remove.ts`** deixa de pré-checar com `isAddonApplied`: `removeAddon` abre o estado em `mutate`
+  (aborta com `StateError` em coexistência/seção ilegível — FR-010a: nunca "não aplicado") e só então
+  responde "não está aplicado".
+- **`agent add`**: o código atual **não** lê nem grava estado de add-on (os blocos ficam nos papéis
+  compartilhados `.maker/workflow/agents/*.md`; quem move bloco de alvo é a migração de agente legado do
+  `update` e a mediação). Ele passa a carregá-lo intacto pelo `planStateWrite` (em pack, o lockfile é
+  regravado com a seção `[addons]` igual). AC-46 prova a paridade nos dois formatos; nenhuma mudança em
+  `src/commands/agent.ts`.
+
+### D10 — Prova contra a ordem de leitura real da 1.0.0 (AC-37, AC-42)
+
+- **Simuladores fiéis por comando** em `test/commands/legacy-reader.test.ts`, cada um replicando
+  literalmente o primeiro teste de existência que decide o fluxo, com a referência da tag no comentário:
+  - `update`/`--export`/`--apply-resolutions`: `readManifest` → `existsSync(.maker/manifest.json)`
+    (`v1.0.0:src/commands/update.ts:113-114`, `v1.0.0:src/render/manifest.ts:53-57`);
+  - `agent add`: `v1.0.0:src/commands/agent.ts:21-22`; `doctor`: `v1.0.0:src/commands/doctor.ts:18-20`;
+  - `add`: `isAddonApplied` só para log (`v1.0.0:src/commands/add.ts:53`) e em seguida
+    `applyAddon` → `readManifest` e aborta (`v1.0.0:src/addons/apply.ts:98-100`);
+  - `remove` (AC-42): `isAddonApplied` (`v1.0.0:src/commands/remove.ts:13`) → `readAddonState`
+    (`v1.0.0:src/addons/state.ts:34-41`, `existsSync` + `JSON.parse` + schema) → `readManifest`
+    **opcional** (`v1.0.0:src/addons/apply.ts:224-226`); o simulador devolve `not-applied` ou
+    `would-proceed`.
+  - `list` (só leitura): enumera `.maker/addons/*.json` (`v1.0.0:src/commands/list.ts:58-61`) → vê
+    `saas` como disponível; sem escrita.
+  Para cada comando: `snapshotTree` antes/depois idêntico (`.maker` e arquivos gerenciados).
+- **Fixture de controle (AC-42)**: o mesmo install em pack com um `.maker/addons/saas.json` recriado a
+  partir da unidade do lockfile → o simulador do `remove` conclui `would-proceed` (manifest ausente,
+  tratado como opcional). Prova que o teste detecta a regressão observada no aceite.
+- **Pino da tag (opcional, barato)**: quando `git` e a tag `v1.0.0` existem no clone
+  (`git cat-file -e v1.0.0`), o teste confere que as linhas citadas ainda contêm os trechos replicados
+  (`isAddonApplied(targetDir, id)`, `readAddonState(targetDir, id)`, `readManifest(targetDir)`); senão
+  `skip` com motivo (CI com clone raso). Fica em `test/` (P1 vale para `src/`).
+- **Reforço com o binário real da tag (decisão do humano, S7)** — `test/helpers/legacy-binary.ts`
+  extrai `git archive v1.0.0 dist addons templates package.json` para um `mkdtemp` **dentro de
+  `<repo>/node_modules/.cache/`** (ignorado pelo git) e o teste roda `node <dir>/dist/cli.js <cmd>` por
+  subprocesso (`execFileSync(process.execPath, …)` — em `test/`, fora do escopo de P1). **Verificado
+  empiricamente na preparação**: o `dist/cli.js` da tag é um bundle ESM com as deps de runtime externas
+  (`commander`, `picocolors`, `zod`, …) e roda com o `node_modules` do repo — por isso a extração fica
+  dentro da árvore do repo (num tmp fora dela os imports nus não resolvem); `packageRoot()` da 1.0.0
+  acha o `package.json` extraído, então `addons/` e `templates/` da tag são usados. As faixas de
+  `dependencies` da tag são idênticas às atuais; o helper confere isso e devolve `null` com motivo
+  (→ `skip`) se divergirem, se não houver `git` ou se a tag não existir no clone (CI rasa). Rodado
+  contra um install em pack com `saas`: `remove saas` → código ≠ 0, stderr com `não está aplicado`;
+  `update`, `update --export`, `add saas --yes`, `agent add codex` → ≠ 0 com `Nenhum install do maker`;
+  `doctor` → ≠ 0 com `Nenhum install do maker encontrado`; `list` → 0, `saas` como `available`; `init
+  --yes --name X --agent claude` sem `--force` → ≠ 0 por colisão. Após **cada** comando, `snapshotTree`
+  idêntico ao inicial. O simulador (acima) continua sendo a prova que roda sempre; o binário é o
+  reforço quando a tag está disponível.
+- Referências de linha nos simuladores incluem o ponto de entrada do `update`:
+  `v1.0.0:src/commands/update.ts:58-59` (`runUpdate` → `planUpdate`) → `113-114` (`readManifest` → aborta).
+- **Por que não importar o `runRemove` real de `@vinicius.cerqueira/maker@1.0.0`**: avaliado e
+  descartado por não ser barato. O pacote publicado só expõe `bin: dist/cli.js`, um bundle **sem
+  exports** cujo efeito colateral de import é `program.parseAsync(process.argv)` com
+  `process.exit(1)` no erro (`v1.0.0:src/cli.ts:113-116`). Usá-lo em processo exigiria mutar
+  `process.argv` global, stubar `process.exit`, aguardar uma promise não exposta e reimportar com
+  cache-busting por cenário; e somaria uma devDependency com a árvore de runtime da 1.0.0 (acesso a
+  registry na CI, `allowBuilds`), contra "nenhuma dependência nova" (§2). O binário real da tag é
+  exercitado pelo reforço acima (sem dependência nova) e pela jornada manual J6 do guia de aceite (`$OLD remove saas` → `rc=1` "não está aplicado", árvore
+  intacta).
+
+### D11 — Coexistência, diretório vazio e seção ilegível (FR-006b, FR-010a, FR-033, AC-36, AC-39, AC-44)
+
+- **Coexistência**: lockfile presente + ao menos um `.maker/addons/*.json` (arquivo regular) →
+  `StateError("addon-coexistence")`, verificado em `inspectState` logo depois da coexistência de
+  manifest (que tem precedência quando as duas ocorrem). Todo comando mutante aborta antes de escrever
+  (inclusive `init` sobre install existente, `update --export`/`--apply-resolutions`, `add`, `remove`,
+  `agent add`); o `doctor` reporta `addon-coexistence` (fail); o `list` sai com erro e ação.
+- **Tolerado sem aviso em pack**: `.maker/addons/` sem nenhum `*.json` (vazio, ou só com entradas
+  alheias) e `.maker/addons` que não é diretório — nenhum é estado. Remoção: sob `consolidate: true`
+  (`init`/`update`, "próxima escrita de estado"), `planStateWrite` para pack remove `.maker/addons` **só
+  se estiver vazio**, na mesma transação; conteúdo alheio nunca é apagado (P4) e continua tolerado.
+- **Seção `[addons]` ilegível**: `LockfileError` → `StateError` `addons-invalid` (gramática, JSON,
+  duplicata, schema, seção ausente/truncada) ou `addons-conflict` (marcadores). Mesmo tratamento de
+  `manifest-*`: aborta, nunca "nenhum install" nem "add-on não aplicado"; união verificada de bases só
+  com as duas seções legíveis (o parse das bases nem roda).
+- **Estado de add-on inválido em files que precisaria migrar**: JSON/schema inválido ou `id` ≠ nome do
+  arquivo não cabe numa unidade do lockfile sem perder o conteúdo. `planStateWrite` para pack a partir
+  de files com `addonProblems` (ou registro com `id` ≠ chave) lança `StateError("addon-state-invalid")`
+  antes de planejar: `update`/`init` abortam sem escrever, com ação (corrigir/restaurar o arquivo, ou
+  opt-out `"files"`). Sem migração (files → files) nada muda: o `list`/`doctor` seguem reportando o
+  add-on degradado como hoje.
+- **Ordem na transação (INV-7)**: `isStateMetadata` passa a reconhecer também o diretório
+  `.maker/addons` (além de `.maker/addons/<id>.json`). files → pack: `maker.lock` criado →
+  `.maker/addons` removido → `manifest.json` removido; pack → files: bases → `.maker/addons/<id>.json`
+  criados → `manifest.json` criado → `maker.lock` removido. Crash em qualquer ponto deixa coexistência
+  detectável com journal, nunca "add-on não aplicado" silencioso.
+- **`list`** (só leitura): `inspectState`; `snapshot.error` → lança o `StateError` (o `cli.ts` imprime
+  `erro: …` e sai 1). Em pack lê os add-ons do lockfile e ignora `.maker/addons`; em files mantém o
+  comportamento atual (degradado por add-on com JSON inválido; problema de diretório), com mensagens
+  montadas pelas constantes de `paths.ts`. Sem install: catálogo como "disponível" e JSON órfão como
+  `degraded` (D13).
+
+### D12 — Documentação, números e notas de release corrigidos (FR-001, FR-006a, SC-001, AC-28)
+
+- SC-001 passa a **≤ 15** (lockfile + 12 papéis + 2 controles do git). `test/state/reference-install`
+  e o guia (J1/J7) mudam de 16 para 15.
+- Toda contagem na documentação diz a qual install se refere: install **1.0.0 real** usado no aceite =
+  **101** arquivos em `.maker`, **86** bases migradas; install de referência **desta versão**: pack
+  **15**, files **137** (o número de files não muda: `addons/saas.json` continua existindo em files).
+- Texto de release (`contracts/cli-output.md` §5) e `docs/MIGRATION.md`/`docs/maker-state.md` §5
+  corrigidos (FR-006a): 1.x `update`/`add`/`remove`/`agent add`/mediação param sem escrever (cada um
+  no seu teste de existência); `init` **sem** `--force` recusa por colisão enquanto houver arquivos que
+  diferem do que a 1.x renderizaria e, recusando, não grava nada; `init --force` reinstala por cima
+  (limitação conhecida) e o resultado é coexistência, que a versão atual detecta e recusa.
+
+### D13 — Estados de add-on que não cabem no lockfile, JSON órfão e `.maker/addons` inválido (FR-035, AC-47; revisão do plano S1–S4, S8)
+
+- **Chave de campo fora da gramática (S1)**: um `.maker/addons/<id>.json` válido no schema, mas com
+  chave de topo fora de `[A-Za-z][A-Za-z0-9]*` (ex.: `"my-field"`), não é representável como linha de
+  campo da unidade. Em files ele continua **válido** (entra em `addons`; `list`/`doctor`/`remove`
+  funcionam como hoje), mas é **não migrável**: `isLockfileSerializable(record)` (em
+  `addon-state.ts`) falha → `planStateWrite(pack)` lança `addon-state-invalid` (motivo `campo
+  "<chave>" fora da gramática do lockfile`). O mesmo guarda protege qualquer escrita em pack (inclusive
+  extras vindos de `migrate.ts`/`mediation.ts`), de modo que `serializeLockfile` só recebe registros
+  serializáveis e `parse(serialize(a)) ≡ a` (L17, INV-11). `serializeLockfile` também lança
+  (`Error` de programação) se receber chave inválida — defesa em profundidade, coberta por L23.
+- **Migração bloqueada (FR-035, AC-47)**: `addon-state-invalid` cobre JSON/schema inválido, id fora de
+  `isAddonId`, `id` ≠ nome do arquivo e chave fora da gramática. `update`/`init` que migrariam files →
+  pack abortam antes de escrever com ação (corrigir/restaurar o arquivo) **e** opt-out
+  (`"state": { "bases": "files" }`). O `doctor` emite o achado `addon-state-invalid` (**aviso**) quando o
+  install está em files, o formato efetivo é pack (a próxima update migraria) e há estado não migrável;
+  sem migração pendente não há achado novo (os problemas de leitura continuam na verificação de add-ons,
+  como hoje).
+- **JSON órfão sem install (S2, S4)**: `planStateWrite(null, …)` — install novo via `init`, em qualquer
+  formato — com qualquer `.maker/addons/*.json` regular no disco lança `addon-coexistence` (variante
+  órfã) antes de planejar. Coerência dos demais comandos em D9 ("JSON de add-on órfão").
+- **`.maker/addons` que não é diretório (S3)**: em pack é tolerado (D11). Quando um plano precisa
+  **escrever** `.maker/addons/<id>.json` (pack → files, ou `add`/mediação em files) e `ADDONS_DIR` existe
+  e não é diretório, `planStateWrite` lança `addons-dir-invalid` no planejamento, com mensagem clara
+  (`cli-output.md` §3), em vez de falhar no meio da transação com `ENOTDIR`.
+- **Docs (S8)**: o trade-off de FR-002 passa a dizer que `linguist-generated` no `maker.lock` colapsa
+  no PR também as mudanças de **estado de add-on** (não só manifest e bases), e a seção de recuperação
+  descreve o aviso `addon-state-invalid` do doctor e como destravar (corrigir o JSON ou opt-out).
+
+### Impacto em código (US-7)
+
+| Arquivo | Mudança |
+|---|---|
+| `src/state/paths.ts` | + `ADDONS_DIR`, `addonStateFile(id)`, `isAddonStateFile(path)`; `isStateMetadata` inclui o diretório `.maker/addons` |
+| `src/state/addon-state.ts` (novo) | schema (movido), `AddonStateRecord`, `ADDON_STATE_FIELDS`, `addonStateJson`, `parseAddonStateRecord`, `isAddonId`, `isLockfileSerializable` |
+| `src/state/lockfile.ts` | seção `[addons]` (serialize/parse), comentário do cabeçalho, `LockfileErrorKind` + `addons-invalid`/`addons-conflict`, `ParsedLockfile.addons`, 3º parâmetro opcional em `serializeLockfile` |
+| `src/state/store.ts` | add-ons em `StateSnapshot`/`InstallState` (+ `orphanAddonStateFiles`, `unmigratableAddons`); `StateErrorKind` + 5 (inclui `addons-dir-invalid`); JSON órfão no `init`; `planStateWrite(next.addons?)` nos dois formatos; coexistência; diretório vazio |
+| `src/state/diagnose.ts` | códigos `addon-coexistence`, `addons-invalid`, `addons-conflict` (fail) e `addon-state-invalid` (warn, migração bloqueada) |
+| `src/addons/state.ts` | fachada: re-export do schema; `readAddonState`/`isAddonApplied` assíncronos via estado; − `writeAddonState`, `deleteAddonState`, `addonStatePath` |
+| `src/addons/apply.ts` | `applyAddon`/`removeAddon` via `InstallState.addons` + `planStateWrite(addons)` |
+| `src/addons/doctor.ts` | `inspectAddons(targetDir, state)` a partir do estado |
+| `src/agents/migrate.ts` | `planLegacyAddonAgents` recebe/devolve o mapa de add-ons, sem `planWrite` de JSON |
+| `src/commands/{add,remove,list,doctor,update,mediation}.ts` | leitores/escritores de add-on via estado (D9, D11) |
+| `src/commands/{init,agent}.ts`, `src/state/format.ts` | **sem mudança** (carregam add-ons pelo default de `planStateWrite`) |
+
+### Testes (US-7)
+
+- Unit: `test/state/addon-state.test.ts` (novo; JSON byte a byte igual ao do maker, cópia congelada do
+  schema da 1.0.0), `test/state/lockfile.test.ts` (L16–L22), `test/state/store.test.ts`,
+  `test/state/diagnose.test.ts`, `test/changes/transaction.test.ts` (ordem com `.maker/addons`).
+- Comando: `test/commands/add.state.test.ts` (AC-41, AC-44, AC-39 add/remove),
+  `test/commands/update.addons.test.ts` (novo: AC-43, AC-36 diretório vazio, AC-44/AC-39 para
+  init/update/`--apply-resolutions`/agent add, FR-032, `addon-state-invalid`),
+  `test/commands/list.state.test.ts` (novo: AC-41/AC-39/AC-44 no `list`, leitura pura),
+  `test/commands/doctor.state.test.ts` (AC-36/AC-39/AC-44 no doctor),
+  `test/commands/legacy-reader.test.ts` (reescrito: AC-37 por comando + AC-42),
+  `test/commands/addon.parity.test.ts` (novo: AC-46).
+- Git: `test/state/git-interop.test.ts` + AC-45 (skip explícito sem git).
+- Binário real da 1.0.0 (S7): `test/commands/legacy-reader.test.ts` + `test/helpers/legacy-binary.ts`
+  (skip explícito sem git/tag ou com deps divergentes).
+- D13: `test/commands/update.addons.test.ts` (AC-47: chave fora da gramática e JSON inválido bloqueiam
+  a migração; `.maker/addons` não-diretório no pack → files), `test/commands/init.addons.test.ts`
+  (novo: JSON órfão aborta o `init`), `test/commands/list.state.test.ts` (órfão `degraded`).
+- Arquitetural: `test/state/encapsulation.test.ts` passa a proibir `.maker/addons` fora de `src/state/`
+  e os identificadores `writeAddonState`/`deleteAddonState` em `src/`.
+- Aceite de número: `test/state/reference-install.test.ts` ≤ 15; `test/docs/maker-state.test.ts`.
+- Add-ons sintéticos (AC-45): `fixtures/addons-synthetic/{alpha,zeta}/` (fora de `files` do
+  `package.json`, não vão para o npm) + `test/helpers/addons.ts`, que faz `vi.mock` parcial de
+  `src/addons/loader.js` (`addonDir` e `listAddonCatalog` passam a enxergar a raiz sintética além da
+  real). Nenhuma mudança em `src/addons/loader.ts` nem no catálogo real.
+
+### Paralelismo (fase E)
+
+**US-7 serial, 1 slot.** A API de estado (`store.ts`/`lockfile.ts`) é mudada e consumida pelos mesmos
+comandos no mesmo passo; dividir exigiria congelar uma API intermediária e duplicaria a adaptação das
+suítes legadas. Os documentos (T723–T725) ficam no fim da mesma US porque dependem do comportamento
+final e o `test/docs` roda contra um install real.
+
+### Riscos (emenda)
+
+| Risco | Mitigação |
+|---|---|
+| **Duas branches aplicando add-ons novos distintos cujas unidades caem no mesmo intervalo** (ex.: nenhum add-on na base e cada branch aplica um) conflitam textualmente na seção `[addons]` (mesma limitação de D1 (a) para unidades `file` novas); arquivos criados em caminhos novos no mesmo intervalo do manifest idem | Conflito na seção → aborto com ação (FR-010a), nunca resolução silenciosa. O teste AC-45 usa add-ons sintéticos em **intervalos distintos** (ids `alpha` < `saas` < `zeta`, com `saas` aplicado na base; arquivos criados/alvos em intervalos distintos, pré-condição verificada no próprio teste) e o proxy L22 documenta o caso do mesmo intervalo **com** conflito. `docs/maker-state.md` descreve a resolução manual (manter as duas unidades). **Resolvido na aprovação do plano**: a spec (Clarification 24) condiciona AC-45/FR-009a a "unidades separadas por ao menos uma inalterada" |
+| Reformatação de `.maker/addons/<id>.json` escrito à mão em files | Escrita só quando o registro difere (D9, idempotência) |
+| Estado de add-on inválido em files bloqueia a migração default | Aborto explícito com ação e opt-out (D11); sem migração o comportamento é o de hoje |
+| `appliedAt` no lockfile | Só muda na (re)aplicação daquele add-on; fica na unidade dele |
+| Lockfiles de desenvolvimento sem `[addons]` ficam ilegíveis | Aceito (decisão do orquestrador: formato nunca publicado). `addons-invalid` "seção [addons] ausente" com ação de restaurar/`init` |
+| Suítes legadas que tocam `.maker/addons` direto quebram no default pack | Adaptadas na US-7 (T714) para o helper `writeAddonState`/`readAddonStates` ou para `format: "files"` quando o teste é sobre o diretório |

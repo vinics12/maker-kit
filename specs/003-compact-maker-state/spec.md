@@ -2,7 +2,7 @@
 
 **Feature Branch**: `003-compact-maker-state`
 **Created**: 2026-09-27
-**Status**: Draft
+**Status**: Draft (emendada em 2026-09-28 — Clarification 23)
 **Input**: Issue GitHub #41 — "Compactar o estado versionado em .maker sem perder bases de reconciliação" — mais as decisões de escopo aprovadas pelo humano antes da spec.
 
 ## Contexto
@@ -16,9 +16,13 @@ de mediação, runs do pipeline).
 As bases são indispensáveis: é com elas que o `maker update` faz a comparação de três vias (base ×
 local × upstream) e preserva customizações. Por isso não podem ser simplesmente ignoradas nem
 trocadas por hashes. O custo é ruído: num install de referência (integrações Claude + Codex + add-on
-`saas`) são 127 arquivos gerenciados, 87 bases (~430 KB) e **101 arquivos em `.maker`**; um único
+`saas`) **feito com o maker 1.0.0** são 127 arquivos gerenciados, 87 bases (~430 KB, medição da issue;
+o install 1.0.0 real usado na aceitação migrou 86) e **101 arquivos em `.maker`**; um único
 `maker update` pode tocar dezenas de arquivos de base, poluindo o diff de PR do consumidor. No projeto
-que originou a issue, são 133 arquivos em `.maker`, 119 deles bases.
+que originou a issue, são 133 arquivos em `.maker`, 119 deles bases. *(Um install de referência no
+formato `"files"` feito com a versão desta feature tem **mais** arquivos em `.maker` — 137 medidos na
+entrega — porque `agent add` passou a registrar bases; os números acima referem-se sempre ao install
+feito com a 1.0.0.)*
 
 Duas fragilidades foram encontradas na investigação e entram no escopo:
 
@@ -30,8 +34,9 @@ Duas fragilidades foram encontradas na investigação e entram no escopo:
 
 Esta feature (a) documenta a taxonomia de `.maker`, (b) torna **padrão** um formato **compacto** de
 armazenamento das bases — um único arquivo texto, determinístico e auditável, que funciona como o
-**lockfile do estado do maker**: artefato versionado, único, gerado pela CLI, do qual `update` e
-`doctor` dependem —, mantendo o formato por arquivo como opt-out explícito, (c) protege as bases
+**lockfile do estado do maker**: artefato versionado, único, gerado pela CLI, do qual dependem, no
+formato padrão, todos os comandos que leem ou mutam o install (`init` sobre install existente,
+`update`, `add`, `remove`, `list`, `agent add`, mediação e `doctor`) —, mantendo o formato por arquivo como opt-out explícito, (c) protege as bases
 contra reescrita de fim de linha, (d) separa os temporários do versionamento e (e) torna o `doctor`
 capaz de validar as bases em qualquer formato. A semântica de merge (issue #10) **não muda**.
 
@@ -42,12 +47,14 @@ capaz de validar as bases em qualquer formato. A semântica de merge (issue #10)
 Decisões tomadas pelo humano antes da spec (1–8 e 16) e no Gate 1 (17, que **substitui** a decisão 2
 e o default original, 10, que deriva dela, e 20, que absorve o manifest no lockfile), e ambiguidades
 residuais resolvidas pelo spec-author com o default mais conservador (9, 11–15, 18, 19, 21 e 22),
-refinadas após as revisões do spec-reviewer.
+refinadas após as revisões do spec-reviewer. As Clarifications 23 e 24 (sessão 2026-09-28) são
+decisões do humano na aceitação; a 23 **revisa** as 1, 16 e 20.
 
 1. Q: Qual é a taxonomia de `.maker`? → A: quatro categorias — **estado autoritativo** (manifest,
    estado de add-ons), **snapshots de base**, **arquivos gerenciados** (papéis de workflow; são
    conteúdo instalado, não estado) e **temporários** (transações, lock, mediação, runs). Os runs do
-   pipeline são temporários/locais e ficam fora do versionamento recomendado.
+   pipeline são temporários/locais e ficam fora do versionamento recomendado. *(Revisto pela
+   Clarification 23: em pack, o manifest, o estado de add-ons e as bases vivem todos no lockfile.)*
 2. Q: Um ou dois formatos de bases? → A: dois — **por arquivo** (atual) e **compacto** —, escolhidos
    pelo consumidor por uma chave de config `state.bases` com valores `"files"` | `"pack"`. A escolha
    efetiva fica registrada no manifest. *(O default original, `"files"`, foi substituído no Gate 1 —
@@ -89,10 +96,12 @@ refinadas após as revisões do spec-reviewer.
 13. Q: Coexistência de formatos degrada o install? → A: depende. **Bases soltas por arquivo junto a
     um lockfile (sem `.maker/manifest.json`)** é **aviso** no `doctor` (ação: rodar `maker update`
     para consolidar no formato configurado); o update consolida pela união verificada.
-    `.maker/manifest.json` **junto a** um lockfile é **falha** (Clarification 21, FR-006c, AC-38).
+    `.maker/manifest.json` **junto a** um lockfile é **falha** (Clarification 21, FR-006c, AC-38), e
+    o mesmo vale para `.maker/addons/*.json` junto a um lockfile (Clarification 23, FR-033, AC-44).
 14. Q: Quais comandos respeitam a escolha? → A: todo comando que grava/lê bases ou muta o install.
     Hoje gravam bases: `init`, `agent add` e `update` (incluindo `update --apply-resolutions`, da
-    mediação); `add`/`remove` (add-on) não gravam bases, mas mutam o manifest e leem bases. Só `init`
+    mediação); `add`/`remove` (add-on) não gravam bases, mas mutam o manifest e o estado de add-ons
+    (ambos no lockfile, em pack — Clarification 23) e leem bases. Só `init`
     e `update` aplicam o formato efetivo (e portanto migram); os demais operam no formato em uso no
     install (Clarification 18). Um `init` sem `state.bases` já nasce no formato compacto e
     `agent add`/`--apply-resolutions` num install compacto gravam só no arquivo compacto. Um `init`
@@ -102,12 +111,13 @@ refinadas após as revisões do spec-reviewer.
     demais bases; a corrompida é descartada e passa a contar como base ausente, com o mesmo
     tratamento que o update já dá hoje a base ausente (arquivo preservado, mediação quando cabe). O
     relatório do update lista cada base descartada.
-16. Q: Qual o alvo de arquivos versionados em `.maker`? → A: **≤ 16** (decisão do humano, revista no
-    Gate 1 pela Clarification 20; o alvo anterior era ≤ 17). No install de referência em pack sobram
-    1 lockfile do estado (manifest + bases) + 1 estado de add-on + 12 papéis de workflow = **14
-    arquivos de estado/conteúdo**, mais os **2 arquivos de controle do git** gerenciados (ignore e
-    atributos) exigidos pelas decisões 4 e 7 = **16**. Com o default `"pack"` (Clarification 17), o
-    alvo vale para o install de referência sem opt-in.
+16. Q: Qual o alvo de arquivos versionados em `.maker`? → A: **≤ 15** (decisão do humano, revista no
+    Gate 1 pela Clarification 20 — de ≤ 17 para ≤ 16 — e na aceitação pela Clarification 23 — de
+    ≤ 16 para ≤ 15). No install de referência em pack sobram 1 lockfile do estado (manifest + estado
+    de add-ons + bases) + 12 papéis de workflow = **13 arquivos de estado/conteúdo**, mais os **2
+    arquivos de controle do git** gerenciados (ignore e atributos) exigidos pelas decisões 4 e 7 =
+    **15**. Com o default `"pack"` (Clarification 17), o alvo vale para o install de referência sem
+    opt-in.
 17. Q: Qual é o default de `state.bases`? → A: **`"pack"`** — **decisão do humano no Gate 1**, que
     substitui o default `"files"` da decisão 2: "o padrão deve ser o pack para funcionar com os
     lockfiles e não o inverso". `"files"` passa a ser o opt-out explícito para quem prefere bases
@@ -126,8 +136,8 @@ refinadas após as revisões do spec-reviewer.
 19. Q: E se o time tiver versões misturadas do maker (alguém/CI com versão antiga rodando num install
     já em pack)? → A: uma versão que não entende o formato compacto MUST NOT degradar silenciosamente
     o install (tratar bases como ausentes, regravar bases por arquivo, perder o campo de formato).
-    Isso é garantido pela Clarification 20 (install em pack não tem `.maker/manifest.json`, e a 1.0.0
-    aborta sem ele). O CHANGELOG instrui atualizar o maker em todo o time/CI antes de migrar.
+    Isso é garantido pelas Clarifications 20 e 23 (install em pack não tem `.maker/manifest.json` nem
+    `.maker/addons/`, e cada comando mutante da 1.0.0 aborta sem o que lê primeiro). O CHANGELOG instrui atualizar o maker em todo o time/CI antes de migrar.
     **Install ainda não migrado** (usado por FR-025/AC-17) = formato efetivo `"pack"` (FR-005),
     nenhum formato registrado no manifest e bases por arquivo em disco; config com `"files"`
     explícito e manifest sem formato **não** é "vai migrar".
@@ -135,17 +145,23 @@ refinadas após as revisões do spec-reviewer.
     **lockfile do estado do maker**. Num install em pack, o arquivo compacto contém o manifest
     (metadados + entradas de arquivos) e as bases; **não existem** `.maker/manifest.json` nem
     `.maker/bases/`. O lockfile é um **arquivo único** (manifest e bases no mesmo arquivo — decisão
-    do humano, consistente com SC-001 ≤ 16), com cabeçalho, seção de manifest legível e seção de
-    bases; o estado inteiro é portátil e auditável. O formato `"files"`
+    do humano, consistente com SC-001), com cabeçalho, seção de manifest legível e seção de
+    bases — e, pela Clarification 23, seção de add-ons; o estado inteiro é portátil e auditável. O formato `"files"`
     continua com `.maker/manifest.json` + `.maker/bases/` (compatível com a 1.0.0). A migração
-    files → pack remove `.maker/manifest.json` e `.maker/bases/` na mesma transação; pack → files os
-    recria; o rollback restaura o estado original nos dois sentidos. **Motivo**: a 1.0.0 publicada não
-    valida versão de schema, mas todos os seus comandos mutantes (`update`, `doctor`, `add`,
-    `remove`, `agent add`, mediação) abortam antes de escrever quando `.maker/manifest.json` não
-    existe — assim um maker antigo num install em pack para sem degradar nada. O lockfile carrega
+    files → pack remove `.maker/manifest.json`, `.maker/bases/` e — pela Clarification 23 —
+    `.maker/addons/` na mesma transação; pack → files os recria; o rollback restaura o estado original nos dois sentidos. **Motivo**: a 1.0.0 publicada não
+    valida versão de schema, mas seus comandos mutantes `update`, `doctor`, `add`, `agent add` e
+    mediação abortam antes de escrever quando `.maker/manifest.json` não existe. *(Correção da
+    aceitação: o `remove` da 1.0.0 **não** segue essa regra — ele lê primeiro `.maker/addons/<id>.json`
+    e trata o manifest como opcional; a garantia para o `remove` vem da Clarification 23.)* Com as
+    duas decisões, um maker antigo num install em pack para sem degradar nada. O lockfile carrega
     versão de formato; versões futuras que não a entendam abortam antes de escrever (FR-012/AC-19).
-    **Limitação conhecida**: `maker init --force` da 1.0.0 não depende do manifest e reinstalaria por
-    cima; é ação explícita de força, mitigada pela orientação do CHANGELOG (FR-006a).
+    **`maker init` da 1.0.0 num install em pack** (correção da aceitação): **sem** `--force`, ele
+    **recusa** por colisão **enquanto houver arquivos gerados que diferem** do que ele renderizaria
+    (o que vale para o install da versão nova, cujos templates diferem) e, recusando, não grava
+    estado algum — não cria um segundo estado nem causa coexistência. **Limitação conhecida**:
+    `maker init --force` da 1.x não depende do manifest e reinstala por cima; é ação explícita de
+    força, mitigada pela orientação do CHANGELOG (FR-006a).
 21. Q: E se `.maker/manifest.json` e o lockfile coexistirem (ex.: merge de branches em formatos
     diferentes)? → A: dois estados autoritativos concorrentes não são consolidados automaticamente:
     todo comando mutante aborta antes de escrever com ação recomendada (escolher um e remover o
@@ -161,6 +177,54 @@ refinadas após as revisões do spec-reviewer.
     comum (duas branches que rodaram `update`), o lockfile é organizado em unidades estáveis e
     ordenadas — entradas de manifest por caminho, uma por unidade; bases por hash — para que o git
     mescle mudanças em entradas diferentes sem conflito textual.
+
+### Session 2026-09-28 (aceitação — achados do pm-validator, decisões do humano)
+
+23. Q: Rodando o maker **1.0.0 publicado** contra um install em pack, `maker remove <id>` não para: o
+    `remove` da 1.0.0 identifica o add-on aplicado por `.maker/addons/<id>.json` (que continuava
+    existindo em pack) e trata o manifest como opcional — sai 0, apaga o estado do add-on e os
+    arquivos criados por ele, remove os blocos injetados e deixa o lockfile desatualizado. Como fechar
+    a garantia da Clarification 20? → A: **decisão do humano (opção b)**: no formato **pack**, o
+    estado de cada add-on aplicado passa a viver **dentro do lockfile** (uma unidade por add-on, na
+    seção de add-ons); num install em pack **não existem** `.maker/addons/` nem
+    `.maker/addons/<id>.json`, e o `remove` da 1.0.0 responde "add-on não está aplicado" sem escrever
+    nada. No formato **files**, o estado continua em `.maker/addons/<id>.json` (compatível com a
+    1.0.0). A migração files → pack move os estados de add-on para o lockfile e remove
+    `.maker/addons/` na mesma transação; pack → files os recria; rollback nos dois sentidos.
+    Coexistência de `.maker/addons/*.json` com um lockfile é tratada **como a coexistência de
+    manifest** (FR-006c/AC-38): comandos mutantes abortam antes de escrever e o `doctor` reporta
+    falha. *Justificativa do spec-author para não tratar diferente (ex.: união verificada, como nas
+    bases soltas)*: diferentemente de uma base — endereçada pelo próprio conteúdo e verificável pelo
+    hash —, o estado de add-on é autoritativo e não verificável por si só; um `.maker/addons/<id>.json`
+    ao lado do lockfile pode ser resto de branch em files, versão divergente da unidade do lockfile ou
+    add-on que o lockfile não conhece, e escolher qualquer um silenciosamente pode apagar arquivos do
+    consumidor no próximo `remove`. Um diretório `.maker/addons/` vazio (sem nenhum `*.json`) não é
+    coexistência — o git nem o versiona —: é tolerado sem aviso (`doctor` verde) e removido na
+    próxima escrita de estado (migração ou `update`). Todos os comandos que leem/escrevem estado de add-on (`add`,
+    `remove`, `list`, verificação de add-ons do `doctor`, mediação/`--apply-resolutions`, `update`) funcionam igual nos dois formatos, e `agent add` — que
+    não lê nem grava estado de add-on — se comporta igual nos dois formatos. A seção de add-ons do
+    lockfile é determinística, ordenada por id de add-on, uma unidade por add-on (amigável a merge), e
+    seção de add-ons ilegível/em conflito segue FR-010a (aborta; nunca "install ausente" nem
+    "add-on não aplicado"). Consequências: SC-001 passa a **≤ 15**; a garantia de FR-006b/AC-37 vale
+    para **todos** os comandos mutantes da 1.0.0, incluindo `remove`, provada contra a ordem de
+    leitura real de cada comando (AC-42); a taxonomia (FR-001) registra que, em pack, o estado de
+    add-on é parte do lockfile.
+24. Q: (a) Até onde vai a garantia de merge sem conflito da seção de add-ons? (b) O que acontece
+    quando um estado de add-on no formato files é inválido e a migração files → pack (inclusive a
+    default) precisa movê-lo para o lockfile? → A: **decisões do humano na aprovação da emenda**:
+    (a) add-ons distintos aplicados/removidos em branches diferentes mesclam **sem conflito** quando
+    suas unidades no lockfile ficam separadas por **ao menos uma unidade inalterada**; unidades
+    **novas no mesmo intervalo** (ex.: a base comum não tem nenhum add-on e cada branch aplica um
+    diferente) ou **remoções adjacentes** conflitam textualmente — é limitação aceita do merge
+    textual do git e segue FR-010a (comandos mutantes abortam com ação recomendada; `doctor` falha),
+    nunca resolvida em silêncio. (b) Estado de add-on inválido no formato files — JSON ilegível, fora
+    do schema do estado de add-on, ou com chave de campo que a gramática do lockfile não consegue
+    representar — **bloqueia** a migração files → pack (inclusive a disparada pelo default): o
+    comando aborta antes de qualquer escrita, com mensagem que cita o arquivo, a ação (corrigir o
+    arquivo) e o opt-out `state.bases: "files"`; o `doctor` **avisa** quando uma migração pendente
+    será bloqueada por isso (FR-035, AC-47). Diferente das bases corrompidas (descartadas na
+    migração, FR-016), estado de add-on é autoritativo e não recuperável — descartá-lo faria o
+    add-on "sumir" e impediria o `remove`.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -186,7 +250,7 @@ contagem de arquivos em `.maker`, integridade das bases e preservação das cust
 
 1. **AC-01** — **Given** um install com bases por arquivo e `state.bases: "pack"` explícito na config, **When**
    `maker update` é executado, **Then** existe o lockfile do estado, não existem mais
-   `.maker/manifest.json` nem `.maker/bases/`, o manifest (dentro do lockfile) registra o formato compacto e cada `baseHash` referenciado
+   `.maker/manifest.json`, `.maker/bases/` nem `.maker/addons/`, o manifest (dentro do lockfile) registra o formato compacto e cada `baseHash` referenciado
    resolve para uma entrada cujo conteúdo confere com o hash.
 2. **AC-02** — **Given** o mesmo install com arquivos gerenciados customizados, **When** a migração é
    aplicada, **Then** o conteúdo de todos os arquivos gerenciados fica byte a byte idêntico ao de
@@ -231,27 +295,108 @@ contagem de arquivos em `.maker`, integridade das bases e preservação das cust
     rollback, relatório de bases migradas/descartadas, aviso de opt-out) e o manifest registra
     `"pack"`.
 13. **AC-36** — **Given** um install em pack (novo via `init` ou migrado via `update`), **When** o
-    conteúdo de `.maker` é listado, **Then** não existe `.maker/manifest.json` nem `.maker/bases/`, e
-    o `doctor` sai verde lendo o estado apenas do lockfile.
-14. **AC-37** — **Given** um install em pack e um leitor de estado que implementa o contrato de
-    leitura atual (1.0.0: o install é identificado exclusivamente por `.maker/manifest.json`),
-    **When** os comandos mutantes (`update`, `add`, `remove`, `agent add`, mediação) e o `doctor` são
-    simulados contra esse contrato, **Then** todos concluem "nenhum install" e nenhum arquivo é
-    escrito. O teste verifica o contrato de leitura, não o binário antigo.
+    conteúdo de `.maker` é listado, **Then** não existe `.maker/manifest.json`, `.maker/bases/` nem
+    `.maker/addons/`, e o `doctor` sai verde lendo o estado (manifest, add-ons e bases) apenas do
+    lockfile. **Given** um install em pack com um diretório `.maker/addons/` vazio no disco, **When**
+    `maker doctor` roda, **Then** sai verde sem aviso; **When** o próximo `maker update` roda,
+    **Then** o diretório vazio é removido.
+14. **AC-37** — **Given** um install em pack (com o add-on `saas` aplicado) e um leitor de estado que
+    implementa o contrato de leitura da 1.0.0 **na ordem real de cada comando** — `update`,
+    `agent add`, mediação e `doctor` identificam o install por `.maker/manifest.json`; `add` consulta
+    primeiro `.maker/addons/<id>.json` apenas para registrar em log "já aplicado — reaplicando" (sem
+    decidir nada) e em seguida a aplicação lê `.maker/manifest.json` e aborta sem ele; `remove`
+    identifica o add-on aplicado por `.maker/addons/<id>.json` **antes** de consultar o manifest,
+    que trata como opcional —, **When** todos os comandos mutantes da 1.0.0 — incluindo `add` e
+    `remove` — e o `doctor` são simulados contra esse contrato, **Then** cada um para no primeiro
+    teste de existência que decide o fluxo ("nenhum install" ou "add-on não está aplicado") e nenhum
+    arquivo é escrito. O teste verifica o contrato de leitura, não o binário antigo (o caso do
+    `remove` é detalhado em AC-42).
 15. **AC-38** — **Given** `.maker/manifest.json` e o lockfile presentes ao mesmo tempo, **When**
     qualquer comando mutante roda, **Then** ele aborta antes de qualquer escrita com ação recomendada;
     **When** `maker doctor` roda, **Then** reporta falha.
-16. **AC-39** — **Given** um lockfile cuja seção de manifest está malformada, truncada ou contém
-    marcadores de conflito do git, **When** qualquer comando mutante roda (`init` sobre o install
-    existente, `update` incluindo `--apply-resolutions`, `add`, `remove`, `agent add`), **Then** ele
-    aborta antes de qualquer escrita com ação recomendada (resolver o conflito ou restaurar do
-    histórico do git) e nunca trata o install como ausente (não reinstala, não cria
-    `.maker/manifest.json`); **When** `maker doctor` roda, **Then** reporta falha.
+16. **AC-39** — **Given** um lockfile cuja seção de manifest **ou de add-ons** está malformada,
+    truncada ou contém marcadores de conflito do git, **When** qualquer comando mutante roda (`init`
+    sobre o install existente, `update` incluindo `--apply-resolutions`, `add`, `remove`,
+    `agent add`), **Then** ele aborta antes de qualquer escrita com ação recomendada (resolver o
+    conflito ou restaurar do histórico do git) e nunca trata o install como ausente nem o add-on como
+    não aplicado (não reinstala, não cria `.maker/manifest.json` nem `.maker/addons/`); **When**
+    `maker doctor` e `maker list` rodam, **Then** o `doctor` reporta falha e o `list` sai com erro e
+    ação recomendada em vez de listar add-ons aplicados como disponíveis.
 17. **AC-40** — **Given** um install em pack e duas branches que, a partir do mesmo commit, rodaram
     `maker update` alterando entradas de arquivos gerenciados distintos, **When** o git mescla as
     branches, **Then** o lockfile é mesclado sem conflito textual e o resultado é válido para o
     `doctor` (verde). O teste depende do binário git e faz **skip explícito** (com motivo) quando git
     não está disponível.
+18. **AC-41** — **Given** um install novo via `maker init` com Claude + Codex e config sem
+    `state.bases`, **When** `maker add saas` é aplicado, **Then** o estado do add-on aparece como
+    unidade da seção de add-ons do lockfile, **não** existe `.maker/addons/` nem
+    `.maker/addons/saas.json`, `maker list` mostra `saas` como aplicado e `maker doctor` (incluindo a
+    verificação de add-ons) sai verde; **When** `maker remove saas` roda em seguida, **Then** o
+    add-on é removido como no formato por arquivo (blocos injetados retirados, arquivos criados
+    intactos apagados, editados preservados) e a unidade some do lockfile.
+19. **AC-42** — **Given** um install em pack com o add-on `saas` aplicado e um simulador do `remove`
+    da 1.0.0 que reproduz a ordem de leitura real daquela versão (teste de existência de
+    `.maker/addons/<id>.json` **antes** de qualquer leitura do manifest, manifest tratado como
+    opcional — derivada do código da tag `v1.0.0`), **When** `remove saas` é simulado, **Then** o
+    simulador conclui "add-on não está aplicado" e aborta, e nenhum arquivo do install é criado,
+    alterado ou removido (conteúdo de `.maker` e dos arquivos gerenciados byte a byte idêntico). O
+    mesmo teste, rodado contra um install em pack que **ainda** tivesse `.maker/addons/saas.json`
+    (fixture de controle), MUST mostrar que o simulador prosseguiria — provando que o teste detecta a
+    regressão observada na aceitação.
+20. **AC-43** — **Given** um install em formato por arquivo com o add-on `saas` aplicado (estado em
+    `.maker/addons/saas.json`), **When** `maker update` migra para pack, **Then** o estado do add-on
+    passa a ser unidade do lockfile com os mesmos campos e valores, `.maker/addons/` deixa de existir
+    e `maker list`/`maker doctor` o reconhecem como aplicado; **When** a config passa a
+    `state.bases: "files"` e `maker update` roda, **Then** `.maker/addons/saas.json` é recriado com
+    os mesmos campos e valores do original, legível pelo contrato de leitura da 1.0.0, e a unidade
+    sai do lockfile (que deixa de existir); **When** uma falha é injetada em cada um dos dois
+    sentidos, **Then** o rollback restaura exatamente o estado anterior, inclusive o estado de
+    add-on.
+21. **AC-44** — **Given** um lockfile e ao menos um `.maker/addons/*.json` presentes ao mesmo tempo
+    (com ou sem unidade correspondente no lockfile), **When** qualquer comando mutante roda (`init`
+    sobre o install existente, `update` incluindo `--apply-resolutions`, `add`, `remove`,
+    `agent add`), **Then** ele aborta antes de qualquer escrita com ação recomendada (escolher um
+    estado e remover o outro, ou restaurar do histórico do git); **When** `maker doctor` roda,
+    **Then** reporta falha. **Given** um diretório `.maker/addons/` vazio junto ao lockfile, **Then**
+    não há coexistência: nenhum comando aborta por isso, o `doctor` sai verde sem aviso e o diretório
+    é removido na próxima escrita de estado (migração ou `update`), como em AC-36. **Given** um
+    diretório sem install (sem manifest nem lockfile) com um `.maker/addons/*.json` órfão, **When**
+    `maker init` roda, **Then** aborta antes de escrever reportando coexistência com ação recomendada
+    e nenhum lockfile é criado (FR-033).
+22. **AC-45** — **Given** um install em pack e duas branches que, a partir do mesmo commit, aplicaram
+    (ou removeram) add-ons **distintos** cujas unidades no lockfile ficam separadas por ao menos uma
+    unidade inalterada, alterando apenas as unidades desses add-ons e entradas de manifest distintas,
+    **When** o git mescla as branches, **Then** a seção de add-ons do lockfile é mesclada sem conflito
+    textual e o resultado é válido para o `doctor` (verde). **Given** duas branches que inserem
+    unidades novas no mesmo intervalo (ex.: base comum sem nenhum add-on e cada branch aplicando um
+    diferente) ou removem unidades adjacentes, **When** o git mescla e o conflito textual resultante
+    é commitado sem resolução, **Then** todo comando mutante aborta antes de escrever com ação
+    recomendada e o `doctor` reporta falha (FR-010a, Clarification 24). **Given** o mesmo
+    estado lógico, **When** o lockfile é gerado em máquinas diferentes, **Then** a seção de add-ons é
+    byte a byte idêntica (unidades ordenadas por id). O teste de merge depende do binário git e faz
+    **skip explícito** (com motivo) quando git não está disponível. *Nota para o plano*: o catálogo
+    real só tem o add-on `saas`; o teste usa add-ons **sintéticos de fixture** com alvos de injeção e
+    arquivos criados disjuntos (e, no cenário sem conflito, um add-on inalterado cuja unidade separa
+    as dos add-ons alterados).
+23. **AC-46** — **Given** dois installs equivalentes com o add-on `saas` aplicado, um por arquivo e
+    outro em pack, **When** a mesma sequência roda em ambos — `maker list`, `maker agent add` de uma
+    nova integração, `maker update` com upstream novo (incluindo
+    reaplicação do add-on e, num cenário com conflito, `--apply-resolutions`), `maker doctor` e
+    `maker remove saas` —, **Then** os arquivos gerenciados resultantes, as saídas relevantes ao
+    usuário (status do add-on, alvos com bloco, arquivos apagados/preservados) e os códigos de saída
+    são idênticos, e o estado de add-on é o mesmo campo a campo (diferindo só onde é armazenado;
+    `agent add` não altera o estado de add-on em nenhum dos formatos).
+24. **AC-47** — **Given** um install em formato files que migraria para pack (por config `"pack"` ou
+    pelo default) e um `.maker/addons/<id>.json` inválido — em três cenários: JSON ilegível, JSON fora
+    do schema do estado de add-on, e chave de campo que a gramática do lockfile não representa —,
+    **When** `maker update` (ou `maker init` sobre o install) roda, **Then** ele aborta antes de
+    qualquer escrita (nenhum arquivo criado, alterado ou removido; nenhum lockfile criado), com
+    mensagem que cita o arquivo inválido, a ação (corrigir o arquivo) e o opt-out
+    `state.bases: "files"`; **When** `maker update --dry-run` roda, **Then** o plano reporta a
+    migração como bloqueada pelo mesmo motivo; **When** `maker doctor` roda, **Then** emite **aviso**
+    de que a migração pendente será bloqueada por esse arquivo, com a mesma ação. **Given** o mesmo
+    arquivo inválido e `state.bases: "files"` explícito, **Then** nenhuma migração é tentada e o
+    bloqueio não se aplica.
 
 ---
 
@@ -420,8 +565,9 @@ num install de referência.
 1. **AC-28** — **Given** a documentação da feature, **When** confrontada com todos os itens presentes
    em `.maker` num install de referência (incluindo temporários), **Then** cada item está
    classificado em exatamente uma das quatro categorias, com indicação de versionar ou não — nos dois
-   formatos, deixando explícito que em pack o manifest e as bases vivem no lockfile e que
-   `.maker/manifest.json`/`.maker/bases/` não existem.
+   formatos, deixando explícito que em pack o manifest, o estado de add-ons e as bases vivem no
+   lockfile e que `.maker/manifest.json`/`.maker/bases/`/`.maker/addons/` não existem; toda contagem
+   de arquivos citada na documentação diz a qual install (versão do maker e formato) se refere.
 2. **AC-29** — **Given** a documentação, **When** o consumidor procura como escolher e trocar de
    formato, **Then** encontra a chave `state.bases`, o default, os trade-offs (legibilidade por
    arquivo × número de arquivos/ruído de diff) e o procedimento de migração e recuperação; e o
@@ -454,12 +600,29 @@ num install de referência.
 - **Transação pendente de versão anterior encontrada no primeiro comando após o upgrade do maker**: a
   recuperação da transação acontece antes de qualquer migração de formato.
 - **Versões misturadas do maker no time/CI**: uma versão antiga (1.0.0) rodando num install já em
-  pack não encontra `.maker/manifest.json` e aborta antes de escrever (FR-006b, Clarification 20); o
-  CHANGELOG orienta atualizar o maker em todo o time/CI antes de migrar.
-- **`maker init --force` da 1.0.0 num install em pack** (limitação conhecida): não depende do
-  manifest e reinstalaria por cima; é ação explícita de força, mitigada pelo CHANGELOG (FR-006a).
-- **`.maker/manifest.json` e lockfile coexistindo** (merge de branches em formatos diferentes):
-  comandos mutantes abortam antes de escrever e o `doctor` reporta falha (Clarification 21).
+  pack não encontra o que decide o fluxo de cada comando (ordem detalhada em AC-37) — `.maker/manifest.json` (`update`, `add`,
+  `agent add`, mediação, `doctor`) ou `.maker/addons/<id>.json` (`remove`) — e aborta antes de
+  escrever (FR-006b, Clarifications 20 e 23); o `list` da 1.0.0 (só leitura) mostra os add-ons como
+  não aplicados, sem escrever. O CHANGELOG orienta atualizar o maker em todo o time/CI antes de
+  migrar.
+- **`maker init` da 1.0.0 num install em pack**: **sem** `--force`, recusa por colisão enquanto
+  houver arquivos gerados que diferem da renderização da 1.x (caso do install da versão nova) e,
+  recusando, não grava nada — não cria segundo estado nem coexistência. **Com** `--force`
+  (limitação conhecida da 1.x): não depende do manifest e reinstala por cima; é ação explícita de
+  força, mitigada pelo CHANGELOG (FR-006a). Se isso acontecer, o resultado é coexistência, tratada
+  como abaixo.
+- **`.maker/manifest.json` ou `.maker/addons/*.json` coexistindo com o lockfile** (merge de branches
+  em formatos diferentes, checkout de branch antiga, `init --force` da 1.x): comandos mutantes abortam
+  antes de escrever e o `doctor` reporta falha (Clarifications 21 e 23).
+- **`init` num diretório sem install mas com `.maker/addons/*.json` órfão** (ex.: sobra de um install
+  apagado à mão): aborta antes de escrever reportando coexistência, com ação recomendada; não cria
+  lockfile ao lado (FR-033).
+- **Estado de add-on inválido num install files que migraria para pack**: a migração é bloqueada
+  (aborto antes de escrever, ação "corrija o arquivo" e opt-out `state.bases: "files"`); o `doctor`
+  avisa antes (FR-035, AC-47).
+- **Add-on removido em pack cujo estado reaparece por merge** (uma branch removeu o add-on, outra o
+  reaplicou com knobs diferentes): as unidades do mesmo id conflitam textualmente; é conflito na
+  seção de add-ons e segue FR-010a (aborta, `doctor` falha), nunca resolvido em silêncio.
 - **Install com arquivo compacto e config `"pack"` mas bases por arquivo reaparecendo** (ex.: checkout
   de branch antiga): coexistência — aviso no `doctor`, consolidação no próximo update.
 
@@ -471,9 +634,11 @@ num install de referência.
 
 - **FR-001**: A documentação MUST classificar cada item de `.maker` em uma de quatro categorias —
   estado autoritativo (manifest — `.maker/manifest.json` no formato por arquivo ou dentro do lockfile
-  no formato compacto —, estado de add-ons), snapshots de base (bases por arquivo ou dentro do
+  no formato compacto —, estado de add-ons — `.maker/addons/<id>.json` no formato por arquivo ou
+  dentro do lockfile no formato compacto), snapshots de base (bases por arquivo ou dentro do
   lockfile), arquivos gerenciados (papéis
-  de workflow) e temporários (transações, lock, mediação, runs) — indicando o que versionar.
+  de workflow) e temporários (transações, lock, mediação, runs) — indicando o que versionar. Toda
+  contagem de arquivos citada MUST identificar o install a que se refere (versão do maker e formato).
 - **FR-002**: A documentação MUST descrever os dois formatos de bases, o default, os trade-offs, a
   chave de config e os procedimentos de migração, diagnóstico e recuperação. Entre os trade-offs MUST
   constar que marcar o lockfile como gerado colapsa no diff do PR também as mudanças de manifest (não
@@ -502,38 +667,59 @@ num install de referência.
 - **FR-006a**: A mudança de default (installs existentes sem formato declarado passam a migrar para
   `"pack"` no próximo update) MUST constar no CHANGELOG/release notes como mudança de comportamento
   visível, com a instrução de opt-out e a orientação "atualize o maker em todo o time/CI antes de
-  migrar".
+  migrar". A documentação de migração MUST descrever corretamente o comportamento das versões 1.x
+  num install em pack, de forma condicional: `maker init` **sem** `--force` recusa por colisão
+  **enquanto houver arquivos gerados que diferem** do que a 1.x renderizaria (caso do install
+  produzido pela versão nova, cujos templates diferem) e, recusando, não grava estado; `maker init
+  --force` reinstala por cima (limitação conhecida, ação explícita de força) e o resultado é
+  coexistência (FR-006c/FR-033); os demais comandos mutantes param sem escrever (FR-006b).
 - **FR-006b**: Num install em formato compacto, `.maker/manifest.json` e `.maker/bases/` MUST NOT
-  existir; o manifest (metadados + entradas de arquivos) MUST viver no lockfile do estado junto com as
-  bases, de forma portátil e auditável. Com isso, um leitor que implementa o contrato de leitura da
-  1.0.0 (install identificado por `.maker/manifest.json`) MUST concluir "nenhum install" e não
-  escrever nada (AC-37). O formato `"files"` MUST continuar usando `.maker/manifest.json` +
-  `.maker/bases/`, compatível com a 1.0.0.
-- **FR-006c**: A migração files → pack MUST remover `.maker/manifest.json` e `.maker/bases/` na mesma
-  transação; pack → files MUST recriá-los; o rollback MUST restaurar o estado original nos dois
-  sentidos. Se `.maker/manifest.json` e o lockfile coexistirem, todo comando mutante MUST abortar
-  antes de escrever com ação recomendada e o `doctor` MUST reportar falha.
+  existir e `.maker/addons/` MUST NOT conter nenhum `*.json` (o maker nunca o cria em pack; um
+  diretório `.maker/addons/` vazio que reste no disco é tolerado — não é coexistência, o `doctor`
+  segue verde sem aviso — e MUST ser removido na próxima escrita de estado: migração ou `update`); o
+  manifest (metadados + entradas de arquivos) e o estado de cada add-on aplicado MUST viver no
+  lockfile do estado junto com as bases, de forma portátil e auditável.
+  Com isso, **todo** comando mutante da 1.0.0 — `update`, `add`, `remove`, `agent add`, mediação — e
+  o `doctor`, cada um seguindo a sua ordem de leitura real (`update`, `agent add`, mediação e
+  `doctor` leem `.maker/manifest.json` primeiro; `add` consulta `.maker/addons/<id>.json` só para
+  log e aborta ao ler o manifest; `remove` testa `.maker/addons/<id>.json` primeiro e trata o
+  manifest como opcional — AC-37), MUST parar no primeiro teste de existência ("nenhum install" / "add-on não está
+  aplicado") e não escrever nada (AC-37, AC-42). O formato `"files"` MUST continuar usando
+  `.maker/manifest.json` + `.maker/bases/` + `.maker/addons/<id>.json`, compatível com a 1.0.0.
+- **FR-006c**: A migração files → pack MUST remover `.maker/manifest.json`, `.maker/bases/` e
+  `.maker/addons/` na mesma transação; pack → files MUST recriá-los; o rollback MUST restaurar o
+  estado original nos dois sentidos. Se `.maker/manifest.json` e o lockfile coexistirem, todo comando
+  mutante MUST abortar antes de escrever com ação recomendada e o `doctor` MUST reportar falha (a
+  coexistência de estado de add-on segue FR-033).
 
 **Formato compacto**
 
 - **FR-007**: O formato compacto (lockfile) MUST ser um único arquivo, texto, sem compressão,
   composto de cabeçalho com a versão de formato, seção de manifest legível (metadados e uma entrada
-  por arquivo gerenciado) e seção de bases.
+  por arquivo gerenciado), seção de add-ons legível (uma entrada por add-on aplicado, com o mesmo
+  conteúdo lógico do estado de add-on do formato por arquivo; vazia quando não há add-on) e seção de
+  bases.
 - **FR-008**: Cada entrada da seção de bases MUST declarar hash sha256, tamanho em bytes e codificação (`utf8` para
   conteúdo UTF-8 válido, gravado bruto; `base64` para o restante), seguida do conteúdo.
-- **FR-009**: As entradas de manifest MUST estar ordenadas por caminho e as bases por hash, e a
-  serialização MUST ser determinística nas duas seções: o mesmo estado lógico (manifest e conjunto
-  de bases) produz o mesmo arquivo byte a byte em qualquer máquina/SO.
+- **FR-009**: As entradas de manifest MUST estar ordenadas por caminho, as de add-on por id e as
+  bases por hash, e a serialização MUST ser determinística nas três seções: o mesmo estado lógico
+  (manifest, estados de add-on e conjunto de bases) produz o mesmo arquivo byte a byte em qualquer
+  máquina/SO.
 - **FR-009a**: O lockfile MUST ser amigável a merge: organizado em unidades estáveis e ordenadas
-  (uma entrada de manifest por caminho por unidade; uma base por hash por unidade), de modo que
-  mudanças em entradas diferentes, feitas em branches distintas, sejam mescladas pelo git sem
-  conflito textual.
-- **FR-010a**: Se a seção de manifest do lockfile estiver ilegível, malformada, truncada ou com
-  marcadores de conflito do git, todo comando mutante (`init` sobre install existente, `update`
-  incluindo `--apply-resolutions`, `add`, `remove`, `agent add`) MUST abortar antes de escrever com
-  ação recomendada (resolver o conflito ou restaurar do histórico do git) e MUST NOT tratar o install
-  como ausente; o `doctor` MUST reportar falha. A união verificada (FR-015) MUST se aplicar a entradas
-  de base somente quando a seção de manifest é legível.
+  (uma entrada de manifest por caminho por unidade; um estado de add-on por id por unidade; uma base
+  por hash por unidade), de modo que mudanças em entradas diferentes, feitas em branches distintas,
+  sejam mescladas pelo git sem conflito textual **quando as unidades alteradas ficam separadas por
+  ao menos uma unidade inalterada** (Clarification 24). Unidades novas inseridas no mesmo intervalo
+  (ex.: base comum sem nenhum add-on e cada branch aplicando um diferente) ou remoções de unidades
+  adjacentes podem conflitar textualmente; esse conflito MUST seguir FR-010a (aborto com ação
+  recomendada; `doctor` falha), nunca ser resolvido em silêncio.
+- **FR-010a**: Se a seção de manifest **ou a de add-ons** do lockfile estiver ilegível, malformada,
+  truncada ou com marcadores de conflito do git, todo comando mutante (`init` sobre install
+  existente, `update` incluindo `--apply-resolutions`, `add`, `remove`, `agent add`) MUST abortar
+  antes de escrever com ação recomendada (resolver o conflito ou restaurar do histórico do git) e MUST
+  NOT tratar o install como ausente nem um add-on como não aplicado; o `doctor` MUST reportar falha e
+  o `list` MUST sair com erro e ação recomendada. A união verificada (FR-015) MUST se aplicar a
+  entradas de base somente quando as seções de manifest e de add-ons são legíveis.
 - **FR-010**: A leitura de cada entrada MUST recuperar o conteúdo original byte a byte e verificá-lo
   contra o hash declarado; entradas que não conferem, truncadas ou malformadas MUST ser tratadas como
   base ausente, nunca usadas como base de merge.
@@ -555,7 +741,8 @@ num install de referência.
 - **FR-014**: A migração MUST ser idempotente: repetir o update sem mudanças não altera nenhum
   arquivo.
 - **FR-015**: Se bases dos dois formatos coexistirem (bases soltas por arquivo junto a um único
-  estado autoritativo; a coexistência de `.maker/manifest.json` com o lockfile segue FR-006c), o update MUST consolidar a **união verificada** das
+  estado autoritativo; a coexistência de `.maker/manifest.json` ou de `.maker/addons/*.json` com o
+  lockfile segue FR-006c/FR-033), o update MUST consolidar a **união verificada** das
   bases no formato configurado e remover o outro formato.
 - **FR-016**: Bases que não conferem com o hash MUST NOT migrar; MUST passar a ser tratadas como
   ausentes e MUST ser listadas no relatório do update.
@@ -609,6 +796,46 @@ num install de referência.
   pelo mesmo mecanismo de merge dos demais arquivos.
 - **FR-030**: O maker MUST NOT criar nem modificar arquivos de controle do git fora de `.maker`.
 
+**Estado de add-ons (Clarification 23)**
+
+- **FR-031**: No formato compacto, o estado de cada add-on aplicado MUST viver no lockfile, como uma
+  unidade por add-on na seção de add-ons, com o mesmo conteúdo lógico (mesmos campos e valores) do
+  estado de add-on do formato por arquivo; `.maker/addons/` MUST NOT existir num install em pack
+  (FR-006b). No formato por arquivo, o estado MUST continuar em `.maker/addons/<id>.json`, legível
+  pelo contrato da 1.0.0.
+- **FR-032**: A migração files → pack MUST mover todos os estados de add-on para o lockfile e remover
+  `.maker/addons/` na mesma transação da migração das bases e do manifest; pack → files MUST
+  recriar `.maker/addons/<id>.json` com os mesmos campos e valores e retirar a seção do lockfile
+  junto com ele; o rollback MUST restaurar o estado de add-on original nos dois sentidos; repetir a
+  migração sem mudanças MUST NOT alterar nenhum arquivo (FR-014). Um `init` sobre install existente
+  que migre segue a mesma regra.
+- **FR-033**: Se ao menos um `.maker/addons/*.json` coexistir com um lockfile (com ou sem unidade
+  correspondente no lockfile), todo comando mutante (`init` sobre install existente, `update`
+  incluindo `--apply-resolutions`, `add`, `remove`, `agent add`) MUST abortar antes de escrever com
+  ação recomendada (escolher um estado e remover o outro, ou restaurar do histórico do git) e o
+  `doctor` MUST reportar falha — mesmo tratamento de FR-006c, sem união automática (motivo na
+  Clarification 23). Um diretório `.maker/addons/` sem nenhum `*.json` MUST NOT ser tratado como
+  coexistência: é tolerado (o `doctor` segue verde, sem aviso) e removido na próxima escrita de
+  estado — migração ou `update` (FR-006b). Um `init` num diretório **sem install** (sem manifest nem
+  lockfile) que contenha ao menos um `.maker/addons/*.json` órfão MUST abortar antes de escrever,
+  reportando coexistência com a mesma ação recomendada, e MUST NOT criar um lockfile ao lado.
+- **FR-034**: Todos os comandos que leem ou escrevem estado de add-on — `add`, `remove`, `list`, a
+  verificação de add-ons do `doctor`, a mediação (`update --export`/`--apply-resolutions`) e `update`
+  (inclusive reaplicação de add-ons) — MUST produzir o mesmo resultado nos dois formatos para o
+  mesmo estado lógico (arquivos gerenciados, estado de add-on campo a campo, saídas e códigos de
+  saída), diferindo apenas no local de armazenamento do estado. `add` e `remove` MUST gravar o
+  estado de add-on no formato em uso (FR-006) e, em pack, MUST reescrever o lockfile numa única
+  transação junto com o manifest. `agent add` não lê nem grava estado de add-on; MUST se comportar
+  igual nos dois formatos e, em pack, MUST preservar a seção de add-ons do lockfile inalterada.
+- **FR-035**: Um `.maker/addons/<id>.json` inválido no formato files — JSON ilegível, fora do schema
+  do estado de add-on, ou com chave de campo que a gramática do lockfile não representa — MUST
+  bloquear a migração files → pack (inclusive a disparada pelo default e a de `init` sobre install
+  existente): o comando MUST abortar antes de qualquer escrita, com mensagem que identifica o
+  arquivo, a ação recomendada (corrigir o arquivo) e o opt-out `state.bases: "files"`; o
+  `update --dry-run` MUST reportar a migração como bloqueada; o `doctor` MUST emitir **aviso** (sem
+  degradar) quando uma migração pendente será bloqueada por isso. Estado de add-on inválido MUST NOT
+  ser descartado nem migrado parcialmente (Clarification 24).
+
 ### Key Entities
 
 - **Base (snapshot)**: conteúdo exato de uma versão upstream de arquivo gerenciado, identificado pelo
@@ -620,12 +847,14 @@ num install de referência.
   `baseHash` por arquivo gerenciado e passa a registrar o formato efetivo de bases. Vive em
   `.maker/manifest.json` no formato por arquivo e **dentro do lockfile** no formato compacto.
 - **Estado de add-on**: estado autoritativo por add-on; não referencia bases (as bases dos alvos de
-  injeção são referenciadas pelo manifest).
+  injeção são referenciadas pelo manifest). Vive em `.maker/addons/<id>.json` no formato por arquivo
+  e **dentro do lockfile** (seção de add-ons, uma unidade por id) no formato compacto.
 - **Config `state.bases`**: escolha declarada pelo consumidor (`"files"` | `"pack"`); default
   `"pack"`, ausência distinguível de `"files"` explícito.
 - **Lockfile do estado (arquivo compacto)**: artefato versionado, determinístico, com versão de
-  formato, gerado pela CLI, que contém o manifest e as bases num install em pack; `update` e `doctor`
-  dependem dele no formato padrão. Substitui `.maker/manifest.json` e `.maker/bases/`.
+  formato, gerado pela CLI, que contém o manifest, os estados de add-on e as bases num install em
+  pack; todos os comandos dependem dele no formato padrão. Substitui `.maker/manifest.json`,
+  `.maker/bases/` e `.maker/addons/`.
 - **Arquivos de controle do git gerenciados**: atributos (fim de linha e "gerado" para bases) e ignore
   (temporários), ambos dentro de `.maker`.
 - **Temporários**: journal de transações, lock, exports de mediação, runs — fora do versionamento.
@@ -634,11 +863,11 @@ num install de referência.
 
 ### Measurable Outcomes
 
-- **SC-001**: No install de referência (Claude + Codex + add-on `saas`), **no default, sem nenhum
-  opt-in**, o número de arquivos versionados em `.maker` cai de ~101 para **≤ 16** após o primeiro
-  `maker update` (ou já no `init`) — **≤ 14** arquivos de estado/conteúdo (lockfile com manifest e
-  bases, estado de add-on e papéis de workflow) mais os 2 arquivos de controle do git gerenciados
-  (Clarifications 16 e 20, decisões do humano).
+- **SC-001**: No install de referência (Claude + Codex + add-on `saas`, config default), **sem nenhum
+  opt-in**, o número de arquivos versionados em `.maker` é **≤ 15** após o primeiro `maker update`
+  (ou já no `init`) — o lockfile (manifest, estado de add-on e bases), os 12 papéis de workflow e os
+  2 arquivos de controle do git gerenciados (Clarifications 16, 20 e 23, decisões do humano). Ponto
+  de partida da medição: o mesmo install feito com o maker 1.0.0 tinha 101 arquivos em `.maker`.
 - **SC-002**: Um `maker update` que altera N arquivos gerenciados em install compacto modifica
   exatamente **1** arquivo de armazenamento de bases (contra até N no formato por arquivo).
 - **SC-003**: Em 100% dos cenários de teste de update (sem customização, com customização mesclável,
@@ -676,6 +905,8 @@ num install de referência.
   migram para `"pack"` no próximo `maker update` (salvo `"files"` explícito na config).
 - A mudança de default é comportamento visível e será comunicada no CHANGELOG/release notes pelo
   fluxo de release existente (Release Please).
+- O catálogo real de add-ons tem hoje só o `saas`; cenários que exigem dois ou mais add-ons (AC-45)
+  usam add-ons sintéticos de fixture, com alvos disjuntos, e não exigem add-ons novos no catálogo.
 - Nomes de arquivos, layout interno exato do formato compacto e estratégia de verificação são
   decisões do architect, desde que respeitem FR-007 a FR-012.
 
@@ -701,7 +932,9 @@ Ordenada por dependência:
 
 - **P4 — Idempotência e reversibilidade (NON-NEGOTIABLE)**: honrado por FR-013 a FR-019 e FR-022 —
   migração transacional com rollback, idempotente (AC-03), reversível nos dois sentidos (AC-24/AC-25),
-  sem descartar customização (AC-02) e com `doctor` verde após o ciclo (AC-18).
+  sem descartar customização (AC-02) e com `doctor` verde após o ciclo (AC-18); o estado de add-ons
+  entra na mesma transação e no mesmo rollback (FR-032, AC-43), e nenhuma versão anterior do maker
+  escreve num install em pack (FR-006b, AC-37, AC-42).
 - **P1 — Sem shell-out (NON-NEGOTIABLE)**: a proteção de fim de linha e o ignore de temporários são
   entregues como **arquivos** gerenciados (FR-027/FR-028); o maker não invoca o git nem qualquer
   binário externo. A verificação do CRLF (AC-20) é teste de aceite em ambiente com git, não
