@@ -3,7 +3,7 @@ import pc from "picocolors";
 import { verifyManifest } from "../render/manifest.js";
 import { enabledAgents } from "../render/manifest.js";
 import { inspectState, openState } from "../state/store.js";
-import { LOCKFILE, MANIFEST_FILE } from "../state/paths.js";
+import { ADDONS_DIR, LOCKFILE, MANIFEST_FILE } from "../state/paths.js";
 import { configuredBasesFormat } from "../state/format.js";
 import { diagnoseState, type DoctorFinding } from "../state/diagnose.js";
 import { validateAgentIntegration } from "../agents/validate.js";
@@ -41,7 +41,10 @@ export async function runDoctor(opts: DoctorOptions): Promise<void> {
   }
 
   if (!snapshot.manifest) {
-    throw new Error(`Nenhum install do maker encontrado em ${targetDir} (${MANIFEST_FILE} e ${LOCKFILE} ausentes).`);
+    const orphanSuffix = snapshot.orphanAddonStateFiles.length
+      ? `; ${ADDONS_DIR}/${snapshot.orphanAddonStateFiles.join(",")}.json órfão(s) sem install`
+      : "";
+    throw new Error(`Nenhum install do maker encontrado em ${targetDir} (${MANIFEST_FILE} e ${LOCKFILE} ausentes)${orphanSuffix}.`);
   }
 
   // Sem error/pendingTransactions, a releitura via openState não lança e não recupera nada (mode "read").
@@ -53,7 +56,7 @@ export async function runDoctor(opts: DoctorOptions): Promise<void> {
   const integrations = await Promise.all(
     enabledAgents(manifest).map((agent) => validateAgentIntegration(targetDir, agent)),
   );
-  const addons = await inspectAddons(targetDir, manifest, state.hasBase);
+  const addons = await inspectAddons(targetDir, state);
   console.log(pc.dim(`Projeto "${manifest.project.name}" · maker ${manifest.makerVersion}`));
   console.log(pc.dim(`${result.checked} arquivos verificados`));
   for (const integration of integrations) {

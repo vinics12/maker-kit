@@ -9,17 +9,13 @@ import {
   type ManifestEntry,
 } from "../render/manifest.js";
 import { openState, planStateWrite } from "../state/store.js";
+import type { AddonStateRecord } from "../state/addon-state.js";
 import { addonDir } from "./loader.js";
 import type { AddonManifest } from "./schema.js";
 import { upsertBlock, stripBlock, addonBlocks, sameText } from "./inject.js";
 import { renderUpstream } from "../util/upstream.js";
 import { legacyAgent } from "../util/engine-scaffold.js";
 import { buildContext } from "../render/engine.js";
-import {
-  readAddonState,
-  addonStatePath,
-  type AddonState,
-} from "./state.js";
 import { createPlan, formatPlan, inspectTarget, planWrite, type ChangePlan, type PlannedChange } from "../changes/plan.js";
 import { applyChangePlan } from "../changes/transaction.js";
 
@@ -106,7 +102,7 @@ export async function applyAddon(
   const changes: PlannedChange[] = [];
 
   // Reaplicação: arquivos criados por este add-on só podem ser substituídos se ainda estiverem intactos.
-  const prior = await readAddonState(targetDir, addon.id);
+  const prior = installState.addons.get(addon.id);
   const owned = new Map((prior?.createdFiles ?? []).map((f) => [f.path, f]));
   const previousCtx = prior ? addonContext(manifest, prior.knobs) : undefined;
   const injectedBlocks: Record<string, string> = {};
@@ -196,7 +192,7 @@ export async function applyAddon(
     changes.push(await planWrite({ targetDir, path: f.to, content, source: `addon:${addon.id}`, reason: "arquivo criado pelo add-on", force: owned.has(f.to) }));
   }
 
-  const state: AddonState = {
+  const state: AddonStateRecord = {
     id: addon.id,
     version: addon.version,
     appliedAt: new Date().toISOString(),
@@ -205,9 +201,11 @@ export async function applyAddon(
     injectedTargets,
     injectedBlocks,
   };
-  changes.push(...await planStateWrite(installState, targetDir, { manifest, format: installState.inUse, bases: new Map(), prune: false }));
-  const stateRel = manifestKey(targetDir, addonStatePath(targetDir, addon.id));
-  changes.push(await planWrite({ targetDir, path: stateRel, content: JSON.stringify(state, null, 2) + "\n", source: "metadata", reason: "publicar state do add-on", force: true }));
+  const nextAddons = new Map(installState.addons);
+  nextAddons.set(addon.id, state);
+  changes.push(...await planStateWrite(installState, targetDir, {
+    manifest, format: installState.inUse, bases: new Map(), addons: nextAddons, prune: false,
+  }));
   const plan = createPlan(targetDir, changes);
   if (options.dryRun) console.log(formatPlan(plan));
   else await applyChangePlan(plan);
@@ -219,13 +217,18 @@ export async function removeAddon(
   id: string,
   options: { dryRun?: boolean } = {},
 ): Promise<{ strippedTargets: string[]; deletedFiles: string[]; keptFiles: string[]; plan: ChangePlan }> {
-  // `.maker/addons/<id>.json` também é metadado de estado (isStateMetadata): recupera uma transação
+  // O estado de add-on também é metadado (isStateMetadata): abrir o estado recupera uma transação
   // pendente antes de ler qualquer coisa, senão um crash no meio de um `add` deixaria o `remove`
-  // planejar em cima de um state que a recuperação desfaz logo em seguida.
+  // planejar em cima de um state que a recuperação desfaz logo em seguida. `StateError` (coexistência,
+  // lockfile ilegível) propaga antes de qualquer resposta "não está aplicado".
   const installState = await openState(targetDir, { mode: options.dryRun ? "dry-run" : "mutate" });
-  const state = await readAddonState(targetDir, id);
-  if (!state) throw new Error(`Add-on "${id}" não está aplicado em ${targetDir}.`);
-  const manifest = installState?.manifest;
+  const state = installState?.addons.get(id);
+  if (!installState || !state) {
+    const problem = installState?.addonProblems.find((item) => item.id === id);
+    if (problem) throw new Error(problem.detail);
+    throw new Error(`Add-on "${id}" não está aplicado em ${targetDir}.`);
+  }
+  const manifest = installState.manifest;
 
   const strippedTargets: string[] = [];
   const deletedFiles: string[] = [];
@@ -263,10 +266,11 @@ export async function removeAddon(
     }
   }
 
-  if (manifest && installState) changes.push(...await planStateWrite(installState, targetDir, { manifest, format: installState.inUse, bases: new Map(), prune: false }));
-  const stateRel = manifestKey(targetDir, addonStatePath(targetDir, id));
-  const stateTarget = await inspectTarget(targetDir, stateRel);
-  changes.push({ path: stateRel, action: "remove", source: "metadata", reason: "remover state do add-on", expectedHash: stateTarget.hash, expectedKind: stateTarget.kind });
+  const nextAddons = new Map(installState.addons);
+  nextAddons.delete(id);
+  changes.push(...await planStateWrite(installState, targetDir, {
+    manifest, format: installState.inUse, bases: new Map(), addons: nextAddons, prune: false,
+  }));
   const plan = createPlan(targetDir, changes);
   if (options.dryRun) console.log(formatPlan(plan));
   else await applyChangePlan(plan);

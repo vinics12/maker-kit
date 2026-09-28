@@ -1,52 +1,26 @@
-import { readFile, writeFile, mkdir, rm } from "node:fs/promises";
-import { existsSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { z } from "zod";
+import { addonStateSchema, type AddonState } from "../state/addon-state.js";
+import { inspectState } from "../state/store.js";
 
-/** Estado por-install de um add-on aplicado, para permitir remoção reversível. */
-export const addonStateSchema = z.object({
-  id: z.string(),
-  version: z.string(),
-  appliedAt: z.string(),
-  knobs: z.record(z.string(), z.string()),
-  /** Arquivos novos criados pelo add-on (deletáveis na remoção). */
-  createdFiles: z.array(z.object({ path: z.string(), hash: z.string() })),
-  /** Arquivos do motor onde o add-on injetou um bloco (por marcador). */
-  injectedTargets: z.array(z.string()),
-  /**
-   * sha256 do conteúdo de cada bloco injetado, por alvo, como o maker o gravou. Na reaplicação, um
-   * bloco só é substituído se ainda for esse: comparar com o fragmento renderizado não serve, porque
-   * uma versão nova do add-on muda o fragmento e o bloco intacto pareceria editado.
-   */
-  injectedBlocks: z.record(z.string(), z.string()).optional(),
-});
+export { addonStateSchema, type AddonState };
 
-export type AddonState = z.infer<typeof addonStateSchema>;
-
-export function addonStatePath(targetDir: string, id: string): string {
-  return join(targetDir, ".maker", "addons", `${id}.json`);
+/** Lê o estado de um add-on pelo formato em uso. `StateError` (coexistência/ilegível) propaga. */
+export async function readAddonState(targetDir: string, id: string): Promise<AddonState | null> {
+  const snapshot = await inspectState(targetDir);
+  if (snapshot.error) throw snapshot.error;
+  const record = snapshot.addons.get(id);
+  if (record) return record;
+  const problem = snapshot.addonProblems.find((item) => item.id === id);
+  if (problem) throw new Error(problem.detail);
+  return null;
 }
 
-export function isAddonApplied(targetDir: string, id: string): boolean {
-  return existsSync(addonStatePath(targetDir, id));
-}
-
-export async function readAddonState(
-  targetDir: string,
-  id: string,
-): Promise<AddonState | null> {
-  const p = addonStatePath(targetDir, id);
-  if (!existsSync(p)) return null;
-  return addonStateSchema.parse(JSON.parse(await readFile(p, "utf-8")));
-}
-
-export async function writeAddonState(targetDir: string, state: AddonState): Promise<void> {
-  const p = addonStatePath(targetDir, state.id);
-  await mkdir(dirname(p), { recursive: true });
-  await writeFile(p, JSON.stringify(state, null, 2) + "\n", "utf-8");
-}
-
-export async function deleteAddonState(targetDir: string, id: string): Promise<void> {
-  const p = addonStatePath(targetDir, id);
-  if (existsSync(p)) await rm(p);
+/** Só para log: falso em qualquer erro de leitura (coexistência, lockfile ilegível, etc.). */
+export async function isAddonApplied(targetDir: string, id: string): Promise<boolean> {
+  try {
+    const snapshot = await inspectState(targetDir);
+    if (snapshot.error) return false;
+    return snapshot.addons.has(id);
+  } catch {
+    return false;
+  }
 }

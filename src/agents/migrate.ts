@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { addonStateSchema, type AddonState } from "../addons/state.js";
+import type { AddonState, AddonStateRecord } from "../state/addon-state.js";
 import { startMarker, endMarker, stripBlock, upsertBlock } from "../addons/inject.js";
 import { inspectTarget, planWrite, type PlannedChange } from "../changes/plan.js";
 import type { RenderContext } from "../render/engine.js";
@@ -11,7 +11,6 @@ import { adapterInstruction, sharedRoleReference } from "./reference.js";
 
 type Inspected = Awaited<ReturnType<typeof inspectTarget>>;
 interface LegacyAgent { frontmatter: string; body: string }
-interface LoadedState { state: AddonState; hash: string; changed: boolean }
 
 /**
  * Resultado por agente legado: `migrated` (corpo levado ao papel compartilhado), `adapter` (papel
@@ -33,13 +32,20 @@ export async function planLegacyAddonAgents(
   staging: string,
   expected: AppliedFile[],
   manifest: Manifest,
-  options: { ctx: RenderContext; migrate?: boolean; configKnown?: boolean; configDependent?: Set<string> },
-): Promise<{ changes: PlannedChange[]; handled: Set<string>; reports: LegacyAgentReport[]; bases: Map<string, Buffer> }> {
+  options: {
+    ctx: RenderContext; migrate?: boolean; configKnown?: boolean; configDependent?: Set<string>;
+    addons: ReadonlyMap<string, AddonStateRecord>;
+  },
+): Promise<{
+  changes: PlannedChange[]; handled: Set<string>; reports: LegacyAgentReport[]; bases: Map<string, Buffer>;
+  addons: Map<string, AddonStateRecord>;
+}> {
   const changes: PlannedChange[] = [];
   const handled = new Set<string>();
   const reports: LegacyAgentReport[] = [];
   const bases = new Map<string, Buffer>();
-  const states = new Map<string, LoadedState | string>();
+  const states = new Map<string, AddonStateRecord | string>();
+  const changedIds = new Set<string>();
   const outputs = new Set(expected.map((file) => file.rel));
 
   for (const file of expected) {
@@ -73,7 +79,7 @@ export async function planLegacyAddonAgents(
     const upstream = outputs.has(sharedPath) ? await readFile(join(staging, sharedPath)) : undefined;
     const agent = upstream ? parseLegacyAgent(current.content!, role) : undefined;
     if (!agent || !upstream) { preserve("formato do agente legado não reconhecido"); continue; }
-    const loaded = await loadState(targetDir, id, states);
+    const loaded = loadState(id, options.addons, states);
     if (typeof loaded === "string") { preserve(loaded); continue; }
     if (!hasSingleAddonBlock(agent.body, id)) { preserve("blocos de add-on incompletos, duplicados ou de múltiplas origens"); continue; }
     if (!allowsRead(agent.frontmatter)) {
@@ -96,7 +102,7 @@ export async function planLegacyAddonAgents(
     const adapter = `${agent.frontmatter.replace(/\r\n/g, "\n")}\n${adapterInstruction(sharedPath)}`;
     const adapterUpstream = await readFile(join(staging, file.rel));
 
-    if (confirmsInjectionTarget(loaded.state, id, file.rel)) {
+    if (confirmsInjectionTarget(loaded, id, file.rel)) {
       const content = pristine ? upsertBlock(upstream.toString("utf-8"), id, block) : sharedAgentText(agent.body);
       if (!sharedIsReplaceable(shared, sharedEntry, entry.source, content, upstream)) {
         preserve(`papel compartilhado ${sharedPath} já possui conteúdo local ou não gerenciado`);
@@ -120,10 +126,10 @@ export async function planLegacyAddonAgents(
       changes.push(await planAdapter(targetDir, file, current, adapter, adapterUpstream, manifest, bases));
       recordBase(bases, base);
       manifest.files[sharedPath] = { hash: sha256(content), source: entry.source, baseHash: sha256(base) };
-      moveInjectedBlock(loaded.state, file.rel, sharedPath);
-      loaded.state.injectedTargets = loaded.state.injectedTargets.map((path) => path === file.rel ? sharedPath : path)
+      moveInjectedBlock(loaded, file.rel, sharedPath);
+      loaded.injectedTargets = loaded.injectedTargets.map((path) => path === file.rel ? sharedPath : path)
         .filter((path, index, paths) => path !== sharedPath || paths.indexOf(path) === index);
-      loaded.changed = true;
+      changedIds.add(id);
       handled.add(file.rel);
       handled.add(sharedPath);
       report("migrated", reason);
@@ -132,7 +138,7 @@ export async function planLegacyAddonAgents(
 
     // Add-on reaplicado depois de um update sem migração: o state e o papel compartilhado já estão
     // corretos e o agente legado só carrega uma cópia antiga do bloco.
-    if (!reappliedOnShared(loaded.state, id, file.rel, sharedPath) || sharedEntry?.source !== entry.source ||
+    if (!reappliedOnShared(loaded, id, file.rel, sharedPath) || sharedEntry?.source !== entry.source ||
         shared.kind !== "file" || !hasSingleAddonBlock(shared.content!.toString("utf-8"), id)) {
       preserve("state do add-on não confirma o alvo de injeção legado");
       continue;
@@ -222,14 +228,12 @@ export async function planLegacyAddonAgents(
     report("migrated", reason);
   }
 
+  const nextAddons = new Map(options.addons);
   for (const [id, loaded] of states) {
-    if (typeof loaded === "string" || !loaded.changed) continue;
-    changes.push({ ...await planWrite({ targetDir, path: `.maker/addons/${id}.json`,
-      content: JSON.stringify(loaded.state, null, 2) + "\n", source: "metadata",
-      reason: "atualizar somente os alvos de injeção dos agentes migrados", force: true }),
-      expectedHash: loaded.hash, expectedKind: "file" });
+    if (typeof loaded === "string" || !changedIds.has(id)) continue;
+    nextAddons.set(id, loaded);
   }
-  return { changes, handled, reports, bases };
+  return { changes, handled, reports, bases, addons: nextAddons };
 }
 
 /** Regenera o adapter e o devolve ao engine no manifest. */
@@ -268,21 +272,13 @@ function allowsRead(frontmatter: string): boolean {
   return items.some((item) => item === "Read" || item === "*");
 }
 
-/** Lê o state bruto (preservando campos extras) uma vez por add-on; retorna o motivo em caso de falha. */
-async function loadState(targetDir: string, id: string, cache: Map<string, LoadedState | string>): Promise<LoadedState | string> {
+/** Lê o state do mapa de add-ons já carregado pela camada de estado (clone: mutações locais não vazam
+ * para o mapa de entrada); retorna o motivo em caso de falha. */
+function loadState(id: string, addons: ReadonlyMap<string, AddonStateRecord>, cache: Map<string, AddonStateRecord | string>): AddonStateRecord | string {
   const cached = cache.get(id);
   if (cached) return cached;
-  let result: LoadedState | string;
-  try {
-    if (!/^[a-z0-9-]+$/.test(id)) throw new Error("id inválido");
-    const metadata = await inspectTarget(targetDir, `.maker/addons/${id}.json`);
-    if (metadata.kind !== "file") throw new Error("state não é arquivo regular");
-    const raw: unknown = JSON.parse(metadata.content!.toString("utf-8"));
-    addonStateSchema.parse(raw);
-    result = { state: raw as AddonState, hash: metadata.hash!, changed: false };
-  } catch {
-    result = "state do add-on ausente ou inválido";
-  }
+  const record = /^[a-z0-9-]+$/.test(id) ? addons.get(id) : undefined;
+  const result: AddonStateRecord | string = record ? structuredClone(record) : "state do add-on ausente ou inválido";
   cache.set(id, result);
   return result;
 }

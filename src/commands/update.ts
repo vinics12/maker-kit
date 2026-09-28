@@ -18,6 +18,7 @@ import { openState, planStateWrite, type InstallState } from "../state/store.js"
 import { configuredBasesFormat, effectiveBasesFormat, planFormatTransition, FORMAT_OPT_OUT_SNIPPET, type ConfiguredFormat, type FormatTransition } from "../state/format.js";
 import { GIT_CONTROL_FILES } from "../state/paths.js";
 import type { BaseProblem } from "../state/lockfile.js";
+import type { AddonStateRecord } from "../state/addon-state.js";
 import { planLegacyAddonAgents, type LegacyAgentReport } from "../agents/migrate.js";
 import { sharedRoleReference } from "../agents/reference.js";
 import { afterBlockRemoval, reinjectBlocks } from "../addons/apply.js";
@@ -193,6 +194,7 @@ export async function planUpdate(targetDir: string, opts: { merge?: boolean; sta
   const changes: PlannedChange[] = [];
   const bases = new Map<string, Buffer>();
   let reports: LegacyAgentReport[] = [];
+  let nextAddons: Map<string, AddonStateRecord> = new Map(priorState.addons);
   const unresolved: string[] = [];
   const defaulted: string[] = [];
   const mediation: MediationCandidate[] = [];
@@ -203,9 +205,10 @@ export async function planUpdate(targetDir: string, opts: { merge?: boolean; sta
     const expected = await applyEngine(staging, ctx, agents);
     const configDependent = recovered ? new Set<string>() : await configDependentFiles(expected, config, agents, prior.installedAt);
     const migration = await planLegacyAddonAgents(targetDir, staging, expected, next,
-      { ctx, migrate: opts.merge !== false, configKnown: recovered, configDependent });
+      { ctx, migrate: opts.merge !== false, configKnown: recovered, configDependent, addons: priorState.addons });
     changes.push(...migration.changes);
     reports = migration.reports;
+    nextAddons = migration.addons;
     for (const [hash, content] of migration.bases) bases.set(hash, content);
     for (const file of expected.sort((a, b) => a.rel.localeCompare(b.rel))) {
       if (migration.handled.has(file.rel)) continue;
@@ -335,7 +338,8 @@ export async function planUpdate(targetDir: string, opts: { merge?: boolean; sta
     : [];
   next.basesFormat = effective.format;
   changes.push(...await planStateWrite(priorState, targetDir, {
-    manifest: next, format: effective.format, bases: finalBases, consolidate: true, prune: true, preserve: referencedBases,
+    manifest: next, format: effective.format, bases: finalBases, addons: nextAddons,
+    consolidate: true, prune: true, preserve: referencedBases,
   }));
   const plan = createPlan(targetDir, changes);
   const reported = new Set(reports.map((report) => report.path));

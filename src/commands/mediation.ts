@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import pc from "picocolors";
 import { z } from "zod";
 import { diffComm } from "node-diff3";
-import { addonStateSchema, type AddonState } from "../addons/state.js";
+import type { AddonStateRecord } from "../state/addon-state.js";
 import { sharedRoleReference } from "../agents/reference.js";
 import { addonBlocks } from "../addons/inject.js";
 import { moveInjectedBlock } from "../agents/migrate.js";
@@ -328,7 +328,7 @@ export async function applyResolutions(
   const next = structuredClone(manifest);
   next.files = { ...manifest.files };
   const newBases = new Map<string, Buffer>();
-  const stateUpdates = new Map<string, { state: AddonState; hash: string }>();
+  const stateUpdates = new Map<string, AddonStateRecord>();
   for (const item of selected) {
     const content = resolved.get(item.id)!;
     const candidate = matched.get(item.id)!;
@@ -348,26 +348,22 @@ export async function applyResolutions(
     for (const id of moved) {
       let entry = stateUpdates.get(id);
       if (!entry) {
-        const metadata = await inspectTarget(targetDir, `.maker/addons/${id}.json`);
-        if (metadata.kind !== "file") continue;
-        const raw: unknown = JSON.parse(metadata.content!.toString("utf-8"));
-        addonStateSchema.parse(raw);
-        entry = { state: raw as AddonState, hash: metadata.hash! };
+        const record = state.addons.get(id);
+        if (!record) continue;
+        entry = structuredClone(record);
         stateUpdates.set(id, entry);
       }
       const sharedPath = `.maker/workflow/agents/${role}.md`;
-      moveInjectedBlock(entry.state, item.path, sharedPath);
-      entry.state.injectedTargets = entry.state.injectedTargets.map((path) => path === item.path ? sharedPath : path)
+      moveInjectedBlock(entry, item.path, sharedPath);
+      entry.injectedTargets = entry.injectedTargets.map((path) => path === item.path ? sharedPath : path)
         .filter((path, position, paths) => paths.indexOf(path) === position);
     }
   }
-  for (const [id, entry] of stateUpdates) {
-    changes.push({ ...await planWrite({ targetDir, path: `.maker/addons/${id}.json`,
-      content: JSON.stringify(entry.state, null, 2) + "\n", source: "metadata",
-      reason: "alvos de injeção após mediação do agente legado", force: true }),
-      expectedHash: entry.hash, expectedKind: "file" });
-  }
-  changes.push(...await planStateWrite(state, targetDir, { manifest: next, format: state.inUse, bases: newBases, prune: false }));
+  const nextAddons = new Map(state.addons);
+  for (const [id, entry] of stateUpdates) nextAddons.set(id, entry);
+  changes.push(...await planStateWrite(state, targetDir, {
+    manifest: next, format: state.inUse, bases: newBases, addons: nextAddons, prune: false,
+  }));
   const plan = createPlan(targetDir, changes);
   if (opts.dryRun) {
     for (const item of selected) printDiff(item.path, matched.get(item.id)!.local?.toString("utf-8") ?? "", resolved.get(item.id)!.toString("utf-8"));

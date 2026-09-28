@@ -50,7 +50,7 @@ async function collectKnobs(
 
 export async function runAdd(id: string, opts: AddOptions): Promise<void> {
   const targetDir = resolve(opts.target ?? process.cwd());
-  if (isAddonApplied(targetDir, id)) {
+  if (await isAddonApplied(targetDir, id)) {
     console.log(pc.yellow(`Add-on "${id}" já aplicado — reaplicando (idempotente).`));
   }
   const addon = await loadAddon(id);
