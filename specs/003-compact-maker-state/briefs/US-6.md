@@ -41,7 +41,15 @@ nas notas de release; e entregar o `dist/` reconstruído com a suíte e o smoke 
   rodapé `BREAKING CHANGE:`; B: `feat(state):` + seção `## Notas de release` no corpo do PR para o
   mantenedor colar nas release notes do Release PR. O orquestrador usa a opção decidida no Gate 2 (Q1).
 
+- **Emenda autorizada no Gate 3 (T606)**: a dica de opt-out `"state": { "bases": "files" }` passa a ter
+  uma única fonte — constante exportada `FORMAT_OPT_OUT_SNIPPET` em `src/state/format.ts` (único
+  arquivo congelado da US-1 que esta emenda toca; nenhuma assinatura existente muda). `update.ts`
+  remove `optOutSnippet()` (o truque `JSON.stringify(...).replace(...).slice(2,-2)`) e importa a
+  constante; `src/state/diagnose.ts` troca o literal duplicado pela constante. Saída do CLI byte a
+  byte igual; testes existentes continuam verdes sem alteração.
+
 ## Runbook
+0. T606 (emenda da constante) primeiro, em commit próprio `refactor(003/us6): …`.
 1. `docs/maker-state.md` → `test/docs/maker-state.test.ts` (AC-28 automatizado contra install de
    referência em pack e em files, com temporários criados; AC-29 por presença de termos/procedimentos).
 2. `README.md`, `docs/MIGRATION.md`.
@@ -54,8 +62,9 @@ nas notas de release; e entregar o `dist/` reconstruído com a suíte e o smoke 
 - `README.md`
 - `test/docs/maker-state.test.ts`
 - `dist/cli.js`
+- `src/state/format.ts`, `src/commands/update.ts`, `src/state/diagnose.ts` (só T606)
 
 ## NÃO tocar
-`src/**`, `templates/**`, `test/**` fora de `test/docs/maker-state.test.ts`, `CHANGELOG.md`,
+`src/**` (exceto os três arquivos da T606), `templates/**`, `test/**` fora de `test/docs/maker-state.test.ts`, `CHANGELOG.md`,
 `package.json`, `release-please-config.json`, `.release-please-manifest.json`, `docs/features/**`
 (do `feature-cataloguer`).
