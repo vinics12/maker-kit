@@ -1,7 +1,7 @@
 import type { BaseProblem } from "./lockfile.js";
-import { BASES_DIR, LOCKFILE, MANIFEST_FILE } from "./paths.js";
+import { BASES_DIR, LOCKFILE, MANIFEST_FILE, addonStateFile } from "./paths.js";
 import type { StateSnapshot } from "./store.js";
-import { pendingDefaultMigration, FORMAT_OPT_OUT_SNIPPET, type ConfiguredFormat } from "./format.js";
+import { pendingDefaultMigration, effectiveBasesFormat, FORMAT_OPT_OUT_SNIPPET, type ConfiguredFormat } from "./format.js";
 
 // Sem constante dedicada em paths.ts (não é manifest/lockfile/bases): mantido local, único uso.
 const TRANSACTIONS_DIR = ".maker/transactions";
@@ -12,7 +12,8 @@ export type DoctorFindingCode =
   | "pending-transaction" | "coexistence" | "unreadable" | "unknown-version" | "manifest-invalid"
   | "manifest-conflict" | "base-missing" | "base-corrupt" | "entry-truncated" | "entry-malformed"
   | "orphan-bases" | "loose-file-bases" | "bases-conflict-markers" | "pending-default-migration"
-  | "config-invalid" | "config-unreadable";
+  | "config-invalid" | "config-unreadable"
+  | "addon-coexistence" | "addons-invalid" | "addons-conflict" | "addon-state-invalid";
 
 export interface DoctorFinding {
   severity: DoctorSeverity;
@@ -66,6 +67,32 @@ function stateErrorFinding(snapshot: StateSnapshot): DoctorFinding {
         message: `marcadores de conflito do git na seção de manifest (linha ${lineFromMessage(error.message)})`,
         action: `resolva o conflito em ${LOCKFILE} ou restaure do histórico do git`,
       };
+    case "addon-coexistence": {
+      const ids = error.message.match(/coexistem \(([^)]*)\)/)?.[1]
+        ?? error.message.match(/sem install do maker \(([^)]*)\)/)?.[1] ?? "";
+      return {
+        severity: "fail", code: "addon-coexistence",
+        message: `.maker/addons/<id>.json e ${LOCKFILE} coexistem (${ids})`,
+        action: "escolha um estado e remova o outro, ou restaure .maker do histórico do git",
+      };
+    }
+    case "addons-invalid":
+      return {
+        severity: "fail", code: "addons-invalid",
+        message: `seção de add-ons do lockfile inválida (linha ${lineFromMessage(error.message)})`,
+        action: `restaure ${LOCKFILE} do histórico do git`,
+      };
+    case "addons-conflict":
+      return {
+        severity: "fail", code: "addons-conflict",
+        message: `marcadores de conflito do git na seção de add-ons (linha ${lineFromMessage(error.message)})`,
+        action: `resolva o conflito em ${LOCKFILE} ou restaure do histórico do git`,
+      };
+    // Nunca produzido por `inspectState` (só por `planStateWrite`, tempo de planejamento); mantido
+    // para exaustividade do switch sobre `StateErrorKind`.
+    case "addon-state-invalid":
+    case "addons-dir-invalid":
+      return { severity: "fail", code: "addon-state-invalid", message: error.message, action: error.action };
   }
 }
 
@@ -177,6 +204,20 @@ function configFindings(configured: ConfiguredFormat): DoctorFinding[] {
   return [];
 }
 
+/** `addon-state-invalid` (warn): files em uso, formato efetivo pack, e há estado de add-on que não migra. */
+function addonStateInvalidFindings(snapshot: StateSnapshot, configured: ConfiguredFormat): DoctorFinding[] {
+  if (snapshot.inUse !== "files") return [];
+  const effective = effectiveBasesFormat(configured, snapshot.recorded, snapshot.inUse);
+  if (effective.format !== "pack") return [];
+  const problems = [...snapshot.addonProblems, ...snapshot.unmigratableAddons];
+  const action = 'corrija ou restaure o arquivo do histórico do git, ou declare "state": { "bases": "files" } em maker.config.json';
+  return problems.map((problem) => ({
+    severity: "warn" as const, code: "addon-state-invalid" as const,
+    message: `estado de add-on não migrável em ${addonStateFile(problem.id)} (${problem.detail}); a migração para "pack" está bloqueada`,
+    action,
+  }));
+}
+
 function pendingDefaultMigrationFinding(snapshot: StateSnapshot, configured: ConfiguredFormat): DoctorFinding | null {
   if (!pendingDefaultMigration({ inUse: snapshot.inUse!, recorded: snapshot.recorded }, configured)) return null;
   return {
@@ -215,6 +256,7 @@ export function diagnoseState(snapshot: StateSnapshot, configured: ConfiguredFor
   const conflicts = conflictMarkersFinding(snapshot);
   if (conflicts) findings.push(conflicts);
   findings.push(...configFindings(configured));
+  findings.push(...addonStateInvalidFindings(snapshot, configured));
   const pendingMigration = pendingDefaultMigrationFinding(snapshot, configured);
   if (pendingMigration) findings.push(pendingMigration);
 

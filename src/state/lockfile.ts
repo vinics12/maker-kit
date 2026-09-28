@@ -1,11 +1,12 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { Manifest } from "../render/manifest.js";
+import { addonStateSchema, isAddonId, isLockfileSerializable, type AddonStateRecord } from "./addon-state.js";
 
 export const LOCKFILE_VERSION = 1;
 
 const HEADER_COMMENT_LINES = [
-  "# Estado do maker (manifest + bases). Gerado pela CLI — não edite à mão.",
+  "# Estado do maker (manifest, add-ons e bases). Gerado pela CLI — não edite à mão.",
   "# Formato e recuperação: docs/maker-state.md do maker.",
 ];
 
@@ -47,13 +48,16 @@ export interface BaseProblem {
 export interface ParsedLockfile {
   version: 1;
   manifest: Manifest;
+  addons: Map<string, AddonStateRecord>;
   bases: Map<string, Buffer>;
   problems: BaseProblem[];
   conflictMarkers: number;
   crlf: boolean;
 }
 
-export type LockfileErrorKind = "unreadable" | "unknown-version" | "manifest-invalid" | "manifest-conflict";
+export type LockfileErrorKind =
+  | "unreadable" | "unknown-version" | "manifest-invalid" | "manifest-conflict"
+  | "addons-invalid" | "addons-conflict";
 
 export class LockfileError extends Error {
   readonly kind: LockfileErrorKind;
@@ -114,7 +118,11 @@ function serializeBase(hash: string, content: Buffer): string {
   return `${header}${payload}@end sha256=${hash}\n\n`;
 }
 
-export function serializeLockfile(manifest: Manifest, bases: ReadonlyMap<string, Buffer>): Buffer {
+export function serializeLockfile(
+  manifest: Manifest,
+  bases: ReadonlyMap<string, Buffer>,
+  addons?: ReadonlyMap<string, AddonStateRecord>,
+): Buffer {
   const lines: string[] = [];
   lines.push(`maker-lockfile ${LOCKFILE_VERSION}`);
   for (const comment of HEADER_COMMENT_LINES) lines.push(comment);
@@ -139,6 +147,21 @@ export function serializeLockfile(manifest: Manifest, bases: ReadonlyMap<string,
     const entry = (files as unknown as Record<string, Record<string, unknown>>)[path]!;
     const fieldKeys = Object.keys(entry).filter((key) => entry[key] !== undefined).sort(codeUnitCompare);
     for (const key of fieldKeys) lines.push(`  ${key} ${canonicalJson(entry[key])}`);
+    lines.push("");
+  }
+
+  lines.push("[addons]");
+  lines.push("");
+  const addonIds = [...(addons?.keys() ?? [])].sort(codeUnitCompare);
+  for (const id of addonIds) {
+    const record = addons!.get(id)!;
+    const reason = isLockfileSerializable(record);
+    if (reason) throw new Error(`add-on "${id}" não serializável no lockfile: ${reason}`);
+    lines.push(`addon ${canonicalJson(id)}`);
+    const fieldKeys = Object.keys(record)
+      .filter((key) => key !== "id" && record[key] !== undefined)
+      .sort(codeUnitCompare);
+    for (const key of fieldKeys) lines.push(`  ${key} ${canonicalJson(record[key])}`);
     lines.push("");
   }
 
@@ -188,17 +211,29 @@ export function parseLockfile(raw: Buffer): ParsedLockfile {
   }
   i++;
 
-  const bracketBasesIndex = lines.findIndex((line, index) => index >= i && line === "[bases]");
-  if (bracketBasesIndex < 0) {
-    throw new LockfileError("manifest-invalid", "seção [bases] ausente (arquivo truncado)", lines.length);
+  const bracketAddonsIndex = lines.findIndex((line, index) => index >= i && line === "[addons]");
+  const bracketBasesFallback = lines.findIndex((line, index) => index >= i && line === "[bases]");
+  if (bracketAddonsIndex < 0) {
+    if (bracketBasesFallback < 0) {
+      throw new LockfileError("manifest-invalid", "seção [bases] ausente (arquivo truncado)", lines.length);
+    }
+    throw new LockfileError("addons-invalid", "seção [addons] ausente", bracketBasesFallback + 1);
   }
 
-  const manifestLines = lines.slice(i, bracketBasesIndex);
+  const manifestLines = lines.slice(i, bracketAddonsIndex);
   const { manifestObject } = parseManifestSection(manifestLines, i + 1);
   const parsedManifest = manifestSchema.safeParse(manifestObject);
   if (!parsedManifest.success) {
     throw new LockfileError("manifest-invalid", `manifest inválido: ${parsedManifest.error.message}`, i + 1);
   }
+
+  const bracketBasesIndex = lines.findIndex((line, index) => index > bracketAddonsIndex && line === "[bases]");
+  if (bracketBasesIndex < 0) {
+    throw new LockfileError("addons-invalid", "seção [bases] ausente (arquivo truncado)", lines.length);
+  }
+
+  const addonsLines = lines.slice(bracketAddonsIndex + 1, bracketBasesIndex);
+  const addons = parseAddonsSection(addonsLines, bracketAddonsIndex + 2);
 
   // A seção de bases usa as linhas cruas (não stripadas) para reconstruir o conteúdo byte a byte;
   // `lines` (stripadas) serve só para casar cabeçalhos/`@end`/marcadores, tolerando `\r` estrutural
@@ -210,11 +245,98 @@ export function parseLockfile(raw: Buffer): ParsedLockfile {
   return {
     version: 1,
     manifest: parsedManifest.data as unknown as Manifest,
+    addons,
     bases,
     problems,
     conflictMarkers,
     crlf,
   };
+}
+
+function parseAddonsSection(lines: string[], startLineNumber: number): Map<string, AddonStateRecord> {
+  const lineNo = (offset: number) => startLineNumber + offset;
+  const addons = new Map<string, AddonStateRecord>();
+  if (lines.length === 0) return addons;
+
+  if (lines[0] !== "") {
+    if (CONFLICT_MARKER.test(lines[0]!)) {
+      throw new LockfileError("addons-conflict", `marcador de conflito na linha ${lineNo(0)}`, lineNo(0));
+    }
+    throw new LockfileError("addons-invalid", `esperada linha vazia após [addons] na linha ${lineNo(0)}`, lineNo(0));
+  }
+  let index = 1;
+
+  while (index < lines.length) {
+    const line = lines[index]!;
+    if (line === "") {
+      throw new LockfileError("addons-invalid", `linha vazia inesperada na seção [addons] na linha ${lineNo(index)}`, lineNo(index));
+    }
+    if (CONFLICT_MARKER.test(line)) {
+      throw new LockfileError("addons-conflict", `marcador de conflito na linha ${lineNo(index)}`, lineNo(index));
+    }
+    const unitMatch = line.match(/^addon (.+)$/);
+    if (!unitMatch) {
+      throw new LockfileError("addons-invalid", `linha fora da gramática na linha ${lineNo(index)}`, lineNo(index));
+    }
+    let id: unknown;
+    try {
+      id = JSON.parse(unitMatch[1]!);
+    } catch {
+      throw new LockfileError("addons-invalid", `id inválido na linha ${lineNo(index)}`, lineNo(index));
+    }
+    if (typeof id !== "string" || !isAddonId(id)) {
+      throw new LockfileError("addons-invalid", `id de add-on inválido na linha ${lineNo(index)}`, lineNo(index));
+    }
+    if (addons.has(id)) {
+      throw new LockfileError("addons-invalid", `"addon" duplicado "${id}" na linha ${lineNo(index)}`, lineNo(index));
+    }
+    index++;
+    const fields: Record<string, unknown> = {};
+    let fieldCount = 0;
+    while (index < lines.length && lines[index]!.startsWith("  ")) {
+      const fieldLine = lines[index]!;
+      if (CONFLICT_MARKER.test(fieldLine.trimStart())) {
+        throw new LockfileError("addons-conflict", `marcador de conflito na linha ${lineNo(index)}`, lineNo(index));
+      }
+      const fieldMatch = fieldLine.match(/^ {2}([A-Za-z][A-Za-z0-9]*) (.+)$/);
+      if (!fieldMatch) {
+        throw new LockfileError("addons-invalid", `campo fora da gramática na linha ${lineNo(index)}`, lineNo(index));
+      }
+      const [, fieldKey, fieldJson] = fieldMatch;
+      if (fieldKey === "id") {
+        throw new LockfileError("addons-invalid", `campo "id" reservado na linha ${lineNo(index)}`, lineNo(index));
+      }
+      if (Object.hasOwn(fields, fieldKey!)) {
+        throw new LockfileError("addons-invalid", `campo "${fieldKey}" duplicado em "${id}" na linha ${lineNo(index)}`, lineNo(index));
+      }
+      try {
+        fields[fieldKey!] = JSON.parse(fieldJson!);
+      } catch {
+        throw new LockfileError("addons-invalid", `JSON inválido na linha ${lineNo(index)}`, lineNo(index));
+      }
+      fieldCount++;
+      index++;
+    }
+    if (fieldCount === 0) {
+      throw new LockfileError("addons-invalid", `unidade "addon ${id}" sem campos na linha ${lineNo(index)}`, lineNo(index));
+    }
+    if (index < lines.length) {
+      if (lines[index] !== "") {
+        if (CONFLICT_MARKER.test(lines[index]!)) {
+          throw new LockfileError("addons-conflict", `marcador de conflito na linha ${lineNo(index)}`, lineNo(index));
+        }
+        throw new LockfileError("addons-invalid", `esperada linha vazia após a unidade "addon ${id}" na linha ${lineNo(index)}`, lineNo(index));
+      }
+      index++;
+    }
+    const parsed = addonStateSchema.passthrough().safeParse({ id, ...fields });
+    if (!parsed.success) {
+      throw new LockfileError("addons-invalid", `unidade "addon ${id}" inválida: ${parsed.error.message}`, lineNo(index));
+    }
+    addons.set(id, parsed.data as AddonStateRecord);
+  }
+
+  return addons;
 }
 
 function parseManifestSection(
