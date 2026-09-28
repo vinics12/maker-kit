@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -29,11 +30,10 @@ function git(cwd: string, args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] });
 }
 
-async function gitRepo(target: string, opts?: { autocrlf?: boolean }): Promise<void> {
+async function gitRepo(target: string): Promise<void> {
   git(target, ["init", "-q"]);
   git(target, ["config", "user.name", "Maker Test"]);
   git(target, ["config", "user.email", "maker-test@example.com"]);
-  if (opts?.autocrlf) git(target, ["config", "core.autocrlf", "true"]);
 }
 
 function commitAll(target: string, message: string): void {
@@ -62,14 +62,32 @@ describe.each<BasesFormat>(["files", "pack"])("interop com o git (formato %s)", 
   it.skipIf(!hasGit())("AC-20/SC-006: core.autocrlf=true, commit e clone novo — bases conferem, doctor verde", async () => {
     const target = await initInstall(`maker-git-autocrlf-${format}-`, { format });
     directories.push(target);
-    await gitRepo(target, { autocrlf: true });
+    // Sem autocrlf no repo de origem: o commit grava exatamente os bytes do working tree (LF).
+    await gitRepo(target);
     commitAll(target, "install inicial");
 
     const clone = await temp(`maker-git-autocrlf-clone-${format}-`);
     await rm(clone, { recursive: true, force: true }); // git clone exige o destino ausente
-    git(process.cwd(), ["clone", "-q", target, clone]);
-    git(clone, ["config", "core.autocrlf", "true"]);
-    git(clone, ["checkout", "-f", "-q", "HEAD"]); // reaplica o checkout já com autocrlf ligado
+    // A config precisa estar ativa *durante* o clone: `git config` depois de um `checkout -f` sobre um
+    // índice já limpo não reescreve nada (o checkout só toca arquivos considerados desatualizados).
+    git(process.cwd(), ["clone", "-q", "-c", "core.autocrlf=true", target, clone]);
+
+    // Prova de sanidade de que a conversão realmente aconteceu: um arquivo de texto fora de `.maker`
+    // (raiz intocada por FR-030) sai do checkout em CRLF.
+    const claudeAgent = await readFile(join(clone, ".claude/agents/architect.md"), "utf-8");
+    expect(claudeAgent).toMatch(/\r\n/);
+
+    if (format === "pack") {
+      const lockfile = await readFile(join(clone, ".maker/maker.lock"));
+      expect(lockfile.toString("utf-8")).not.toMatch(/\r\n/);
+      expect(lockfile).toEqual(await readFile(join(target, ".maker/maker.lock")));
+    } else {
+      const manifest = await readManifest(clone);
+      const hash = Object.values(manifest!.files).find((entry) => entry.baseHash)!.baseHash!;
+      const base = await readFile(join(clone, ".maker/bases", hash));
+      expect(base.toString("utf-8")).not.toMatch(/\r\n/);
+      expect(createHash("sha256").update(base).digest("hex")).toBe(hash);
+    }
 
     await expectGreenDoctor(clone);
   });
