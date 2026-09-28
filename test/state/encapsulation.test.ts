@@ -18,9 +18,7 @@ describe("encapsulamento do estado (src/state/)", () => {
       /manifest\.json/,
       /maker\.lock/,
       /\.maker\/bases/,
-      // Segmento de caminho literal ("bases" como argumento avulso, ex. join(x, "bases")) — não a
-      // chave de config `state.bases` usada em texto de CLI (`"bases": "files"`), sempre seguida de ":".
-      /["']bases["'](?!\s*:)/,
+      /["']bases["']/,
     ];
     for (const file of files) {
       const content = await readFile(file, "utf-8");
