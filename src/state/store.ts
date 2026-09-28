@@ -475,7 +475,7 @@ async function readAddonsDirRaw(targetDir: string): Promise<{ names: string[]; e
     return { names: entries, exists: true };
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
-    // ENOTDIR: `.maker/addons` não é diretório — tolerado em pack (D11); nada a remover.
+    // ENOTDIR: `.maker/addons` não é diretório — tolerado em pack; nada a remover.
     if (code === "ENOENT" || code === "ENOTDIR") return { names: [], exists: false };
     throw error;
   }
