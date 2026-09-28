@@ -3,9 +3,11 @@ import { existsSync } from "node:fs";
 import { rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { BASES_DIR, LOCKFILE, MANIFEST_FILE } from "../../src/state/paths.js";
-import { initInstall, lockfileText, putBase, readManifest, snapshotTree } from "../helpers/state.js";
+import { initInstall, lockfileText, putBase, readAddonStates, readManifest, snapshotTree } from "../helpers/state.js";
 import { loadAddon } from "../../src/addons/loader.js";
 import { applyAddon, removeAddon } from "../../src/addons/apply.js";
+import { runList } from "../../src/commands/list.js";
+import { runDoctor } from "../../src/commands/doctor.js";
 import { runUpdate } from "../../src/commands/update.js";
 
 // Injeta `failAfter` na única `applyChangePlan` que `applyAddon`/`removeAddon` dispara, sem afetar as
@@ -186,4 +188,64 @@ describe("add/remove: formato em uso preservado e sem poda (AC-19, AC-33, AC-38,
     await expect(removeAddon(target, "saas")).rejects.toThrow(/Falha injetada durante a aplicação/);
     expect(await snapshotTree(target)).toEqual(before);
   });
+
+  it("AC-41: init Claude+Codex sem state.bases → add saas: unidade no lockfile, sem .maker/addons, list applied, doctor verde; remove: blocos retirados, arquivo criado apagado", async () => {
+    const target = await initInstall("maker-add-ac41-", { agents: ["claude", "codex"] });
+    directories.push(target);
+    const addon = await loadAddon("saas");
+    await applyAddon(target, addon, KNOBS);
+
+    expect(existsSync(join(target, ".maker", "addons"))).toBe(false);
+    expect((await readAddonStates(target)).get("saas")).toBeDefined();
+    const listOutput = await captureLog(() => runList({ target }));
+    expect(listOutput).toContain("saas · Base SaaS · v0.1.0 · applied");
+    process.exitCode = 0;
+    await captureLog(() => runDoctor({ target }));
+    expect(process.exitCode).not.toBe(1);
+
+    const res = await removeAddon(target, "saas");
+    expect(res.strippedTargets.length).toBeGreaterThan(0);
+    expect(res.deletedFiles).toContain(".specify/memory/saas-reference.md");
+    expect((await readAddonStates(target)).get("saas")).toBeUndefined();
+    process.exitCode = 0;
+    await captureLog(() => runDoctor({ target }));
+    expect(process.exitCode).not.toBe(1);
+  });
+
+  it("AC-39: seção de add-ons malformada — add aborta antes de qualquer escrita, não cria .maker/addons", async () => {
+    const target = await initInstall("maker-add-addons-invalid-", { format: "pack" });
+    directories.push(target);
+    const text = await lockfileText(target);
+    await writeFile(join(target, LOCKFILE), text.replace("[addons]\n\n", "[addons]\n\nlinha fora da gramática\n\n"), "utf-8");
+    const before = await snapshotTree(target);
+    const addon = await loadAddon("saas");
+
+    await expect(applyAddon(target, addon, KNOBS)).rejects.toThrow(/seção de add-ons de .*inválida/);
+    expect(await snapshotTree(target)).toEqual(before);
+    expect(existsSync(join(target, ".maker", "addons"))).toBe(false);
+  });
+
+  it("AC-39: seção de add-ons malformada — remove aborta antes de qualquer escrita, nunca 'não aplicado'", async () => {
+    const target = await initInstall("maker-remove-addons-invalid-", { format: "pack" });
+    directories.push(target);
+    const addon = await loadAddon("saas");
+    await applyAddon(target, addon, KNOBS);
+    const text = await lockfileText(target);
+    await writeFile(join(target, LOCKFILE), text.replace("[addons]\n\n", "[addons]\n\nlinha fora da gramática\n\n"), "utf-8");
+    const before = await snapshotTree(target);
+
+    const error = await removeAddon(target, "saas").catch((err: Error) => err);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).not.toContain("não está aplicado");
+    expect((error as Error).message).toMatch(/seção de add-ons de .*inválida/);
+    expect(await snapshotTree(target)).toEqual(before);
+  });
 });
+
+async function captureLog(action: () => Promise<void>): Promise<string> {
+  const messages: string[] = [];
+  const originalLog = console.log;
+  console.log = (...args: unknown[]) => messages.push(args.map(String).join(" "));
+  try { await action(); } finally { console.log = originalLog; }
+  return messages.join("\n").replace(/\x1B(?:\[[0-?]*[ -/]*[@-~]|[@-_])/g, "");
+}

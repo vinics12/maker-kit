@@ -8,8 +8,14 @@ import type { BasesFormat } from "../../src/render/manifest.js";
 import { runUpdate } from "../../src/commands/update.js";
 import { runDoctor } from "../../src/commands/doctor.js";
 import { loadAddon } from "../../src/addons/loader.js";
-import { applyAddon } from "../../src/addons/apply.js";
-import { hasGit, initInstall, readManifest, writeManifest } from "../helpers/state.js";
+import { applyAddon, removeAddon } from "../../src/addons/apply.js";
+import { serializeLockfile } from "../../src/state/lockfile.js";
+import { hasGit, initInstall, readAddonStates, readManifest, writeManifest } from "../helpers/state.js";
+
+vi.mock("../../src/addons/loader.js", async (importOriginal: () => Promise<typeof import("../../src/addons/loader.js")>) => {
+  const { mockLoaderWithSynthetic } = await import("../helpers/addons.js");
+  return mockLoaderWithSynthetic(importOriginal);
+});
 
 const directories: string[] = [];
 
@@ -238,5 +244,85 @@ describe("interop com o git — merge de duas branches (AC-40, D1)", () => {
     const lockfile = await readFile(join(target, ".maker/maker.lock"), "utf-8");
     expect(lockfile).not.toMatch(/^(<{7}|={7}|>{7}|\|{7})/m);
     await expectGreenDoctor(target);
+  });
+});
+
+describe("interop com o git — merge de add-ons distintos na seção [addons] (AC-45)", () => {
+  /** Ids em ordem de code unit: unidades em intervalos distintos, separadas por "saas" inalterada. */
+  function addonUnitOrder(lockfile: string): string[] {
+    return [...lockfile.matchAll(/^addon "([a-z0-9-]+)"$/gm)].map((match) => match[1]!);
+  }
+
+  async function commonAncestorWithSaas(prefix: string): Promise<string> {
+    const target = await initInstall(prefix, { agents: ["claude"], addon: "saas" });
+    directories.push(target);
+    await gitRepo(target);
+    commitAll(target, "install comum com saas aplicado");
+    return target;
+  }
+
+  it.skipIf(!hasGit())("branch A aplica alpha, branch B aplica zeta: unidades em intervalos distintos mesclam sem conflito", async () => {
+    const target = await commonAncestorWithSaas("maker-git-merge-addons-new-");
+    const base = git(target, ["symbolic-ref", "--short", "HEAD"]).trim();
+
+    git(target, ["checkout", "-q", "-b", "branch-a"]);
+    const alpha = await loadAddon("alpha");
+    await applyAddon(target, alpha, {});
+    // Pré-condição: alpha (nova) < saas (inalterada, entre as duas) < zeta (nova, na outra branch).
+    expect(addonUnitOrder(await readFile(join(target, ".maker/maker.lock"), "utf-8"))).toEqual(["alpha", "saas"]);
+    commitAll(target, "branch A: add-on alpha aplicado");
+
+    git(target, ["checkout", "-q", base]);
+    git(target, ["checkout", "-q", "-b", "branch-b"]);
+    const zeta = await loadAddon("zeta");
+    await applyAddon(target, zeta, {});
+    expect(addonUnitOrder(await readFile(join(target, ".maker/maker.lock"), "utf-8"))).toEqual(["saas", "zeta"]);
+    commitAll(target, "branch B: add-on zeta aplicado");
+
+    git(target, ["checkout", "-q", "branch-a"]);
+    git(target, ["merge", "--no-edit", "-q", "branch-b"]);
+
+    const lockfile = await readFile(join(target, ".maker/maker.lock"), "utf-8");
+    expect(lockfile).not.toMatch(/^(<{7}|={7}|>{7}|\|{7})/m);
+    expect(addonUnitOrder(lockfile)).toEqual(["alpha", "saas", "zeta"]);
+    await expectGreenDoctor(target);
+    expect(await readFile(join(target, ".specify/memory/alpha-reference.md"), "utf-8")).toContain("alpha");
+    expect(await readFile(join(target, ".specify/memory/zeta-reference.md"), "utf-8")).toContain("zeta");
+  });
+
+  it.skipIf(!hasGit())("variante de remoção: base com alpha+saas+zeta; A remove alpha, B remove zeta, mescla sem conflito", async () => {
+    const target = await commonAncestorWithSaas("maker-git-merge-addons-remove-");
+    await applyAddon(target, await loadAddon("alpha"), {});
+    await applyAddon(target, await loadAddon("zeta"), {});
+    commitAll(target, "install comum com alpha, saas e zeta aplicados");
+    const base = git(target, ["symbolic-ref", "--short", "HEAD"]).trim();
+
+    git(target, ["checkout", "-q", "-b", "branch-a"]);
+    await removeAddon(target, "alpha");
+    commitAll(target, "branch A: remove alpha");
+
+    git(target, ["checkout", "-q", base]);
+    git(target, ["checkout", "-q", "-b", "branch-b"]);
+    await removeAddon(target, "zeta");
+    commitAll(target, "branch B: remove zeta");
+
+    git(target, ["checkout", "-q", "branch-a"]);
+    git(target, ["merge", "--no-edit", "-q", "branch-b"]);
+
+    const lockfile = await readFile(join(target, ".maker/maker.lock"), "utf-8");
+    expect(lockfile).not.toMatch(/^(<{7}|={7}|>{7}|\|{7})/m);
+    expect(addonUnitOrder(lockfile)).toEqual(["saas"]);
+    await expectGreenDoctor(target);
+  });
+
+  it("determinismo: mesmo estado lógico serializado com ordens de inserção diferentes é byte a byte igual", async () => {
+    const target = await initInstall("maker-git-addons-determinism-", { agents: ["claude"], addon: "saas" });
+    directories.push(target);
+    await applyAddon(target, await loadAddon("alpha"), {});
+    const addonsMap = await readAddonStates(target);
+    const manifest = (await readManifest(target))!;
+    const order1 = new Map([...addonsMap]);
+    const order2 = new Map([...addonsMap].reverse());
+    expect(serializeLockfile(manifest, new Map(), order1)).toEqual(serializeLockfile(manifest, new Map(), order2));
   });
 });
