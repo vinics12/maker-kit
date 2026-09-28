@@ -118,13 +118,16 @@ export function serializeLockfile(manifest: Manifest, bases: ReadonlyMap<string,
   const lines: string[] = [];
   lines.push(`maker-lockfile ${LOCKFILE_VERSION}`);
   for (const comment of HEADER_COMMENT_LINES) lines.push(comment);
+  lines.push("");
   lines.push("[manifest]");
 
   const { files, config, ...rest } = manifest as Manifest & { config?: { state?: unknown } };
   const withoutState = config ? withoutStateKey(config) : config;
   const metaSource: Record<string, unknown> = { ...rest };
   if (config !== undefined) metaSource.config = withoutState;
-  const metaKeys = Object.keys(metaSource).sort(codeUnitCompare);
+  // Chave presente com valor `undefined` (em vez de simplesmente ausente) não vira linha — mesmo
+  // comportamento de JSON.stringify(objeto), que omite essas chaves.
+  const metaKeys = Object.keys(metaSource).filter((key) => metaSource[key] !== undefined).sort(codeUnitCompare);
   for (const key of metaKeys) {
     lines.push(`${key} ${canonicalJson(metaSource[key])}`);
   }
@@ -134,7 +137,7 @@ export function serializeLockfile(manifest: Manifest, bases: ReadonlyMap<string,
   for (const path of paths) {
     lines.push(`file ${canonicalJson(path)}`);
     const entry = (files as unknown as Record<string, Record<string, unknown>>)[path]!;
-    const fieldKeys = Object.keys(entry).sort(codeUnitCompare);
+    const fieldKeys = Object.keys(entry).filter((key) => entry[key] !== undefined).sort(codeUnitCompare);
     for (const key of fieldKeys) lines.push(`  ${key} ${canonicalJson(entry[key])}`);
     lines.push("");
   }
@@ -176,6 +179,10 @@ export function parseLockfile(raw: Buffer): ParsedLockfile {
 
   let i = 1;
   while (i < lines.length && lines[i]!.startsWith("# ")) i++;
+  if (lines[i] !== "") {
+    throw new LockfileError("manifest-invalid", `esperada linha vazia antes de [manifest] na linha ${i + 1}`, i + 1);
+  }
+  i++;
   if (lines[i] !== "[manifest]") {
     throw new LockfileError("manifest-invalid", "seção [manifest] ausente", i + 1);
   }
@@ -219,7 +226,6 @@ function parseManifestSection(
   let index = 0;
   const lineNo = (offset: number) => startLineNumber + offset;
 
-  // Meta-lines até a primeira linha vazia (ou até o primeiro `file`).
   while (index < lines.length && lines[index] !== "" && !lines[index]!.startsWith("file ")) {
     const line = lines[index]!;
     if (CONFLICT_MARKER.test(line)) {
@@ -240,7 +246,6 @@ function parseManifestSection(
   if (index >= lines.length) {
     throw new LockfileError("manifest-invalid", "seção [manifest] truncada (sem separador antes de [bases])", lineNo(index));
   }
-  // Linha vazia obrigatória entre meta-lines e file-units.
   if (lines[index] !== "") {
     throw new LockfileError("manifest-invalid", `esperada linha vazia na linha ${lineNo(index)}`, lineNo(index));
   }
@@ -272,6 +277,9 @@ function parseManifestSection(
       const fieldMatch = fieldLine.match(/^ {2}([A-Za-z][A-Za-z0-9]*) (.+)$/);
       if (!fieldMatch) throw new LockfileError("manifest-invalid", `campo de file fora da gramática na linha ${lineNo(index)}`, lineNo(index));
       const [, fieldKey, fieldJson] = fieldMatch;
+      if (Object.hasOwn(entry, fieldKey!)) {
+        throw new LockfileError("manifest-invalid", `campo "${fieldKey}" duplicado em "${path}" na linha ${lineNo(index)}`, lineNo(index));
+      }
       try {
         entry[fieldKey!] = JSON.parse(fieldJson!);
       } catch {
@@ -307,6 +315,7 @@ function parseBasesSection(
     const headerMatch = line.match(BASE_HEADER);
     if (headerMatch) {
       malformedRunActive = false;
+      const headerIndex = index;
       const [, hash, sizeText, encoding] = headerMatch as unknown as [string, string, string, "utf8" | "base64"];
       const size = Number(sizeText);
       const result = tryParseBlock(lines, rawLines, index + 1, hash!, size, encoding);
@@ -332,13 +341,15 @@ function parseBasesSection(
       }
       if (result.kind === "size-mismatch") {
         problems.push({ origin: "pack", kind: "size-mismatch", hash, detail: `tamanho declarado ${size}, conteúdo ${result.actualSize}`, line: lineNo(index) });
-        index = result.nextIndex;
-        malformedExtentEnd = result.nextIndex;
+        // Retoma na linha seguinte ao cabeçalho quebrado (não confia no `size`), testando cada linha
+        // como possível cabeçalho; a extensão até o `@end` encontrado só suprime `malformed` redundante.
+        malformedExtentEnd = result.extentEnd;
+        index = headerIndex + 1;
         continue;
       }
-      // truncated: não achou @end à frente.
+      // truncated: não achou @end à frente. Também retoma na linha seguinte ao cabeçalho quebrado.
       problems.push({ origin: "pack", kind: "truncated", hash, detail: "bloco truncado; @end não encontrado", line: lineNo(index) });
-      index++; // retoma na linha seguinte ao cabeçalho quebrado
+      index = headerIndex + 1;
       malformedRunActive = false;
       continue;
     }
@@ -357,7 +368,7 @@ function parseBasesSection(
 
 type BlockResult =
   | { kind: "ok"; content: Buffer; nextIndex: number; recovered?: boolean }
-  | { kind: "size-mismatch"; actualSize: number; nextIndex: number }
+  | { kind: "size-mismatch"; actualSize: number; extentEnd: number }
   | { kind: "truncated" };
 
 function tryParseBlock(
@@ -392,7 +403,8 @@ function tryParseBlock(
     if (content.length === size && endLine !== undefined && BASE_END(hash).test(endLine)) {
       return { kind: "ok", content, nextIndex: endLineIndex + 1 };
     }
-    // Procura @end adiante (sempre existe se a estrutura estiver íntegra).
+    // Procura @end adiante (sempre existe se a estrutura estiver íntegra); a extensão até ele só
+    // suprime `malformed` redundante — a ressincronização em si volta para logo após o cabeçalho.
     const found = findEnd(lines, bodyStart, hash);
     if (found < 0) return { kind: "truncated" };
     const actualRaw = Buffer.from(rawLines.slice(bodyStart, found).join("\n"), "utf-8");
@@ -408,24 +420,23 @@ function tryParseBlock(
       const normalized = Buffer.from(withoutDelimiterCr.toString("utf-8").replace(/\r\n/g, "\n"), "utf-8");
       if (normalized.length === size) return { kind: "ok", content: normalized, nextIndex: found + 1, recovered: true };
     }
-    return { kind: "size-mismatch", actualSize: actualRaw.length, nextIndex: found + 1 };
+    return { kind: "size-mismatch", actualSize: actualRaw.length, extentEnd: found + 1 };
   }
 
-  // base64: consome linhas válidas de base64 até achar "@end sha256=<hash>".
   let index = bodyStart;
   const b64Lines: string[] = [];
   while (index < lines.length) {
     const line = lines[index]!;
     if (BASE_END(hash).test(line)) {
       const decoded = Buffer.from(b64Lines.join(""), "base64");
-      if (decoded.length !== size) return { kind: "size-mismatch", actualSize: decoded.length, nextIndex: index + 1 };
+      if (decoded.length !== size) return { kind: "size-mismatch", actualSize: decoded.length, extentEnd: index + 1 };
       return { kind: "ok", content: decoded, nextIndex: index + 1 };
     }
     if (!BASE64_LINE.test(line)) {
       const found = findEnd(lines, bodyStart, hash);
       if (found < 0) return { kind: "truncated" };
       const decoded = Buffer.from(b64Lines.join(""), "base64");
-      return { kind: "size-mismatch", actualSize: decoded.length, nextIndex: found + 1 };
+      return { kind: "size-mismatch", actualSize: decoded.length, extentEnd: found + 1 };
     }
     b64Lines.push(line);
     index++;

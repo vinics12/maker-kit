@@ -50,7 +50,8 @@ export async function runDoctor(opts: DoctorOptions): Promise<void> {
   }
 
   // Mediação pendente é informativa (não degrada o install); falhar ao planejar o update, não.
-  // Reaproveita o `state` já lido (modo "read"): o doctor nunca recupera nem escreve (INV-6).
+  // Reaproveita o `state` já lido em modo "read": abrir de novo em "mutate" recuperaria uma transação
+  // pendente e criaria .maker/ à toa — o doctor só lê, nunca escreve.
   const pending = await pendingMediation(targetDir, state);
   if ("error" in pending) {
     console.log(pc.red(`  não foi possível planejar o update: ${pending.error}`));

@@ -119,4 +119,16 @@ describe("maker update transacional", () => {
     expect(await readFile(manifestPath)).toEqual(before);
     expect((await stat(manifestPath)).mtimeMs).toBe(mtime);
   });
+
+  it("sem install, --dry-run lança e não cria .maker/ (regressão: antes deixava o diretório)", async () => {
+    const target = await mkdtemp(join(tmpdir(), "maker-update-noinstall-dry-"));
+    await expect(runUpdate({ target, dryRun: true })).rejects.toThrow("Nenhum install");
+    await expect(stat(join(target, ".maker"))).rejects.toThrow();
+  });
+
+  it("sem install, aplicado lança e não cria .maker/", async () => {
+    const target = await mkdtemp(join(tmpdir(), "maker-update-noinstall-apply-"));
+    await expect(runUpdate({ target })).rejects.toThrow("Nenhum install");
+    await expect(stat(join(target, ".maker"))).rejects.toThrow();
+  });
 });

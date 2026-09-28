@@ -1,13 +1,10 @@
-/** Nome do arquivo de manifest gravado na raiz do install (formato "files"). */
+// Constantes de caminho isoladas aqui (sem imports) para que nenhum outro módulo precise conhecer
+// os literais concretos do estado — só `src/state/*` os importa.
 export const MANIFEST_FILE = ".maker/manifest.json";
-
-/** Lockfile do estado compacto (formato "pack"). */
 export const LOCKFILE = ".maker/maker.lock";
-
-/** Diretório de bases upstream do formato "files". */
 export const BASES_DIR = ".maker/bases";
 
-/** Arquivos de controle do git gerenciados dentro de `.maker` (mediáveis; ver D3/B1). */
+/** Protegem as bases de conversão de EOL e ignoram temporários; liberados para mediação apesar de estarem em `.maker`. */
 export const GIT_CONTROL_FILES: readonly string[] = [".maker/.gitattributes", ".maker/.gitignore"];
 
 export function basePath(hash: string): string {

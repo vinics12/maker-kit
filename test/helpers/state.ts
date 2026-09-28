@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
@@ -14,6 +15,7 @@ import type { BasesFormat } from "../../src/render/manifest.js";
 import type { Manifest } from "../../src/render/manifest.js";
 import { openState, planStateWrite } from "../../src/state/store.js";
 import { basePath, LOCKFILE } from "../../src/state/paths.js";
+import { parseLockfile, serializeLockfile } from "../../src/state/lockfile.js";
 
 export { readManifest } from "../../src/state/store.js";
 
@@ -61,9 +63,22 @@ export async function putBase(target: string, content: Buffer | string): Promise
   return hash;
 }
 
-/** Corrompe uma base nos dois formatos (o que existir): sobrescreve o conteúdo bruto sem reindexar. */
+/** Mesmo tamanho do conteúdo original: garante `hash-mismatch` (nunca `size-mismatch`/`truncated`). */
+function flipFirstByte(content: Buffer): Buffer {
+  if (!content.length) return Buffer.from("x");
+  const copy = Buffer.from(content);
+  copy[0] = copy[0]! ^ 0xff;
+  return copy;
+}
+
+/**
+ * Corrompe uma base nos dois formatos (o que existir), preservando a estrutura ao redor: no pack,
+ * reserializa o lockfile inteiro com o conteúdo transformado sob o mesmo hash declarado (size/encoding
+ * recalculados para esse conteúdo), então o parser sempre vê um bloco estruturalmente íntegro cujo
+ * sha256 não bate — nunca `truncated`/`malformed` por causa só da corrupção.
+ */
 export async function corruptBase(target: string, hash: string, mutate?: (b: Buffer) => Buffer): Promise<void> {
-  const transform = mutate ?? ((b: Buffer) => Buffer.concat([b, Buffer.from("corrupted")]));
+  const transform = mutate ?? flipFirstByte;
   const filesPath = join(target, basePath(hash));
   try {
     const current = await readFile(filesPath);
@@ -72,30 +87,26 @@ export async function corruptBase(target: string, hash: string, mutate?: (b: Buf
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
   const lockfilePath = join(target, LOCKFILE);
-  try {
-    const raw = await readFile(lockfilePath, "utf-8");
-    const marker = `@base sha256=${hash} `;
-    const start = raw.indexOf(marker);
-    if (start >= 0) {
-      const bodyStart = raw.indexOf("\n", start) + 1;
-      const endMarker = `@end sha256=${hash}`;
-      const bodyEnd = raw.indexOf(endMarker, bodyStart);
-      if (bodyEnd >= 0) {
-        const before = raw.slice(0, bodyStart);
-        const body = raw.slice(bodyStart, bodyEnd);
-        const after = raw.slice(bodyEnd);
-        const corrupted = transform(Buffer.from(body, "utf-8")).toString("utf-8");
-        await writeFile(lockfilePath, before + corrupted + after);
-      }
-    }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  }
+  if (!existsSync(lockfilePath)) return;
+  const raw = await readFile(lockfilePath);
+  const parsed = parseLockfile(raw);
+  if (!parsed.bases.has(hash)) return;
+  const corrupted = new Map(parsed.bases);
+  corrupted.set(hash, transform(parsed.bases.get(hash)!));
+  await writeFile(lockfilePath, serializeLockfile(parsed.manifest, corrupted));
 }
 
-/** Remove uma base dos dois formatos (o que existir). */
+/** Remove uma base dos dois formatos (o que existir): no pack, reserializa o lockfile sem ela. */
 export async function removeBase(target: string, hash: string): Promise<void> {
   await rm(join(target, basePath(hash)), { force: true });
+  const lockfilePath = join(target, LOCKFILE);
+  if (!existsSync(lockfilePath)) return;
+  const raw = await readFile(lockfilePath);
+  const parsed = parseLockfile(raw);
+  if (!parsed.bases.has(hash)) return;
+  const remaining = new Map(parsed.bases);
+  remaining.delete(hash);
+  await writeFile(lockfilePath, serializeLockfile(parsed.manifest, remaining));
 }
 
 export async function lockfileText(target: string): Promise<string> {
@@ -141,7 +152,9 @@ export async function initInstall(
     await applyAddon(target, addon, {});
   }
   const format = opts?.format;
-  if (format && format !== "unset") {
+  if (format === "unset") {
+    await toLegacyFiles(target);
+  } else if (format) {
     const state = await openState(target, { mode: "mutate" });
     if (state && state.inUse !== format) {
       const next: Manifest = { ...state.manifest, basesFormat: format };

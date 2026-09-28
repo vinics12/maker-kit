@@ -219,9 +219,12 @@ export async function removeAddon(
   id: string,
   options: { dryRun?: boolean } = {},
 ): Promise<{ strippedTargets: string[]; deletedFiles: string[]; keptFiles: string[]; plan: ChangePlan }> {
+  // `.maker/addons/<id>.json` também é metadado de estado (isStateMetadata): recupera uma transação
+  // pendente antes de ler qualquer coisa, senão um crash no meio de um `add` deixaria o `remove`
+  // planejar em cima de um state que a recuperação desfaz logo em seguida.
+  const installState = await openState(targetDir, { mode: options.dryRun ? "dry-run" : "mutate" });
   const state = await readAddonState(targetDir, id);
   if (!state) throw new Error(`Add-on "${id}" não está aplicado em ${targetDir}.`);
-  const installState = await openState(targetDir, { mode: options.dryRun ? "dry-run" : "mutate" });
   const manifest = installState?.manifest;
 
   const strippedTargets: string[] = [];

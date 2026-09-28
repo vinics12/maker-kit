@@ -39,6 +39,12 @@ describe("transaction — crashAfter / recoverBeforeRead / ordem de metadados", 
     expect(await hasPendingTransactions(target)).toBe(true);
   });
 
+  it("recoverBeforeRead é no-op (não cria .maker/) quando não há transações pendentes", async () => {
+    const target = await mkdtemp(join(tmpdir(), "maker-tx-recover-noop-"));
+    await recoverBeforeRead(target);
+    expect(existsSync(join(target, ".maker"))).toBe(false);
+  });
+
   it("isStateMetadata reconhece manifest.json, maker.lock e addons/<id>.json", () => {
     expect(isStateMetadata(".maker/manifest.json")).toBe(true);
     expect(isStateMetadata(".maker/maker.lock")).toBe(true);

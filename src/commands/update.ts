@@ -55,7 +55,7 @@ export async function runUpdate(opts: UpdateOptions): Promise<void> {
   const targetDir = resolve(opts.target ?? process.cwd());
   if (opts.export && opts.applyResolutions) throw new Error("Use --export ou --apply-resolutions, não os dois juntos.");
   // dry-run/export não escrevem estado: só verificam que não há transação pendente. Os demais
-  // caminhos (aplicado, --apply-resolutions) recuperam uma transação pendente antes de ler (AC-10b).
+  // caminhos (aplicado, --apply-resolutions) recuperam uma transação pendente antes de ler.
   const state = await openState(targetDir, { mode: opts.dryRun || opts.export ? "dry-run" : "mutate" });
   // As propostas são validadas contra os candidatos do mesmo modo (--no-merge ou não) da exportação.
   const merge = opts.applyResolutions ? (await exportedMergeMode(targetDir, opts.applyResolutions)) ?? opts.merge : opts.merge;
@@ -113,7 +113,10 @@ export async function runUpdate(opts: UpdateOptions): Promise<void> {
 }
 
 export async function planUpdate(targetDir: string, opts: { merge?: boolean; state?: InstallState | null } = {}): Promise<UpdatePlanning> {
-  const priorState = opts.state ?? await openState(targetDir, { mode: "mutate" });
+  // `state: null` (o alvo já foi aberto e não há install) é diferente de `state` ausente (abre agora,
+  // em modo mutate): usar `??` aqui reabriria o estado sempre que o chamador já soubesse que não há
+  // install — inclusive em --dry-run, criando .maker/ à toa (regressão de comportamento externo).
+  const priorState = "state" in opts ? opts.state : await openState(targetDir, { mode: "mutate" });
   if (!priorState) throw new Error(`Nenhum install do maker em ${targetDir}.`);
   const prior = priorState.manifest;
   const { config, recovered } = await resolveConfig(targetDir, prior.config, prior.project);
@@ -239,14 +242,18 @@ export async function planUpdate(targetDir: string, opts: { merge?: boolean; sta
   next.agents = agents;
   if (next.config || recovered) next.config = config;
   next.makerVersion = makerVersion();
-  // Só as bases ainda referenciadas pelo manifest final entram no armazenamento (FR-011); o resto é podado.
+  // Só as bases ainda referenciadas pelo manifest final entram no armazenamento; o resto é podado. Uma
+  // base referenciada cujo conteúdo não pôde ser lido (corrompida) fica de fora de `finalBases`, mas
+  // continua em `referencedBases`: é achado de diagnóstico do doctor, a poda nunca a remove do disco.
   const referencedBases = new Set(Object.values(next.files).flatMap((item) => item.baseHash ? [item.baseHash] : []));
   const finalBases = new Map<string, Buffer>();
   for (const hash of referencedBases) {
     const content = bases.get(hash) ?? priorState.readBase(hash);
     if (content) finalBases.set(hash, content);
   }
-  changes.push(...await planStateWrite(priorState, targetDir, { manifest: next, format: priorState.inUse, bases: finalBases, prune: true }));
+  changes.push(...await planStateWrite(priorState, targetDir, {
+    manifest: next, format: priorState.inUse, bases: finalBases, prune: true, preserve: referencedBases,
+  }));
   const plan = createPlan(targetDir, changes);
   const reported = new Set(reports.map((report) => report.path));
   for (const change of plan.changes) {

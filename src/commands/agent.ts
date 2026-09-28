@@ -38,9 +38,8 @@ export async function runAgentAdd(providerInput: string, opts: AgentAddOptions):
     manifest.files,
     buildContext(config, manifest.installedAt),
   );
-  // applyAgentProvider grava os arquivos da integração diretamente (fora do plano transacional);
-  // o `agent add` inteiro transacional (arquivos + bases) é da US-5. Aqui só a persistência do
-  // manifest passa a ser transacional (`planStateWrite` + `applyChangePlan`), sem escrever direto.
+  // applyAgentProvider ainda grava os arquivos da integração direto no disco (fora do plano
+  // transacional) — só a persistência do manifest passa a ser transacional aqui.
   const applied = await applyAgentProvider(targetDir, buildContext(config, manifest.installedAt), provider);
   for (const file of applied) manifest.files[file.rel] = file.entry;
   manifest.schemaVersion = 3;

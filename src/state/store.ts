@@ -5,7 +5,7 @@ import { inspectTarget, planWrite, type PlannedChange } from "../changes/plan.js
 import { assertNoPendingTransactions, hasPendingTransactions, recoverBeforeRead } from "../changes/transaction.js";
 import { sha256, type BasesFormat, type Manifest } from "../render/manifest.js";
 import { BASES_DIR, LOCKFILE, MANIFEST_FILE, basePath, isBaseName } from "./paths.js";
-import { LockfileError, parseLockfile, serializeLockfile, type BaseProblem, type LockfileErrorKind } from "./lockfile.js";
+import { LockfileError, parseLockfile, serializeLockfile, type BaseProblem } from "./lockfile.js";
 
 export type { BasesFormat };
 export type OpenMode = "mutate" | "dry-run" | "read";
@@ -64,6 +64,11 @@ function stateErrorAction(kind: StateErrorKind, subject: "manifest" | "lockfile"
   }
 }
 
+/** `LockfileError("unknown-version", "versão de lockfile desconhecida: N")`: extrai o N para a mensagem do contrato. */
+function unknownVersionNumber(lockfileError?: LockfileError): string {
+  return lockfileError?.message.match(/desconhecida: (\d+)/)?.[1] ?? "desconhecida";
+}
+
 function stateErrorMessage(kind: StateErrorKind, subject: "manifest" | "lockfile", lockfileError?: LockfileError): string {
   switch (kind) {
     case "coexistence":
@@ -73,7 +78,7 @@ function stateErrorMessage(kind: StateErrorKind, subject: "manifest" | "lockfile
         ? `.maker/manifest.json ilegível; nenhuma alteração foi feita.`
         : `.maker/maker.lock ilegível; nenhuma alteração foi feita.`;
     case "unknown-version":
-      return `.maker/maker.lock usa um formato mais novo que este maker entende (1); nenhuma alteração foi feita.`;
+      return `.maker/maker.lock usa um formato mais novo (versão ${unknownVersionNumber(lockfileError)}) que este maker entende (1); nenhuma alteração foi feita.`;
     case "manifest-invalid":
       return `seção de manifest de .maker/maker.lock inválida (linha ${lockfileError?.line}: ${lockfileError?.message}); nenhuma alteração foi feita.`;
     case "manifest-conflict":
@@ -82,11 +87,9 @@ function stateErrorMessage(kind: StateErrorKind, subject: "manifest" | "lockfile
 }
 
 function toStateError(kind: StateErrorKind, targetDir: string, subject: "manifest" | "lockfile" = "lockfile", lockfileError?: LockfileError): StateError {
-  return new StateError(kind, stateErrorMessage(kind, subject, lockfileError), stateErrorAction(kind, subject), targetDir);
-}
-
-function lockfileKindToStateKind(kind: LockfileErrorKind): StateErrorKind {
-  return kind;
+  const action = stateErrorAction(kind, subject);
+  const path = subject === "manifest" ? join(targetDir, MANIFEST_FILE) : join(targetDir, LOCKFILE);
+  return new StateError(kind, `${stateErrorMessage(kind, subject, lockfileError)} Ação: ${action}.`, action, path);
 }
 
 async function listBaseDirEntries(targetDir: string): Promise<string[]> {
@@ -157,7 +160,7 @@ export async function inspectState(targetDir: string): Promise<StateSnapshot> {
       parsed = parseLockfile(raw);
     } catch (error) {
       if (error instanceof LockfileError) {
-        return { ...empty, error: toStateError(lockfileKindToStateKind(error.kind), targetDir, "lockfile", error) };
+        return { ...empty, error: toStateError(error.kind, targetDir, "lockfile", error) };
       }
       throw error;
     }
@@ -294,7 +297,19 @@ async function planBasesRemoval(targetDir: string, keep: ReadonlySet<string>): P
 export async function planStateWrite(
   state: InstallState | null,
   targetDir: string,
-  next: { manifest: Manifest; format: BasesFormat; bases: ReadonlyMap<string, Buffer>; consolidate?: boolean; prune?: boolean },
+  next: {
+    manifest: Manifest;
+    format: BasesFormat;
+    bases: ReadonlyMap<string, Buffer>;
+    consolidate?: boolean;
+    prune?: boolean;
+    /**
+     * Hashes que nunca são removidos por `prune`, mesmo sem conteúdo verificável em `bases` (ex.: uma
+     * base ainda referenciada pelo manifest, mas corrompida no armazenamento — a poda some com bases
+     * órfãs, não com achados de diagnóstico; quem decide isso é o `doctor`, não `planStateWrite`).
+     */
+    preserve?: ReadonlySet<string>;
+  },
 ): Promise<PlannedChange[]> {
   const changes: PlannedChange[] = [];
   const manifest = stripState(next.manifest);
@@ -308,7 +323,9 @@ export async function planStateWrite(
       changes.push(await planWrite({ targetDir, path: basePath(hash), content, source: "metadata", reason: "base upstream", force: true }));
     }
     if (next.prune) {
-      changes.push(...await planBasesRemoval(targetDir, new Set(finalBases.keys())));
+      const keep = new Set(finalBases.keys());
+      for (const hash of next.preserve ?? []) keep.add(hash);
+      changes.push(...await planBasesRemoval(targetDir, keep));
     }
     changes.push(await planWrite({
       targetDir, path: MANIFEST_FILE, content: `${JSON.stringify(manifest, null, 2)}\n`,

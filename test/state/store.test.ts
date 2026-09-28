@@ -16,6 +16,7 @@ import {
 } from "../../src/state/store.js";
 import { serializeLockfile } from "../../src/state/lockfile.js";
 import type { Manifest } from "../../src/render/manifest.js";
+import { corruptBase, initInstall, putBase, removeBase } from "../helpers/state.js";
 
 function sha256(content: Buffer): string {
   return createHash("sha256").update(content).digest("hex");
@@ -53,22 +54,62 @@ describe("state/store — inspectState / openState (files e pack)", () => {
     const snapshot = await inspectState(t);
     expect(snapshot.error).toBeInstanceOf(StateError);
     expect(snapshot.error?.kind).toBe("coexistence");
+    expect(snapshot.error?.message).toContain(".maker/manifest.json e .maker/maker.lock coexistem");
+    expect(snapshot.error?.message).toContain("Ação: escolha um estado e remova o outro, ou restaure .maker do histórico do git.");
     await expect(openState(t, { mode: "read" })).rejects.toBeInstanceOf(StateError);
   });
 
-  it("maker-lockfile 2 vira unknown-version; nunca null", async () => {
+  it("maker-lockfile 2 vira unknown-version (com o número da versão); nunca null", async () => {
     const t = await target("maker-store-version-");
     await mkdir(join(t, ".maker"), { recursive: true });
-    await writeFile(join(t, ".maker", "maker.lock"), "maker-lockfile 2\n# a\n# b\n[manifest]\n\n[bases]\n\n");
-    await expect(openState(t, { mode: "read" })).rejects.toMatchObject({ kind: "unknown-version" });
+    await writeFile(join(t, ".maker", "maker.lock"), "maker-lockfile 2\n# a\n# b\n\n[manifest]\n\n[bases]\n\n");
+    await expect(openState(t, { mode: "read" })).rejects.toMatchObject({
+      kind: "unknown-version",
+      message: expect.stringContaining("usa um formato mais novo (versão 2) que este maker entende (1)"),
+    });
+    await expect(openState(t, { mode: "read" })).rejects.toMatchObject({ message: expect.stringContaining("Ação: atualize o maker.") });
   });
 
   it("manifest com marcador de conflito vira manifest-conflict", async () => {
     const t = await target("maker-store-conflict-");
     await mkdir(join(t, ".maker"), { recursive: true });
     await writeFile(join(t, ".maker", "maker.lock"),
-      "maker-lockfile 1\n# a\n# b\n[manifest]\nmakerVersion \"1.0.0\"\n<<<<<<< HEAD\n\n[bases]\n\n");
-    await expect(openState(t, { mode: "read" })).rejects.toMatchObject({ kind: "manifest-conflict" });
+      "maker-lockfile 1\n# a\n# b\n\n[manifest]\nmakerVersion \"1.0.0\"\n<<<<<<< HEAD\n\n[bases]\n\n");
+    await expect(openState(t, { mode: "read" })).rejects.toMatchObject({
+      kind: "manifest-conflict",
+      message: expect.stringContaining("Ação: resolva o conflito ou restaure .maker/maker.lock do histórico do git."),
+    });
+  });
+
+  it("lockfile ilegível (I/O) vira unreadable com ação de restaurar do git", async () => {
+    const t = await target("maker-store-unreadable-lockfile-");
+    await mkdir(join(t, ".maker", "maker.lock"), { recursive: true }); // dir no lugar do arquivo: EISDIR ao ler
+    await expect(openState(t, { mode: "read" })).rejects.toMatchObject({
+      kind: "unreadable",
+      message: expect.stringContaining(".maker/maker.lock ilegível"),
+    });
+    await expect(openState(t, { mode: "read" })).rejects.toMatchObject({ message: expect.stringContaining("Ação: restaure .maker/maker.lock do histórico do git.") });
+  });
+
+  it("manifest.json ilegível (JSON inválido) vira unreadable com ação sobre o manifest.json", async () => {
+    const t = await target("maker-store-unreadable-manifest-");
+    await mkdir(join(t, ".maker"), { recursive: true });
+    await writeFile(join(t, ".maker", "manifest.json"), "{ isto não é json");
+    await expect(openState(t, { mode: "read" })).rejects.toMatchObject({
+      kind: "unreadable",
+      message: expect.stringContaining(".maker/manifest.json ilegível"),
+    });
+    await expect(openState(t, { mode: "read" })).rejects.toMatchObject({ message: expect.stringContaining("Ação: restaure .maker/manifest.json do histórico do git.") });
+  });
+
+  it("manifest inválido no lockfile vira manifest-invalid com ação de restaurar do git", async () => {
+    const t = await target("maker-store-manifest-invalid-");
+    await mkdir(join(t, ".maker"), { recursive: true });
+    await writeFile(join(t, ".maker", "maker.lock"), "maker-lockfile 1\n# a\n# b\n\nlinha sem [manifest]\n");
+    await expect(openState(t, { mode: "read" })).rejects.toMatchObject({
+      kind: "manifest-invalid",
+      message: expect.stringContaining("Ação: restaure .maker/maker.lock do histórico do git."),
+    });
   });
 
   it("união verificada: base corrompida em files não entra em bases; base válida entra", async () => {
@@ -149,6 +190,32 @@ describe("state/store — inspectState / openState (files e pack)", () => {
     expect(plan2.changes.every((c) => c.action === "preserve")).toBe(true);
   });
 
+  it("planStateWrite prune=true nunca remove um hash em preserve, mesmo fora de bases (corrompida referenciada)", async () => {
+    const t = await target("maker-store-preserve-");
+    const kept = Buffer.from("mantida");
+    const keptHash = sha256(kept);
+    const corruptHash = "c".repeat(64);
+    const m = manifest({ files: {
+      "a.md": { hash: keptHash, source: "engine:common", baseHash: keptHash },
+      "b.md": { hash: corruptHash, source: "engine:common", baseHash: corruptHash },
+    } });
+    const initial = await planStateWrite(null, t, {
+      manifest: m, format: "files", bases: new Map([[keptHash, kept], [corruptHash, Buffer.from("qualquer coisa")]]), prune: false,
+    });
+    await applyChangePlan(createPlan(t, initial));
+    expect(existsSync(join(t, ".maker", "bases", corruptHash))).toBe(true);
+
+    // `corruptHash` continua referenciado por "b.md", mas seu conteúdo não é verificável (sha256 não
+    // bate) — nem entra em `bases` nesta rodada, mas está em `preserve`: não deve ser podado.
+    const state = await openState(t, { mode: "read" });
+    const changes = await planStateWrite(state, t, {
+      manifest: m, format: "files", bases: new Map([[keptHash, kept]]), prune: true, preserve: new Set([keptHash, corruptHash]),
+    });
+    await applyChangePlan(createPlan(t, changes));
+    expect(existsSync(join(t, ".maker", "bases", keptHash))).toBe(true);
+    expect(existsSync(join(t, ".maker", "bases", corruptHash))).toBe(true);
+  });
+
   it("planStateWrite normaliza: config.state nunca é gravado", async () => {
     const t = await target("maker-store-config-state-");
     const m = manifest({ config: { agent: "claude", project: { name: "x" }, state: { bases: "pack" } } as unknown as Manifest["config"] });
@@ -167,7 +234,7 @@ describe("state/store — inspectState / openState (files e pack)", () => {
     expect(merged.get("h2")).toEqual(Buffer.from("y"));
   });
 
-  it("openState mutate recupera transação pendente antes de ler (AC-10b)", async () => {
+  it("openState mutate recupera transação pendente antes de ler", async () => {
     const t = await target("maker-store-recover-");
     const m = manifest();
     const initial = await planStateWrite(null, t, { manifest: m, format: "files", bases: new Map(), prune: false });
@@ -182,3 +249,62 @@ describe("state/store — inspectState / openState (files e pack)", () => {
     expect(recovered?.manifest.makerVersion).toBe("1.1.0");
   });
 });
+
+describe("test/helpers/state.ts — put/corrupt/remove nos dois formatos; initInstall files/pack/unset", () => {
+  it("putBase/corruptBase/removeBase em files", async () => {
+    const t = await initInstall("maker-helper-files-", { format: "files" });
+    const hash = await putBase(t, "conteudo da base");
+    let state = await openState(t, { mode: "read" });
+    expect(state?.bases.get(hash)).toEqual(Buffer.from("conteudo da base"));
+
+    await corruptBase(t, hash);
+    state = await inspectStateBases(t);
+    expect(state.bases.has(hash)).toBe(false);
+    expect(state.problems.some((p) => p.hash === hash && p.kind === "hash-mismatch")).toBe(true);
+
+    await removeBase(t, hash);
+    state = await inspectStateBases(t);
+    expect(state.bases.has(hash)).toBe(false);
+    expect(existsSync(join(t, ".maker", "bases", hash))).toBe(false);
+  });
+
+  it("putBase/corruptBase/removeBase em pack", async () => {
+    const t = await initInstall("maker-helper-pack-", { format: "pack" });
+    const hash = await putBase(t, "conteudo da base");
+    let state = await openState(t, { mode: "read" });
+    expect(state?.bases.get(hash)).toEqual(Buffer.from("conteudo da base"));
+
+    await corruptBase(t, hash);
+    state = await inspectStateBases(t);
+    expect(state.bases.has(hash)).toBe(false);
+    expect(state.problems.some((p) => p.hash === hash && p.kind === "hash-mismatch")).toBe(true);
+    expect(state.problems.some((p) => p.hash === hash && (p.kind === "truncated" || p.kind === "malformed"))).toBe(false);
+
+    // Recoloca a base para testar a remoção isoladamente.
+    const hash2 = await putBase(t, "outra base");
+    await removeBase(t, hash2);
+    const afterRemove = await inspectStateBases(t);
+    expect(afterRemove.bases.has(hash2)).toBe(false);
+    expect(afterRemove.problems.some((p) => p.hash === hash2)).toBe(false);
+  });
+
+  it("initInstall({ format: \"unset\" }) produz files sem basesFormat, independente do default do init", async () => {
+    const t = await initInstall("maker-helper-unset-", { format: "unset" });
+    const state = await openState(t, { mode: "read" });
+    expect(state?.inUse).toBe("files");
+    expect(state?.recorded).toBeUndefined();
+    expect((state?.manifest.config as { state?: unknown } | undefined)?.state).toBeUndefined();
+  });
+
+  it("initInstall({ format: \"files\" }) e ({ format: \"pack\" }) produzem o formato pedido", async () => {
+    const files = await initInstall("maker-helper-format-files-", { format: "files" });
+    const pack = await initInstall("maker-helper-format-pack-", { format: "pack" });
+    expect((await openState(files, { mode: "read" }))?.inUse).toBe("files");
+    expect((await openState(pack, { mode: "read" }))?.inUse).toBe("pack");
+  });
+});
+
+async function inspectStateBases(target: string) {
+  const snapshot = await inspectState(target);
+  return { bases: snapshot.bases, problems: snapshot.problems };
+}

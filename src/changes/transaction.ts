@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { constants } from "node:fs";
+import { constants, existsSync } from "node:fs";
 import {
   chmod,
   cp,
@@ -74,9 +74,13 @@ export async function hasPendingTransactions(targetDir: string): Promise<boolean
   }
 }
 
-/** Adquire o lock, recupera transações pendentes (rollback pelo journal) e libera. Usado antes de ler o estado em modo `mutate` (FR-019, AC-10b). */
+/**
+ * Adquire o lock, recupera transações pendentes (rollback pelo journal) e libera. Usado antes de ler
+ * o estado em modo `mutate`. No-op sem tocar o disco quando não há `.maker/transactions` — um alvo sem
+ * install (ou sem transação pendente) nunca ganha um `.maker/` só por causa da recuperação.
+ */
 export async function recoverBeforeRead(targetDir: string): Promise<void> {
-  await mkdir(join(targetDir, ".maker"), { recursive: true });
+  if (!existsSync(join(targetDir, TRANSACTIONS))) return;
   const lockPath = join(targetDir, LOCK);
   const lock = await acquireLock(lockPath);
   try {

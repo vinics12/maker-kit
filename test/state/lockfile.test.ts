@@ -65,13 +65,42 @@ describe("lockfile — codec (contracts/lockfile-format.md)", () => {
     const base = Buffer.from("hello");
     const hash = sha256(base);
     const text = serializeLockfile(m, new Map([[hash, base]])).toString("utf-8");
-    expect(text.startsWith("maker-lockfile 1\n")).toBe(true);
+    expect(text.startsWith(
+      "maker-lockfile 1\n" +
+      "# Estado do maker (manifest + bases). Gerado pela CLI — não edite à mão.\n" +
+      "# Formato e recuperação: docs/maker-state.md do maker.\n" +
+      "\n" +
+      "[manifest]\n",
+    )).toBe(true);
     expect(text).toContain('file "AGENTS.md"');
     expect(text).toContain(`@base sha256=${hash} size=${base.length} encoding=utf8`);
     const notUtf8 = Buffer.from([0xff, 0xfe, 0x00, 0x01]);
     const hashBin = sha256(notUtf8);
     const textBin = serializeLockfile(m, new Map([[hashBin, notUtf8]])).toString("utf-8");
     expect(textBin).toContain(`encoding=base64`);
+  });
+
+  it("L3 — o exemplo mínimo válido do contrato (install sem bases) parseia", () => {
+    const example = [
+      "maker-lockfile 1",
+      "# Estado do maker (manifest + bases). Gerado pela CLI — não edite à mão.",
+      "# Formato e recuperação: docs/maker-state.md do maker.",
+      "",
+      "[manifest]",
+      'basesFormat "pack"',
+      'installedAt "2026-09-27T12:00:00.000Z"',
+      'makerVersion "1.1.0"',
+      'project {"name":"X","slug":"x"}',
+      "schemaVersion 3",
+      "",
+      "[bases]",
+      "",
+      "",
+    ].join("\n");
+    const parsed = parseLockfile(Buffer.from(example, "utf-8"));
+    expect(parsed.manifest.makerVersion).toBe("1.1.0");
+    expect(parsed.manifest.basesFormat).toBe("pack");
+    expect(parsed.bases.size).toBe(0);
   });
 
   it("L4 — base de 0 bytes e lockfile sem bases são válidos", () => {
@@ -132,6 +161,23 @@ describe("lockfile — codec (contracts/lockfile-format.md)", () => {
     expect(parsed.problems.some((p) => p.kind === "hash-mismatch" && !p.recovered)).toBe(true);
   });
 
+  it("C1 — size-mismatch retoma na linha seguinte ao cabeçalho quebrado: bloco Y e a duplicata íntegra de X são recuperados", () => {
+    const m = manifest();
+    const x = Buffer.from("conteudo de x");
+    const y = Buffer.from("conteudo de y");
+    const hx = sha256(x);
+    const hy = sha256(y);
+    const header = serializeLockfile(m, new Map()).toString("utf-8");
+    const brokenX = `@base sha256=${hx} size=${x.length + 5} encoding=utf8\n${x.toString("utf-8")}\n@end sha256=${hx}\n\n`;
+    const validY = `@base sha256=${hy} size=${y.length} encoding=utf8\n${y.toString("utf-8")}\n@end sha256=${hy}\n\n`;
+    const duplicateX = `@base sha256=${hx} size=${x.length} encoding=utf8\n${x.toString("utf-8")}\n@end sha256=${hx}\n\n`;
+    const raw = header + brokenX + validY + duplicateX;
+    const parsed = parseLockfile(Buffer.from(raw, "utf-8"));
+    expect(parsed.bases.get(hy)).toEqual(y);
+    expect(parsed.bases.get(hx)).toEqual(x);
+    expect(parsed.problems.some((p) => p.hash === hx && p.kind === "size-mismatch")).toBe(true);
+  });
+
   it("L9a — conflito de merge em blocos inteiros: os dois lados são recuperados; conflictMarkers > 0", () => {
     const m = manifest();
     const a = Buffer.from("base A");
@@ -163,15 +209,43 @@ describe("lockfile — codec (contracts/lockfile-format.md)", () => {
     expect(parsed.bases.has(hOriginal)).toBe(false);
   });
 
+  it("L9b — conflito intercalado com dois cabeçalhos entre marcadores: ambas as bases atingidas geram problems (C1)", () => {
+    const m = manifest();
+    const a2Content = Buffer.from("conteudo a2 original");
+    const a3Content = Buffer.from("conteudo a3 original");
+    const ha2 = sha256(a2Content);
+    const ha3 = sha256(a3Content);
+    const header = serializeLockfile(m, new Map()).toString("utf-8");
+    // `a2` declara um `size` que avança para dentro do bloco de `a3` (git refinando hunks de bases
+    // diferentes na mesma região) — nenhum dos dois se estrutura corretamente; antes do fix, `a3`
+    // era engolido pela busca do `@end` de `a2` e desaparecia sem gerar problem.
+    const mixed =
+      "<<<<<<< HEAD\n" +
+      `@base sha256=${ha2} size=${a2Content.length + 40} encoding=utf8\n` +
+      `${a2Content.toString("utf-8")}\n` +
+      "=======\n" +
+      `@base sha256=${ha3} size=${a3Content.length} encoding=utf8\n` +
+      `${a3Content.toString("utf-8")} adulterado\n` +
+      `@end sha256=${ha3}\n` +
+      ">>>>>>> branch\n" +
+      `@end sha256=${ha2}\n\n`;
+    const raw = header + mixed;
+    const parsed = parseLockfile(Buffer.from(raw, "utf-8"));
+    expect(parsed.bases.has(ha2)).toBe(false);
+    expect(parsed.bases.has(ha3)).toBe(false);
+    expect(parsed.problems.some((p) => p.hash === ha2)).toBe(true);
+    expect(parsed.problems.some((p) => p.hash === ha3)).toBe(true);
+  });
+
   it("L10 — marcador na seção de manifest vira manifest-conflict; manifest truncado vira manifest-invalid", () => {
-    const withConflict = "maker-lockfile 1\n# a\n# b\n[manifest]\nmakerVersion \"1.0.0\"\n<<<<<<< HEAD\n\n[bases]\n\n";
+    const withConflict = "maker-lockfile 1\n# a\n# b\n\n[manifest]\nmakerVersion \"1.0.0\"\n<<<<<<< HEAD\n\n[bases]\n\n";
     expect(() => parseLockfile(Buffer.from(withConflict, "utf-8"))).toThrowError(LockfileError);
     try {
       parseLockfile(Buffer.from(withConflict, "utf-8"));
     } catch (error) {
       expect((error as LockfileError).kind).toBe("manifest-conflict");
     }
-    const truncated = "maker-lockfile 1\n# a\n# b\n[manifest]\nmakerVersion \"1.0.0\"\n\n";
+    const truncated = "maker-lockfile 1\n# a\n# b\n\n[manifest]\nmakerVersion \"1.0.0\"\n\n";
     try {
       parseLockfile(Buffer.from(truncated, "utf-8"));
       expect.fail("deveria lançar");
@@ -181,7 +255,7 @@ describe("lockfile — codec (contracts/lockfile-format.md)", () => {
   });
 
   it("L11 — versão desconhecida vira unknown-version; primeira linha inválida vira unreadable", () => {
-    const unknownVersion = "maker-lockfile 2\n# a\n# b\n[manifest]\n\n[bases]\n\n";
+    const unknownVersion = "maker-lockfile 2\n# a\n# b\n\n[manifest]\n\n[bases]\n\n";
     try {
       parseLockfile(Buffer.from(unknownVersion, "utf-8"));
       expect.fail("deveria lançar");
@@ -193,6 +267,32 @@ describe("lockfile — codec (contracts/lockfile-format.md)", () => {
       expect.fail("deveria lançar");
     } catch (error) {
       expect((error as LockfileError).kind).toBe("unreadable");
+    }
+  });
+
+  it("campo duplicado dentro de uma unidade file é rejeitado (manifest-invalid)", () => {
+    const raw = [
+      "maker-lockfile 1",
+      "# a",
+      "# b",
+      "",
+      "[manifest]",
+      "makerVersion \"1.0.0\"",
+      "",
+      "file \"AGENTS.md\"",
+      "  hash \"a\"",
+      "  hash \"b\"",
+      "",
+      "[bases]",
+      "",
+      "",
+    ].join("\n");
+    try {
+      parseLockfile(Buffer.from(raw, "utf-8"));
+      expect.fail("deveria lançar");
+    } catch (error) {
+      expect((error as LockfileError).kind).toBe("manifest-invalid");
+      expect((error as LockfileError).message).toContain("duplicado");
     }
   });
 
@@ -209,6 +309,101 @@ describe("lockfile — codec (contracts/lockfile-format.md)", () => {
     const upstreamM = manifest({ files: {
       "a.md": { hash: "a".repeat(64), source: "engine:common" },
       "b.md": { hash: "2".repeat(64), source: "engine:common" },
+    } });
+    const local = serializeLockfile(localM, new Map()).toString("utf-8").split("\n");
+    const upstream = serializeLockfile(upstreamM, new Map()).toString("utf-8").split("\n");
+    const result = mergeDiff3(local, base, upstream, { excludeFalseConflicts: true });
+    expect(result.conflict).toBe(false);
+  });
+
+  it("L12 — edições não adjacentes (a.md e c.md, com b.md entre elas) mesclam limpo", () => {
+    const m = manifest({ files: {
+      "a.md": { hash: "a".repeat(64), source: "engine:common" },
+      "b.md": { hash: "b".repeat(64), source: "engine:common" },
+      "c.md": { hash: "c".repeat(64), source: "engine:common" },
+    } });
+    const base = serializeLockfile(m, new Map()).toString("utf-8").split("\n");
+    const localM = manifest({ files: {
+      "a.md": { hash: "1".repeat(64), source: "engine:common" },
+      "b.md": { hash: "b".repeat(64), source: "engine:common" },
+      "c.md": { hash: "c".repeat(64), source: "engine:common" },
+    } });
+    const upstreamM = manifest({ files: {
+      "a.md": { hash: "a".repeat(64), source: "engine:common" },
+      "b.md": { hash: "b".repeat(64), source: "engine:common" },
+      "c.md": { hash: "2".repeat(64), source: "engine:common" },
+    } });
+    const local = serializeLockfile(localM, new Map()).toString("utf-8").split("\n");
+    const upstream = serializeLockfile(upstreamM, new Map()).toString("utf-8").split("\n");
+    const result = mergeDiff3(local, base, upstream, { excludeFalseConflicts: true });
+    expect(result.conflict).toBe(false);
+  });
+
+  it("L12 — campo novo numa unidade × edição de campo da vizinha mescla limpo", () => {
+    const m = manifest({ files: {
+      "a.md": { hash: "a".repeat(64), source: "engine:common" },
+      "b.md": { hash: "b".repeat(64), source: "engine:common" },
+    } });
+    const base = serializeLockfile(m, new Map()).toString("utf-8").split("\n");
+    // local acrescenta um campo novo (baseHash) em "a.md", sem tocar "b.md".
+    const localM = manifest({ files: {
+      "a.md": { hash: "a".repeat(64), source: "engine:common", baseHash: "a".repeat(64) },
+      "b.md": { hash: "b".repeat(64), source: "engine:common" },
+    } });
+    // upstream edita só o campo hash de "b.md", a vizinha de "a.md".
+    const upstreamM = manifest({ files: {
+      "a.md": { hash: "a".repeat(64), source: "engine:common" },
+      "b.md": { hash: "2".repeat(64), source: "engine:common" },
+    } });
+    const local = serializeLockfile(localM, new Map()).toString("utf-8").split("\n");
+    const upstream = serializeLockfile(upstreamM, new Map()).toString("utf-8").split("\n");
+    const result = mergeDiff3(local, base, upstream, { excludeFalseConflicts: true });
+    expect(result.conflict).toBe(false);
+  });
+
+  it("L12 — unidade file nova × edição da unidade anterior e da seguinte mescla limpo", () => {
+    const m = manifest({ files: {
+      "a.md": { hash: "a".repeat(64), source: "engine:common" },
+      "b.md": { hash: "b".repeat(64), source: "engine:common" },
+      "d.md": { hash: "d".repeat(64), source: "engine:common" },
+    } });
+    const base = serializeLockfile(m, new Map()).toString("utf-8").split("\n");
+    // local insere "c.md" entre "b.md" e "d.md" (ordem por code unit), sem editar nada mais.
+    const localM = manifest({ files: {
+      "a.md": { hash: "a".repeat(64), source: "engine:common" },
+      "b.md": { hash: "b".repeat(64), source: "engine:common" },
+      "c.md": { hash: "1".repeat(64), source: "engine:common" },
+      "d.md": { hash: "d".repeat(64), source: "engine:common" },
+    } });
+    // upstream edita "b.md" (vizinha anterior à inserção) e "d.md" (vizinha seguinte).
+    const upstreamM = manifest({ files: {
+      "a.md": { hash: "a".repeat(64), source: "engine:common" },
+      "b.md": { hash: "2".repeat(64), source: "engine:common" },
+      "d.md": { hash: "3".repeat(64), source: "engine:common" },
+    } });
+    const local = serializeLockfile(localM, new Map()).toString("utf-8").split("\n");
+    const upstream = serializeLockfile(upstreamM, new Map()).toString("utf-8").split("\n");
+    const result = mergeDiff3(local, base, upstream, { excludeFalseConflicts: true });
+    expect(result.conflict).toBe(false);
+  });
+
+  it("L12 — remoção de uma unidade × edição da vizinha mescla limpo", () => {
+    const m = manifest({ files: {
+      "a.md": { hash: "a".repeat(64), source: "engine:common" },
+      "b.md": { hash: "b".repeat(64), source: "engine:common" },
+      "c.md": { hash: "c".repeat(64), source: "engine:common" },
+    } });
+    const base = serializeLockfile(m, new Map()).toString("utf-8").split("\n");
+    // local remove "b.md" inteiramente.
+    const localM = manifest({ files: {
+      "a.md": { hash: "a".repeat(64), source: "engine:common" },
+      "c.md": { hash: "c".repeat(64), source: "engine:common" },
+    } });
+    // upstream edita "a.md" e "c.md", as vizinhas de "b.md" removida.
+    const upstreamM = manifest({ files: {
+      "a.md": { hash: "1".repeat(64), source: "engine:common" },
+      "b.md": { hash: "b".repeat(64), source: "engine:common" },
+      "c.md": { hash: "2".repeat(64), source: "engine:common" },
     } });
     const local = serializeLockfile(localM, new Map()).toString("utf-8").split("\n");
     const upstream = serializeLockfile(upstreamM, new Map()).toString("utf-8").split("\n");
@@ -278,5 +473,19 @@ describe("lockfile — codec (contracts/lockfile-format.md)", () => {
 
   it("canonicalJson ordena chaves por code unit, não localeCompare", () => {
     expect(canonicalJson({ b: 1, a: 2, Z: 3 })).toBe('{"Z":3,"a":2,"b":1}');
+  });
+
+  it("canonicalJson omite chaves com valor undefined, como JSON.stringify", () => {
+    expect(canonicalJson({ a: undefined, b: 1 })).toBe('{"b":1}');
+    expect(canonicalJson(["a", undefined, "b"])).toBe('["a",null,"b"]');
+  });
+
+  it("serializeLockfile omite uma chave presente com valor undefined (não vira \"undefined\" na linha)", () => {
+    const m = manifest({ files: { "a.md": { hash: "a".repeat(64), source: "engine:common", baseHash: undefined } } });
+    const text = serializeLockfile(m, new Map()).toString("utf-8");
+    expect(text).not.toContain("undefined");
+    expect(text).not.toContain("baseHash");
+    const parsed = parseLockfile(Buffer.from(text, "utf-8"));
+    expect(parsed.manifest.files["a.md"]).toEqual({ hash: "a".repeat(64), source: "engine:common" });
   });
 });

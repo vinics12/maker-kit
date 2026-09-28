@@ -27,8 +27,9 @@ const stateOnlySchema = z
  * init: passa a config carregada; update/doctor: lê maker.config.json do alvo e valida só `state`.
  * - arquivo ausente ou sem `state.bases` → { kind: "unset" }
  * - `state.bases` válido → { kind: "set", format }
- * - JSON válido com `state.bases` fora do enum → lança o ZodError de validação (FR-003) —
- *   o doctor usa `inspect: true` e recebe { kind: "invalid", message } em vez de lançar
+ * - JSON válido com `state.bases` fora do enum → lança o ZodError de validação — comandos mutantes
+ *   abortam antes de escrever; o doctor usa `inspect: true` e recebe { kind: "invalid", message } em
+ *   vez de lançar, para poder reportar o achado e seguir verificando o resto do install
  * - JSON malformado → { kind: "unreadable", message } (nunca lança): o chamador resolve sem migrar
  */
 export async function configuredBasesFormat(
@@ -111,7 +112,7 @@ export function planFormatTransition(
   return { from: state.inUse, to: effective.format, reason: effective.reason, migrated, discarded, affected, consolidatesLoose };
 }
 
-/** files em uso, nada registrado, nada configurado → o próximo update migra (FR-025). */
+/** files em uso, nada registrado, nada configurado → o próximo update migra para o default sem aviso prévio; o doctor usa isso para avisar com antecedência. */
 export function pendingDefaultMigration(
   state: Pick<InstallState, "inUse" | "recorded">,
   configured: ConfiguredFormat,

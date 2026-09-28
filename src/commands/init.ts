@@ -134,7 +134,8 @@ export async function runInit(opts: InitOptions): Promise<void> {
   };
   const bases = new Map<string, Buffer>();
   for (const file of applied) bases.set(file.entry.hash, renderedByPath.get(file.rel)!);
-  // Formato "pack" só passa a ser o default na US-2; aqui só se preserva o formato de um install existente.
+  // Instalação nova sempre em "files" (o efetivo por config/default é resolvido pelo update); sobre
+  // um install existente, preserva o formato em uso — init nunca migra por conta própria.
   const format: BasesFormat = priorState?.inUse ?? "files";
   changes.push(...await planStateWrite(priorState, targetDir, { manifest, format, bases, prune: false }));
   const plan = createPlan(targetDir, changes);
