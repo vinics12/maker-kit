@@ -15,7 +15,7 @@ import type { BasesFormat } from "../../src/render/manifest.js";
 import type { Manifest } from "../../src/render/manifest.js";
 import { openState, planStateWrite } from "../../src/state/store.js";
 import { basePath, LOCKFILE } from "../../src/state/paths.js";
-import { parseLockfile, serializeLockfile } from "../../src/state/lockfile.js";
+import { serializeLockfile } from "../../src/state/lockfile.js";
 
 export { readManifest } from "../../src/state/store.js";
 
@@ -72,10 +72,43 @@ function flipFirstByte(content: Buffer): Buffer {
 }
 
 /**
- * Corrompe uma base nos dois formatos (o que existir), preservando a estrutura ao redor: no pack,
- * reserializa o lockfile inteiro com o conteúdo transformado sob o mesmo hash declarado (size/encoding
- * recalculados para esse conteúdo), então o parser sempre vê um bloco estruturalmente íntegro cujo
- * sha256 não bate — nunca `truncated`/`malformed` por causa só da corrupção.
+ * Localiza o bloco `@base sha256=<hash> ... @end sha256=<hash>\n\n` no texto cru do lockfile, pelo
+ * `size` declarado (a mesma referência que o parser usa) — nunca por `parseLockfile`, cujo resultado
+ * só tem bases *verificadas* e already descartaria um bloco que outro `corruptBase` deixou inválido.
+ * Devolve `null` sem lançar quando o hash não aparece (a chamada é no-op).
+ */
+function findBaseBlock(text: string, hash: string): { start: number; end: number; content: Buffer } | null {
+  const headerRe = new RegExp(`^@base sha256=${hash} size=(\\d+) encoding=(utf8|base64)$`, "m");
+  const headerMatch = headerRe.exec(text);
+  if (!headerMatch) return null;
+  const size = Number(headerMatch[1]);
+  const encoding = headerMatch[2] as "utf8" | "base64";
+  const bodyStart = headerMatch.index + headerMatch[0].length + 1;
+  const endMarker = `@end sha256=${hash}`;
+  const endIndex = text.indexOf(endMarker, bodyStart);
+  if (endIndex < 0) return null;
+  const payload = text.slice(bodyStart, endIndex - 1); // exclui o "\n" delimitador antes do "@end"
+  const content = encoding === "utf8"
+    ? Buffer.from(payload, "utf-8")
+    : Buffer.from(payload.replace(/\n/g, ""), "base64");
+  // O bloco (para recorte/substituição) vai do cabeçalho até a linha em branco depois do "@end".
+  const blockEnd = endIndex + endMarker.length + "\n\n".length;
+  return { start: headerMatch.index, end: blockEnd, content: content.subarray(0, size) };
+}
+
+/** Serializa um lockfile só com essa base e extrai o bloco `@base ... @end ...\n\n` gerado. */
+function renderBaseBlock(hash: string, content: Buffer): string {
+  const placeholder: Manifest = { makerVersion: "0.0.0", project: { name: "x", slug: "x" }, installedAt: "1970-01-01T00:00:00.000Z", files: {} };
+  const text = serializeLockfile(placeholder, new Map([[hash, content]])).toString("utf-8");
+  return text.slice(text.indexOf("[bases]\n\n") + "[bases]\n\n".length);
+}
+
+/**
+ * Corrompe uma base nos dois formatos (o que existir). No pack, edita só o bloco-alvo no texto cru
+ * (recorte + substituição por um bloco estruturalmente íntegro com o mesmo hash declarado, size/
+ * encoding recalculados para o conteúdo transformado) e preserva o resto do arquivo byte a byte —
+ * inclusive outros blocos já corrompidos/truncados, marcadores de conflito e linhas com `\r`, que
+ * `parseLockfile` (só bases verificadas) apagaria silenciosamente se fosse usado para reserializar.
  */
 export async function corruptBase(target: string, hash: string, mutate?: (b: Buffer) => Buffer): Promise<void> {
   const transform = mutate ?? flipFirstByte;
@@ -88,25 +121,22 @@ export async function corruptBase(target: string, hash: string, mutate?: (b: Buf
   }
   const lockfilePath = join(target, LOCKFILE);
   if (!existsSync(lockfilePath)) return;
-  const raw = await readFile(lockfilePath);
-  const parsed = parseLockfile(raw);
-  if (!parsed.bases.has(hash)) return;
-  const corrupted = new Map(parsed.bases);
-  corrupted.set(hash, transform(parsed.bases.get(hash)!));
-  await writeFile(lockfilePath, serializeLockfile(parsed.manifest, corrupted));
+  const text = (await readFile(lockfilePath)).toString("utf-8");
+  const block = findBaseBlock(text, hash);
+  if (!block) return;
+  const replacement = renderBaseBlock(hash, transform(block.content));
+  await writeFile(lockfilePath, text.slice(0, block.start) + replacement + text.slice(block.end));
 }
 
-/** Remove uma base dos dois formatos (o que existir): no pack, reserializa o lockfile sem ela. */
+/** Remove uma base dos dois formatos (o que existir): no pack, recorta só o bloco-alvo, byte a byte. */
 export async function removeBase(target: string, hash: string): Promise<void> {
   await rm(join(target, basePath(hash)), { force: true });
   const lockfilePath = join(target, LOCKFILE);
   if (!existsSync(lockfilePath)) return;
-  const raw = await readFile(lockfilePath);
-  const parsed = parseLockfile(raw);
-  if (!parsed.bases.has(hash)) return;
-  const remaining = new Map(parsed.bases);
-  remaining.delete(hash);
-  await writeFile(lockfilePath, serializeLockfile(parsed.manifest, remaining));
+  const text = (await readFile(lockfilePath)).toString("utf-8");
+  const block = findBaseBlock(text, hash);
+  if (!block) return;
+  await writeFile(lockfilePath, text.slice(0, block.start) + text.slice(block.end));
 }
 
 export async function lockfileText(target: string): Promise<string> {

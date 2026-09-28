@@ -288,6 +288,36 @@ describe("test/helpers/state.ts — put/corrupt/remove nos dois formatos; initIn
     expect(afterRemove.problems.some((p) => p.hash === hash2)).toBe(false);
   });
 
+  it("C9 — em pack, corrupt(h1) + remove(h2) preserva os dois efeitos (edição só do bloco-alvo)", async () => {
+    const t = await initInstall("maker-helper-pack-corrupt-remove-", { format: "pack" });
+    const h1 = await putBase(t, "base um");
+    const h2 = await putBase(t, "base dois");
+
+    await corruptBase(t, h1);
+    await removeBase(t, h2);
+
+    const state = await inspectStateBases(t);
+    expect(state.bases.has(h1)).toBe(false);
+    expect(state.problems.some((p) => p.hash === h1 && p.kind === "hash-mismatch")).toBe(true);
+    expect(state.bases.has(h2)).toBe(false);
+    expect(state.problems.some((p) => p.hash === h2)).toBe(false);
+  });
+
+  it("C9 — em pack, dois corruptBase seguidos preservam os dois problemas (o segundo não apaga o primeiro)", async () => {
+    const t = await initInstall("maker-helper-pack-corrupt-corrupt-", { format: "pack" });
+    const h1 = await putBase(t, "base um");
+    const h2 = await putBase(t, "base dois");
+
+    await corruptBase(t, h1);
+    await corruptBase(t, h2);
+
+    const state = await inspectStateBases(t);
+    expect(state.bases.has(h1)).toBe(false);
+    expect(state.bases.has(h2)).toBe(false);
+    expect(state.problems.some((p) => p.hash === h1 && p.kind === "hash-mismatch")).toBe(true);
+    expect(state.problems.some((p) => p.hash === h2 && p.kind === "hash-mismatch")).toBe(true);
+  });
+
   it("initInstall({ format: \"unset\" }) produz files sem basesFormat, independente do default do init", async () => {
     const t = await initInstall("maker-helper-unset-", { format: "unset" });
     const state = await openState(t, { mode: "read" });
