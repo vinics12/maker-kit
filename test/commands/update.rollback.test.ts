@@ -37,6 +37,8 @@ describe("rollback da migração (AC-10, AC-11)", () => {
   });
 
   it("AC-10(b): crash em cada ponto da migração é detectável e a recuperação restaura o alvo exatamente ao estado anterior", async () => {
+    // Timeout explícito: o caso cria um install completo por ponto de crash (dezenas de operações),
+    // o que passa dos 15s padrão do vitest sob carga paralela (runners de CI compartilhados).
     // Só para contar quantas operações acionáveis a migração tem (mesmo plano em qualquer install igual).
     const probe = await initInstall("maker-update-rollback-crash-probe-", { format: "unset" });
     directories.push(probe);
@@ -62,7 +64,7 @@ describe("rollback da migração (AC-10, AC-11)", () => {
       expect(await inspectState(fresh)).toMatchObject({ pendingTransactions: false });
       expect(await snapshotTree(fresh)).toEqual(beforeFresh);
     }
-  });
+  }, 60_000);
 
   it("AC-11: falha no update em pack (sem migração) não deixa alteração", async () => {
     const target = await initInstall("maker-update-rollback-pack-fail-", { format: "pack" });

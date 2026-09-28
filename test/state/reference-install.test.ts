@@ -10,11 +10,16 @@ afterEach(async () => {
   await Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
 
-/** Padrões de `.maker/.gitignore` (contracts/git-control-files.md): raiz de `.maker`, sem glob. */
-const IGNORED_PREFIXES = ["transactions/", "transaction.lock", "mediation/", "runs/"];
+/** Lê os padrões do `.maker/.gitignore` gerado (não um duplicado hard-coded do contrato). */
+async function gitignorePatterns(target: string): Promise<string[]> {
+  const raw = await readFile(join(target, ".maker/.gitignore"), "utf-8");
+  return raw.split("\n").map((line) => line.trim()).filter((line) => line && !line.startsWith("#"))
+    .map((pattern) => pattern.replace(/^\//, "").replace(/\/$/, ""));
+}
 
-function isIgnored(relPathInMaker: string): boolean {
-  return IGNORED_PREFIXES.some((prefix) => relPathInMaker === prefix.replace(/\/$/, "") || relPathInMaker.startsWith(prefix));
+/** Padrões âncorados na raiz de `.maker`, sem glob (o `.gitignore` gerado só usa `/<nome>/` e `/<nome>`). */
+function isIgnored(relPathInMaker: string, patterns: readonly string[]): boolean {
+  return patterns.some((pattern) => relPathInMaker === pattern || relPathInMaker.startsWith(`${pattern}/`));
 }
 
 async function walk(dir: string, root: string): Promise<string[]> {
@@ -33,7 +38,8 @@ describe("install de referência: Claude + Codex + add-on saas (SC-001, SC-008)"
     directories.push(target);
 
     const makerDir = join(target, ".maker");
-    const versioned = (await walk(makerDir, makerDir)).filter((rel) => !isIgnored(rel));
+    const patterns = await gitignorePatterns(target);
+    const versioned = (await walk(makerDir, makerDir)).filter((rel) => !isIgnored(rel, patterns));
     expect(versioned.length).toBeLessThanOrEqual(16);
 
     const controlFiles = versioned.filter((rel) => rel === ".gitattributes" || rel === ".gitignore");
@@ -41,7 +47,9 @@ describe("install de referência: Claude + Codex + add-on saas (SC-001, SC-008)"
     // 14 arquivos de estado/conteúdo (lockfile + estado de add-on + papéis de workflow) + 2 de controle.
     expect(versioned.length - controlFiles.length).toBeLessThanOrEqual(14);
     expect(versioned).toContain("maker.lock");
-    expect(versioned).not.toContain("bases"); // pack: sem .maker/bases/
+    // pack: sem .maker/bases/ nem .maker/manifest.json (formato "files").
+    expect(versioned.some((rel) => rel === "bases" || rel.startsWith("bases/"))).toBe(false);
+    expect(versioned).not.toContain("manifest.json");
   });
 });
 
