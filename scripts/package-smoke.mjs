@@ -49,7 +49,12 @@ try {
     packedFiles = inspectResult[0].files.map(({ path }) => path);
   }
 
-  const required = ["package.json", "dist/cli.js"];
+  const required = [
+    "package.json",
+    "dist/cli.js",
+    "templates/engine/common/.maker/.gitattributes",
+    "templates/engine/common/.maker/.gitignore.hbs",
+  ];
   for (const file of required) {
     if (!packedFiles.includes(file)) throw new Error(`arquivo obrigatório ausente do pacote: ${file}`);
   }

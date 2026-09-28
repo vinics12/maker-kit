@@ -20,7 +20,7 @@ Guiding rule: **the owner's customizations win over template text; the template'
 
 ## Hard rules
 
-- Never edit files listed in the export directly, never edit `.maker/manifest.json`, `.maker/bases/` or `.maker/addons/*.json`. Only write `items/<id>/resolved` (and optionally `items/<id>/notes.md`) inside the export directory.
+- Never edit files listed in the export directly, never edit `.maker/manifest.json`, `.maker/maker.lock`, `.maker/bases/` or `.maker/addons/*.json`. Only write `items/<id>/resolved` (and optionally `items/<id>/notes.md`) inside the export directory.
 - Never drop owner content silently. Every line that exists in `local` but not in `base` is a customization and must survive (possibly moved or adapted), unless the owner explicitly agrees to remove it.
 - Keep every `<!-- maker:addon:<id>:start -->` … `<!-- maker:addon:<id>:end -->` block byte-for-byte, exactly once. Do not merge template text into an add-on block.
 - Do not invent content. Everything in `resolved` must come from `local`, `upstream`, or an explicit owner decision.
