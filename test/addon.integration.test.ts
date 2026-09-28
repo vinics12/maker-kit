@@ -7,8 +7,8 @@ import { runInit } from "../src/commands/init.js";
 import { loadAddon } from "../src/addons/loader.js";
 import { applyAddon, removeAddon } from "../src/addons/apply.js";
 import { sha256, verifyManifest } from "../src/render/manifest.js";
-import { readManifest } from "./helpers/state.js";
-import { isAddonApplied, readAddonState, writeAddonState } from "../src/addons/state.js";
+import { readManifest, readAddonStates, writeAddonState } from "./helpers/state.js";
+import { isAddonApplied } from "../src/addons/state.js";
 
 const FIXTURE = join(__dirname, "..", "fixtures", "example.config.json");
 const CONST = ".specify/memory/constitution.md";
@@ -51,7 +51,7 @@ describe("add-on saas (integração)", () => {
     const frag = await read(target, REVIEWER);
     expect(frag).toContain("Checklist SaaS");
 
-    expect(isAddonApplied(target, "saas")).toBe(true);
+    expect(await isAddonApplied(target, "saas")).toBe(true);
 
     const m = await readManifest(target);
     const r = await verifyManifest(target, m!);
@@ -75,7 +75,7 @@ describe("add-on saas (integração)", () => {
     expect(existsSync(join(target, REF))).toBe(false);
     const frag = await read(target, REVIEWER);
     expect(frag).not.toContain("Checklist SaaS");
-    expect(isAddonApplied(target, "saas")).toBe(false);
+    expect(await isAddonApplied(target, "saas")).toBe(false);
 
     const m = await readManifest(target);
     const r = await verifyManifest(target, m!);
@@ -123,11 +123,11 @@ describe("add-on saas (integração)", () => {
     const oldBlock = "Checklist SaaS da versão anterior do add-on.";
     const installed = fresh.replace(/(<!-- maker:addon:saas:start -->\n)[\s\S]*?(\n<!-- maker:addon:saas:end -->)/, `$1${oldBlock}$2`);
     await writeFile(join(project, REVIEWER), installed);
-    const state = (await readAddonState(project, "saas"))!;
+    const state = (await readAddonStates(project)).get("saas")!;
     state.injectedBlocks = { ...state.injectedBlocks, [REVIEWER]: sha256(Buffer.from(oldBlock)) };
     await writeAddonState(project, state);
     await applyAddon(project, addon, knobs);
     expect(await read(project, REVIEWER)).toBe(fresh);
-    expect((await readAddonState(project, "saas"))!.injectedBlocks![REVIEWER]).not.toBe(sha256(Buffer.from(oldBlock)));
+    expect((await readAddonStates(project)).get("saas")!.injectedBlocks![REVIEWER]).not.toBe(sha256(Buffer.from(oldBlock)));
   });
 });

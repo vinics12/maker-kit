@@ -19,9 +19,11 @@ import { applyEngine, sharedAgentText } from "../src/util/engine-scaffold.js";
 import { applyAddon, removeAddon } from "../src/addons/apply.js";
 import { loadAddon } from "../src/addons/loader.js";
 import { upsertBlock } from "../src/addons/inject.js";
-import { readAddonState, writeAddonState } from "../src/addons/state.js";
+import { readAddonState } from "../src/addons/state.js";
 import { applyChangePlan } from "../src/changes/transaction.js";
 import { createPlan } from "../src/changes/plan.js";
+import { openState, planStateWrite } from "../src/state/store.js";
+import { readAddonStates, toLegacyFiles, writeAddonState } from "./helpers/state.js";
 
 const config = join(__dirname, "../fixtures/example.config.json");
 const project020 = join(__dirname, "../fixtures/legacy-0.2.0/project");
@@ -45,6 +47,12 @@ async function legacy(version: "0.2.0" | "0.4.0", customized = true) {
   const target = await temporary();
   await runInit({ target, config, yes: true });
   await applyAddon(target, await loadAddon("saas"), knobs);
+  // Instalações 0.2.0/0.4.0 reais só existiram no formato files (a seção [addons] do lockfile é
+  // posterior); força o mesmo formato e fixa o opt-out para que os `.maker/addons/<id>.json`
+  // manipulados a seguir (inclusive por `maker update`, que por padrão migraria para pack) continuem
+  // sendo o estado de verdade — o suíte de migração de agentes legados é ortogonal ao formato de bases.
+  await toLegacyFiles(target);
+  await writeFile(join(target, "maker.config.json"), JSON.stringify({ state: { bases: "files" } }) + "\n");
   const manifest = (await readManifest(target))!;
   const state = (await readAddonState(target, "saas"))!;
   const staging = await temporary();
@@ -83,7 +91,13 @@ async function legacy(version: "0.2.0" | "0.4.0", customized = true) {
 async function project(withConfig = true) {
   const target = await temporary();
   await cp(project020, target, { recursive: true });
-  if (!withConfig) await rm(join(target, "maker.config.json"));
+  if (!withConfig) {
+    await rm(join(target, "maker.config.json"));
+    return target;
+  }
+  // Pino de formato (ver `legacy()`): a suíte testa migração de agentes, não migração de bases.
+  const raw = JSON.parse(await readFile(join(target, "maker.config.json"), "utf-8"));
+  await writeFile(join(target, "maker.config.json"), JSON.stringify({ ...raw, state: { bases: "files" } }) + "\n");
   return target;
 }
 
@@ -123,7 +137,13 @@ describe("migração de agentes legados", () => {
     await runUpdate({ target });
     expect(await readFile(join(target, constitution))).toEqual(beforeConstitution);
     const afterState = JSON.parse(await readFile(join(target, statePath), "utf-8"));
-    expect({ ...afterState, injectedTargets: [] }).toEqual({ ...beforeState, injectedTargets: [] });
+    // `addonStateJson` (US-7) reconstrói `createdFiles` como `{ path, hash }`: extras por item (aqui,
+    // `customNote`) não sobrevivem ao round-trip pelo estado — só extras de topo (`customMetadata`) sobrevivem.
+    const stripCustomNote = (files: { path: string; hash: string; customNote?: string }[]) =>
+      files.map(({ customNote: _customNote, ...rest }) => rest);
+    expect({ ...afterState, injectedTargets: [], createdFiles: stripCustomNote(afterState.createdFiles) })
+      .toEqual({ ...beforeState, injectedTargets: [], createdFiles: stripCustomNote(beforeState.createdFiles) });
+    expect(afterState.customMetadata).toEqual(beforeState.customMetadata);
     for (const role of roles) {
       expect(await readFile(join(target, `.claude/agents/${role}.md`), "utf-8")).toContain("model: modelo-local");
       expect(await readFile(join(target, `.maker/workflow/agents/${role}.md`), "utf-8")).toBe(sharedAgentText(bodies.get(role)!));
@@ -250,7 +270,7 @@ describe("migração de agentes legados", () => {
     const manifest = (await readManifest(target))!;
     const staging = await temporary();
     const expected = await applyEngine(staging, buildContext(manifest.config!), ["claude"]);
-    const migration = await planLegacyAddonAgents(target, staging, expected, manifest, { ctx: buildContext(manifest.config!) });
+    const migration = await planLegacyAddonAgents(target, staging, expected, manifest, { ctx: buildContext(manifest.config!), addons: await readAddonStates(target) });
     const before = await snapshot(target);
     const plan = createPlan(target, migration.changes);
     const actions = plan.changes.filter((change) => ["create", "update", "remove"].includes(change.action));
@@ -278,14 +298,23 @@ describe("migração de agentes legados", () => {
   });
 
   it("rejeita mudança concorrente do state antes de migrar os agentes", async () => {
+    // `planLegacyAddonAgents` não planeja mais a escrita do estado de add-on (US-7): quem grava é
+    // `planStateWrite`, como o `runUpdate` real faz. Reproduz a mesma composição para exercitar a
+    // mesma proteção (expectedHash checado na aplicação).
     const target = await legacy("0.4.0");
     const manifest = (await readManifest(target))!;
     const staging = await temporary();
     const expected = await applyEngine(staging, buildContext(manifest.config!), ["claude"]);
-    const migration = await planLegacyAddonAgents(target, staging, expected, manifest, { ctx: buildContext(manifest.config!) });
+    const priorState = (await openState(target, { mode: "read" }))!;
+    const migration = await planLegacyAddonAgents(target, staging, expected, manifest,
+      { ctx: buildContext(manifest.config!), addons: priorState.addons });
+    const stateChanges = await planStateWrite(priorState, target, {
+      manifest, format: priorState.inUse, bases: new Map(), addons: migration.addons, prune: false,
+    });
     await appendFile(join(target, statePath), "\n");
     const before = await snapshot(target);
-    await expect(applyChangePlan(createPlan(target, migration.changes))).rejects.toThrow("mudou depois do planejamento");
+    await expect(applyChangePlan(createPlan(target, [...migration.changes, ...stateChanges])))
+      .rejects.toThrow("mudou depois do planejamento");
     expect(await snapshot(target)).toEqual(before);
   });
 });
@@ -312,7 +341,7 @@ describe("migração de agentes legados: template, remove e reaplicação", () =
     const staging = await temporary();
     const expected = await applyEngine(staging, buildContext(manifest.config!), ["claude"]);
     for (const role of roles) await appendFile(join(staging, `.maker/workflow/agents/${role}.md`), "\nNovidade do template.\n");
-    const migration = await planLegacyAddonAgents(target, staging, expected, manifest, { ctx: buildContext(manifest.config!) });
+    const migration = await planLegacyAddonAgents(target, staging, expected, manifest, { ctx: buildContext(manifest.config!), addons: await readAddonStates(target) });
     await applyChangePlan(createPlan(target, migration.changes));
     const architect = await readFile(join(target, ".maker/workflow/agents/architect.md"), "utf-8");
     expect(architect).toContain("Novidade do template.");

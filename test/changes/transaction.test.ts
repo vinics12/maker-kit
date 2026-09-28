@@ -45,10 +45,11 @@ describe("transaction — crashAfter / recoverBeforeRead / ordem de metadados", 
     expect(existsSync(join(target, ".maker"))).toBe(false);
   });
 
-  it("isStateMetadata reconhece manifest.json, maker.lock e addons/<id>.json", () => {
+  it("isStateMetadata reconhece manifest.json, maker.lock, addons/<id>.json e o diretório addons", () => {
     expect(isStateMetadata(".maker/manifest.json")).toBe(true);
     expect(isStateMetadata(".maker/maker.lock")).toBe(true);
     expect(isStateMetadata(".maker/addons/saas.json")).toBe(true);
+    expect(isStateMetadata(".maker/addons")).toBe(true);
     expect(isStateMetadata("AGENTS.md")).toBe(false);
     expect(isStateMetadata(".maker/bases/abc")).toBe(false);
   });
@@ -90,5 +91,35 @@ describe("transaction — crashAfter / recoverBeforeRead / ordem de metadados", 
     await expect(applyChangePlan(createPlan(target, [removeManifest, createLockfile]), { crashAfter: 0 })).rejects.toThrow();
     expect(existsSync(join(target, ".maker", "maker.lock"))).toBe(true);
     expect(existsSync(join(target, ".maker", "manifest.json"))).toBe(true);
+  });
+
+  it("migração files→pack com add-on: maker.lock criado → .maker/addons removido → manifest.json removido; crashAfter em cada ponto deixa coexistência", async () => {
+    for (let crashAfter = 0; crashAfter < 3; crashAfter++) {
+      const target = await mkdtemp(join(tmpdir(), "maker-tx-addon-migration-"));
+      const mkManifest = await planWrite({ targetDir: target, path: ".maker/manifest.json", content: "{}", source: "metadata" });
+      const mkAddon = await planWrite({ targetDir: target, path: ".maker/addons/saas.json", content: "{}", source: "metadata" });
+      await applyChangePlan(createPlan(target, [mkManifest, mkAddon]));
+
+      const currentManifest = await inspectTarget(target, ".maker/manifest.json");
+      const currentAddonsDir = await inspectTarget(target, ".maker/addons");
+      const removeManifest: Awaited<ReturnType<typeof planWrite>> = {
+        path: ".maker/manifest.json", action: "remove", source: "metadata", reason: "migração para pack",
+        expectedHash: currentManifest.hash, expectedKind: currentManifest.kind,
+      };
+      const removeAddonsDir: Awaited<ReturnType<typeof planWrite>> = {
+        path: ".maker/addons", action: "remove", source: "metadata", reason: "migrado para o lockfile",
+        expectedHash: currentAddonsDir.hash, expectedKind: currentAddonsDir.kind,
+      };
+      const createLockfile = await planWrite({ targetDir: target, path: ".maker/maker.lock", content: "lockfile", source: "metadata" });
+      await expect(applyChangePlan(
+        createPlan(target, [removeManifest, removeAddonsDir, createLockfile]),
+        { crashAfter },
+      )).rejects.toThrow();
+      // Em qualquer ponto do crash, nunca há ausência de estado autoritativo: o lockfile já criado
+      // convive com o que ainda não foi removido (coexistência detectável), nunca "sem estado".
+      const lockfileExists = existsSync(join(target, ".maker", "maker.lock"));
+      const manifestExists = existsSync(join(target, ".maker", "manifest.json"));
+      expect(lockfileExists || manifestExists).toBe(true);
+    }
   });
 });

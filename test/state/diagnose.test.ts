@@ -24,6 +24,12 @@ function snapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
     looseFileBases: [],
     conflictMarkersInBases: 0,
     crlfSuspected: false,
+    addons: new Map(),
+    orphanAddonStateFiles: [],
+    unmigratableAddons: [],
+    addonProblems: [],
+    addonStateFiles: [],
+    addonsDir: "absent",
     manifest: manifest(),
     inUse: "pack",
     ...overrides,
@@ -232,5 +238,55 @@ describe("diagnoseState — um caso por code", () => {
     const problems: BaseProblem[] = [{ origin: "pack", kind: "hash-mismatch", hash: HASH, detail: "d" }];
     const findings = diagnoseState(snapshot({ manifest: manifest(files), problems }), UNSET);
     expect(findings.map((f) => f.code)).toEqual(["base-corrupt"]);
+  });
+
+  it("addon-coexistence: .maker/addons/<id>.json e o lockfile coexistem", () => {
+    const error = new StateError("addon-coexistence",
+      '.maker/addons/<id>.json e .maker/maker.lock coexistem (saas); nenhuma alteração foi feita. Ação: escolha um estado e remova o outro, ou restaure .maker do histórico do git.',
+      "y", "/tmp/x/.maker/addons");
+    const findings = diagnoseState(snapshot({ error, manifest: undefined, inUse: undefined }), UNSET);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("fail");
+    expect(findings[0]!.code).toBe("addon-coexistence");
+    expect(findings[0]!.message).toContain(".maker/addons/<id>.json e .maker/maker.lock coexistem (saas)");
+  });
+
+  it("addons-invalid: seção de add-ons do lockfile inválida (linha N)", () => {
+    const error = new StateError("addons-invalid",
+      "seção de add-ons de .maker/maker.lock inválida (linha 9: motivo); nenhuma alteração foi feita.", "y", "/tmp/x/.maker/maker.lock");
+    const findings = diagnoseState(snapshot({ error, manifest: undefined, inUse: undefined }), UNSET);
+    expect(findings[0]!.severity).toBe("fail");
+    expect(findings[0]!.code).toBe("addons-invalid");
+    expect(findings[0]!.message).toContain("seção de add-ons do lockfile inválida (linha 9)");
+    expect(findings[0]!.action).toContain("restaure .maker/maker.lock do histórico do git");
+  });
+
+  it("addons-conflict: marcadores de conflito do git na seção de add-ons (linha N)", () => {
+    const error = new StateError("addons-conflict",
+      ".maker/maker.lock contém marcadores de conflito do git na seção de add-ons (linha 9); nenhuma alteração foi feita.", "y", "/tmp/x/.maker/maker.lock");
+    const findings = diagnoseState(snapshot({ error, manifest: undefined, inUse: undefined }), UNSET);
+    expect(findings[0]!.severity).toBe("fail");
+    expect(findings[0]!.code).toBe("addons-conflict");
+    expect(findings[0]!.message).toContain("marcadores de conflito do git na seção de add-ons (linha 9)");
+  });
+
+  it("addon-state-invalid (warn): files em uso, efetivo pack, com estado de add-on não migrável", () => {
+    const configured: ConfiguredFormat = { kind: "unset" };
+    const findings = diagnoseState(snapshot({
+      inUse: "files", recorded: undefined,
+      addonProblems: [{ id: "saas", path: ".maker/addons/saas.json", detail: "JSON inválido: Unexpected token" }],
+    }), configured);
+    expect(findings.some((f) => f.code === "addon-state-invalid" && f.severity === "warn")).toBe(true);
+    const finding = findings.find((f) => f.code === "addon-state-invalid")!;
+    expect(finding.message).toContain("estado de add-on não migrável em .maker/addons/saas.json");
+    expect(finding.action).toContain('declare "state": { "bases": "files" } em maker.config.json');
+  });
+
+  it("addon-state-invalid não aparece sem migração pendente (files em uso, sem config, mas recorded=files)", () => {
+    const findings = diagnoseState(snapshot({
+      inUse: "files", recorded: "files",
+      addonProblems: [{ id: "saas", path: ".maker/addons/saas.json", detail: "JSON inválido" }],
+    }), UNSET);
+    expect(findings.some((f) => f.code === "addon-state-invalid")).toBe(false);
   });
 });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,7 +16,9 @@ import {
 } from "../../src/state/store.js";
 import { serializeLockfile } from "../../src/state/lockfile.js";
 import type { Manifest } from "../../src/render/manifest.js";
-import { corruptBase, initInstall, putBase, removeBase } from "../helpers/state.js";
+import { corruptBase, initInstall, putBase, readAddonStates, removeBase, writeAddonState, writeAddonStateFile } from "../helpers/state.js";
+import type { AddonStateRecord } from "../../src/state/addon-state.js";
+import { addonStateFile } from "../../src/state/paths.js";
 
 function sha256(content: Buffer): string {
   return createHash("sha256").update(content).digest("hex");
@@ -74,7 +76,7 @@ describe("state/store — inspectState / openState (files e pack)", () => {
     const t = await target("maker-store-conflict-");
     await mkdir(join(t, ".maker"), { recursive: true });
     await writeFile(join(t, ".maker", "maker.lock"),
-      "maker-lockfile 1\n# a\n# b\n\n[manifest]\nmakerVersion \"1.0.0\"\n<<<<<<< HEAD\n\n[bases]\n\n");
+      "maker-lockfile 1\n# a\n# b\n\n[manifest]\nmakerVersion \"1.0.0\"\n<<<<<<< HEAD\n\n[addons]\n\n[bases]\n\n");
     await expect(openState(t, { mode: "read" })).rejects.toMatchObject({
       kind: "manifest-conflict",
       message: expect.stringContaining("Ação: resolva o conflito ou restaure .maker/maker.lock do histórico do git."),
@@ -338,3 +340,207 @@ async function inspectStateBases(target: string) {
   const snapshot = await inspectState(target);
   return { bases: snapshot.bases, problems: snapshot.problems };
 }
+
+function sampleAddon(overrides: Partial<AddonStateRecord> = {}): AddonStateRecord {
+  return {
+    id: "saas",
+    version: "0.1.0",
+    appliedAt: "2026-09-28T12:00:00.000Z",
+    knobs: { tenantColumn: "tenant_id" },
+    createdFiles: [{ path: ".specify/memory/saas-reference.md", hash: "a".repeat(64) }],
+    injectedTargets: [".specify/memory/constitution.md"],
+    ...overrides,
+  };
+}
+
+describe("state/store — emenda US-7 (estado de add-ons)", () => {
+  it("pack: addons lido da seção [addons] do lockfile", async () => {
+    const t = await target("maker-store-addons-pack-");
+    const m = manifest();
+    const changes = await planStateWrite(null, t, {
+      manifest: m, format: "pack", bases: new Map(), addons: new Map([["saas", sampleAddon()]]), prune: false,
+    });
+    await applyChangePlan(createPlan(t, changes));
+    const snapshot = await inspectState(t);
+    expect(snapshot.addons.get("saas")).toEqual(sampleAddon());
+    expect(existsSync(join(t, ".maker", "addons"))).toBe(false);
+  });
+
+  it("files: addons lido de .maker/addons/<id>.json", async () => {
+    const t = await target("maker-store-addons-files-");
+    const m = manifest();
+    const changes = await planStateWrite(null, t, {
+      manifest: m, format: "files", bases: new Map(), addons: new Map([["saas", sampleAddon()]]), prune: false,
+    });
+    await applyChangePlan(createPlan(t, changes));
+    const snapshot = await inspectState(t);
+    expect(snapshot.addons.get("saas")).toEqual(sampleAddon());
+    expect(existsSync(join(t, ".maker", "addons", "saas.json"))).toBe(true);
+  });
+
+  it("lockfile + .maker/addons/<id>.json regular → addon-coexistence, sem escrita, nunca null", async () => {
+    const t = await initInstall("maker-store-addon-coexist-", { format: "pack" });
+    await mkdir(join(t, ".maker", "addons"), { recursive: true });
+    await writeFile(join(t, ".maker", "addons", "saas.json"), JSON.stringify(sampleAddon()));
+    const snapshot = await inspectState(t);
+    expect(snapshot.error?.kind).toBe("addon-coexistence");
+    expect(snapshot.error?.message).toContain(".maker/addons/<id>.json e .maker/maker.lock coexistem (saas)");
+    await expect(openState(t, { mode: "read" })).rejects.toBeInstanceOf(StateError);
+  });
+
+  it("manifest.json + maker.lock + addons JSON: coexistência de manifest tem precedência", async () => {
+    const t = await target("maker-store-coexist-precedence-");
+    await mkdir(join(t, ".maker", "addons"), { recursive: true });
+    await writeFile(join(t, ".maker", "manifest.json"), JSON.stringify(manifest()));
+    await writeFile(join(t, ".maker", "maker.lock"), serializeLockfile(manifest(), new Map()));
+    await writeFile(join(t, ".maker", "addons", "saas.json"), JSON.stringify(sampleAddon()));
+    const snapshot = await inspectState(t);
+    expect(snapshot.error?.kind).toBe("coexistence");
+  });
+
+  it("pack: .maker/addons vazio, só com entradas alheias, ou não-diretório é tolerado sem erro", async () => {
+    for (const setup of [
+      async (t: string) => mkdir(join(t, ".maker", "addons"), { recursive: true }),
+      async (t: string) => { await mkdir(join(t, ".maker", "addons"), { recursive: true }); await writeFile(join(t, ".maker", "addons", "nao-json.txt"), "x"); },
+      async (t: string) => writeFile(join(t, ".maker", "addons"), "não é diretório"),
+    ]) {
+      const t = await initInstall("maker-store-addons-dir-tolerated-", { format: "pack" });
+      await setup(t);
+      const snapshot = await inspectState(t);
+      expect(snapshot.error).toBeUndefined();
+    }
+  });
+
+  it("planStateWrite: files → pack (consolidate) move os estados de add-on e remove o diretório", async () => {
+    const t = await initInstall("maker-store-addons-migrate-", { format: "files" });
+    await writeAddonState(t, sampleAddon());
+    expect(existsSync(join(t, ".maker", "addons", "saas.json"))).toBe(true);
+
+    const state = await openState(t, { mode: "mutate" });
+    const changes = await planStateWrite(state, t, {
+      manifest: state!.manifest, format: "pack", bases: new Map(), consolidate: true, prune: false,
+    });
+    await applyChangePlan(createPlan(t, changes));
+    expect(existsSync(join(t, ".maker", "addons"))).toBe(false);
+    const migrated = await inspectState(t);
+    expect(migrated.addons.get("saas")).toEqual(sampleAddon());
+  });
+
+  it("planStateWrite: pack → files (consolidate) recria addonStateJson e remove o lockfile", async () => {
+    const t = await initInstall("maker-store-addons-migrate-back-", { format: "pack" });
+    await writeAddonState(t, sampleAddon());
+
+    const state = await openState(t, { mode: "mutate" });
+    const changes = await planStateWrite(state, t, {
+      manifest: state!.manifest, format: "files", bases: new Map(), consolidate: true, prune: false,
+    });
+    await applyChangePlan(createPlan(t, changes));
+    expect(existsSync(join(t, ".maker", "maker.lock"))).toBe(false);
+    const raw = JSON.parse(await readFile(join(t, ".maker", "addons", "saas.json"), "utf-8"));
+    expect(raw).toEqual(sampleAddon());
+  });
+
+  it("idempotência: segundo plano de addons já gravados é todo preserve, mesmo com JSON formatado à mão", async () => {
+    const t = await initInstall("maker-store-addons-idempotent-", { format: "files" });
+    await writeAddonState(t, sampleAddon());
+    // Reformata manualmente (mesmo conteúdo lógico, bytes diferentes).
+    await writeAddonStateFile(t, "saas", JSON.stringify(sampleAddon()));
+
+    const state = await openState(t, { mode: "read" });
+    const changes = await planStateWrite(state, t, { manifest: state!.manifest, format: "files", bases: new Map(), prune: false });
+    const plan = createPlan(t, changes);
+    // Sem mudança lógica, `planStateWrite` nem chega a planejar a escrita (idempotência real: nenhuma
+    // entrada para o caminho, não uma entrada "preserve").
+    const addonChange = plan.changes.find((c) => c.path === addonStateFile("saas"));
+    expect(addonChange).toBeUndefined();
+  });
+
+  it("addons omitido carrega state.addons intacto", async () => {
+    const t = await initInstall("maker-store-addons-default-", { format: "pack" });
+    await writeAddonState(t, sampleAddon());
+    const state = await openState(t, { mode: "read" });
+    const changes = await planStateWrite(state, t, { manifest: state!.manifest, format: "pack", bases: new Map(), prune: false });
+    await applyChangePlan(createPlan(t, changes));
+    const after = await inspectState(t);
+    expect(after.addons.get("saas")).toEqual(sampleAddon());
+  });
+
+  it("diretório .maker/addons vazio só é removido com consolidate: true", async () => {
+    const t = await initInstall("maker-store-addons-empty-dir-", { format: "pack" });
+    await mkdir(join(t, ".maker", "addons"), { recursive: true });
+    let state = await openState(t, { mode: "mutate" });
+    let changes = await planStateWrite(state, t, { manifest: state!.manifest, format: "pack", bases: new Map(), prune: false });
+    await applyChangePlan(createPlan(t, changes));
+    expect(existsSync(join(t, ".maker", "addons"))).toBe(true);
+
+    state = await openState(t, { mode: "mutate" });
+    changes = await planStateWrite(state, t, { manifest: state!.manifest, format: "pack", bases: new Map(), consolidate: true, prune: false });
+    await applyChangePlan(createPlan(t, changes));
+    expect(existsSync(join(t, ".maker", "addons"))).toBe(false);
+  });
+
+  it("files com JSON inválido + destino pack → addon-state-invalid sem plano", async () => {
+    const t = await initInstall("maker-store-addon-state-invalid-", { format: "files" });
+    await writeAddonStateFile(t, "saas", "{ json inválido");
+    const state = await openState(t, { mode: "read" });
+    await expect(planStateWrite(state, t, {
+      manifest: state!.manifest, format: "pack", bases: new Map(), consolidate: true, prune: false,
+    })).rejects.toMatchObject({ kind: "addon-state-invalid" });
+  });
+
+  it("files com id ≠ nome do arquivo + destino pack → addon-state-invalid sem plano", async () => {
+    const t = await initInstall("maker-store-addon-id-mismatch-", { format: "files" });
+    await writeAddonStateFile(t, "saas", sampleAddon({ id: "outro-id" }));
+    const state = await openState(t, { mode: "read" });
+    expect(state!.addons.get("saas")!.id).toBe("outro-id");
+    await expect(planStateWrite(state, t, {
+      manifest: state!.manifest, format: "pack", bases: new Map(), consolidate: true, prune: false,
+    })).rejects.toMatchObject({ kind: "addon-state-invalid" });
+  });
+
+  it("[addons] ilegível vira addons-invalid; marcador de conflito vira addons-conflict", async () => {
+    const manifestMin = 'makerVersion "1.0.0"\nproject {"name":"x","slug":"x"}\ninstalledAt "2026-01-01T00:00:00.000Z"';
+    const t = await target("maker-store-addons-lockfile-invalid-");
+    await mkdir(join(t, ".maker"), { recursive: true });
+    await writeFile(join(t, ".maker", "maker.lock"),
+      `maker-lockfile 1\n# a\n# b\n\n[manifest]\n${manifestMin}\n\n[addons]\n\nlinha fora da gramática\n\n[bases]\n\n`);
+    await expect(openState(t, { mode: "read" })).rejects.toMatchObject({ kind: "addons-invalid" });
+
+    const t2 = await target("maker-store-addons-lockfile-conflict-");
+    await mkdir(join(t2, ".maker"), { recursive: true });
+    await writeFile(join(t2, ".maker", "maker.lock"),
+      `maker-lockfile 1\n# a\n# b\n\n[manifest]\n${manifestMin}\n\n[addons]\n\n<<<<<<< HEAD\n\n[bases]\n\n`);
+    await expect(openState(t2, { mode: "read" })).rejects.toMatchObject({ kind: "addons-conflict" });
+  });
+
+  it("planStateWrite(null, …) com JSON órfão no disco lança addon-coexistence (variante órfã)", async () => {
+    const t = await target("maker-store-orphan-init-");
+    await mkdir(join(t, ".maker", "addons"), { recursive: true });
+    await writeFile(join(t, ".maker", "addons", "saas.json"), JSON.stringify(sampleAddon()));
+    const m = manifest();
+    await expect(planStateWrite(null, t, { manifest: m, format: "pack", bases: new Map(), prune: false }))
+      .rejects.toMatchObject({ kind: "addon-coexistence" });
+    await expect(planStateWrite(null, t, { manifest: m, format: "files", bases: new Map(), prune: false }))
+      .rejects.toMatchObject({ kind: "addon-coexistence" });
+  });
+
+  it("sem install: orphanAddonStateFiles reporta ids de .maker/addons/*.json regulares; addons vazio", async () => {
+    const t = await target("maker-store-orphan-snapshot-");
+    await mkdir(join(t, ".maker", "addons"), { recursive: true });
+    await writeFile(join(t, ".maker", "addons", "saas.json"), JSON.stringify(sampleAddon()));
+    const snapshot = await inspectState(t);
+    expect(snapshot.error).toBeUndefined();
+    expect(snapshot.addons.size).toBe(0);
+    expect(snapshot.orphanAddonStateFiles).toEqual(["saas"]);
+  });
+
+  it("readAddonStates (helper) é formato-agnóstico", async () => {
+    const pack = await initInstall("maker-store-readaddons-pack-", { format: "pack" });
+    await writeAddonState(pack, sampleAddon());
+    expect((await readAddonStates(pack)).get("saas")).toEqual(sampleAddon());
+
+    const files = await initInstall("maker-store-readaddons-files-", { format: "files" });
+    await writeAddonState(files, sampleAddon());
+    expect((await readAddonStates(files)).get("saas")).toEqual(sampleAddon());
+  });
+});

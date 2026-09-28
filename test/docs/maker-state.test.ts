@@ -67,7 +67,7 @@ function canonicalize(relPath: string): string {
 }
 
 describe("docs/maker-state.md — AC-28: taxonomia contra o install de referência real", () => {
-  it("pack: cada item do install real tem linha na tabela; maker.lock aparece uma única vez; 16 versionados", async () => {
+  it("pack: cada item do install real tem linha na tabela; maker.lock aparece uma única vez; 15 versionados; sem .maker/addons", async () => {
     const target = await initInstall("maker-state-doc-pack-", { agents: ["claude", "codex"], addon: "saas", format: "pack" });
     directories.push(target);
     await createTemporaries(target);
@@ -85,11 +85,14 @@ describe("docs/maker-state.md — AC-28: taxonomia contra o install de referênc
     // maker.lock aparece em exatamente uma linha.
     expect(items.filter((item) => item === ".maker/maker.lock")).toHaveLength(1);
 
-    // 16 arquivos versionados: tudo, menos os temporários (cobertos pelo .gitignore).
+    // Sem .maker/addons em pack (US-7): o estado do add-on saas vive na seção [addons] do lockfile.
+    expect(found.some((rel) => rel.startsWith("addons/"))).toBe(false);
+
+    // 15 arquivos versionados: tudo, menos os temporários (cobertos pelo .gitignore).
     const versioned = found.filter((rel) => canonicalize(rel) !== ".maker/transactions/"
       && canonicalize(rel) !== ".maker/transaction.lock" && canonicalize(rel) !== ".maker/mediation/"
       && canonicalize(rel) !== ".maker/runs/");
-    expect(versioned).toHaveLength(16);
+    expect(versioned).toHaveLength(15);
   });
 
   it("files: cada item do install real tem linha na tabela (manifest.json + bases por arquivo)", async () => {
@@ -107,7 +110,16 @@ describe("docs/maker-state.md — AC-28: taxonomia contra o install de referênc
     }
     expect(canonical).toContain(".maker/manifest.json");
     expect(canonical).toContain(".maker/bases/<hash>");
+    expect(canonical).toContain(".maker/addons/<id>.json");
     expect(canonical).not.toContain(".maker/maker.lock");
+  });
+
+  it("contém os números do install de referência (pack 15, files 137) e da 1.0.0 real (101/86)", async () => {
+    const doc = await readDoc();
+    expect(doc).toContain("15 arquivos");
+    expect(doc).toContain("137 arquivos");
+    expect(doc).toContain("101");
+    expect(doc).toContain("86");
   });
 });
 

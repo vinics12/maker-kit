@@ -3,7 +3,7 @@ import { readFile, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { BasesFormat } from "../src/render/manifest.js";
 import { runDoctor } from "../src/commands/doctor.js";
-import { initInstall } from "./helpers/state.js";
+import { initInstall, readAddonStates, writeAddonState } from "./helpers/state.js";
 
 const REF = ".specify/memory/saas-reference.md";
 const CONST = ".specify/memory/constitution.md";
@@ -40,9 +40,8 @@ describe.each<BasesFormat>(["files", "pack"])("maker doctor: add-ons (formato %s
 
   it("reporta state inválido, versão divergente e marcador incompleto", async () => {
     const target = await installedAddon(format);
-    const statePath = join(target, ".maker/addons/saas.json");
-    const state = JSON.parse(await readFile(statePath, "utf-8"));
-    await writeFile(statePath, JSON.stringify({ ...state, version: "9.9.9" }), "utf-8");
+    const state = (await readAddonStates(target)).get("saas")!;
+    await writeAddonState(target, { ...state, version: "9.9.9" });
     const constitution = await readFile(join(target, CONST), "utf-8");
     await writeFile(join(target, CONST), constitution.replace("<!-- maker:addon:saas:end -->", ""), "utf-8");
     const output = await outputOf(() => runDoctor({ target }));

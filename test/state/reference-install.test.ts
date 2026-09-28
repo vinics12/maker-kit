@@ -33,22 +33,24 @@ async function walk(dir: string, root: string): Promise<string[]> {
 }
 
 describe("install de referência: Claude + Codex + add-on saas (SC-001, SC-008)", () => {
-  it("SC-001: ≤ 16 arquivos versionados em .maker no default, sem opt-in, já no init", async () => {
+  it("SC-001: ≤ 15 arquivos versionados em .maker no default, sem opt-in, já no init", async () => {
     const target = await initInstall("maker-reference-sc001-", { agents: ["claude", "codex"], addon: "saas" });
     directories.push(target);
 
     const makerDir = join(target, ".maker");
     const patterns = await gitignorePatterns(target);
     const versioned = (await walk(makerDir, makerDir)).filter((rel) => !isIgnored(rel, patterns));
-    expect(versioned.length).toBeLessThanOrEqual(16);
+    expect(versioned.length).toBeLessThanOrEqual(15);
 
     const controlFiles = versioned.filter((rel) => rel === ".gitattributes" || rel === ".gitignore");
     expect(controlFiles).toHaveLength(2);
-    // 14 arquivos de estado/conteúdo (lockfile + estado de add-on + papéis de workflow) + 2 de controle.
-    expect(versioned.length - controlFiles.length).toBeLessThanOrEqual(14);
+    // 13 arquivos de estado/conteúdo (lockfile + papéis de workflow, com o estado do add-on saas
+    // dentro do lockfile) + 2 de controle.
+    expect(versioned.length - controlFiles.length).toBeLessThanOrEqual(13);
     expect(versioned).toContain("maker.lock");
-    // pack: sem .maker/bases/ nem .maker/manifest.json (formato "files").
+    // pack: sem .maker/bases/, .maker/manifest.json nem .maker/addons/ (formato "files").
     expect(versioned.some((rel) => rel === "bases" || rel.startsWith("bases/"))).toBe(false);
+    expect(versioned.some((rel) => rel === "addons" || rel.startsWith("addons/"))).toBe(false);
     expect(versioned).not.toContain("manifest.json");
   });
 });

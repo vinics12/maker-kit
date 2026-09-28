@@ -19,6 +19,8 @@ describe("encapsulamento do estado (src/state/)", () => {
       /maker\.lock/,
       /\.maker\/bases/,
       /["']bases["']/,
+      /\.maker\/addons/,
+      /["']\.maker["']\s*,\s*["']addons["']/,
     ];
     for (const file of files) {
       const content = await readFile(file, "utf-8");
@@ -29,12 +31,14 @@ describe("encapsulamento do estado (src/state/)", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("o identificador writeManifest não existe em src/", async () => {
+  it("os identificadores writeManifest, writeAddonState e deleteAddonState não existem em src/", async () => {
     const files = await fg("src/**/*.ts", { cwd: ROOT, absolute: true });
     const offenders: string[] = [];
     for (const file of files) {
       const content = await readFile(file, "utf-8");
-      if (/\bwriteManifest\b/.test(content)) offenders.push(file);
+      if (/\bwriteManifest\b/.test(content)) offenders.push(`${file}: writeManifest`);
+      if (/\bwriteAddonState\b/.test(content)) offenders.push(`${file}: writeAddonState`);
+      if (/\bdeleteAddonState\b/.test(content)) offenders.push(`${file}: deleteAddonState`);
     }
     expect(offenders).toEqual([]);
   });
