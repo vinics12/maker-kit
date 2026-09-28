@@ -89,25 +89,25 @@ Brief: `briefs/US-3.md` · depende de US-1 · **arquivos disjuntos de US-2**
 
 Brief: `briefs/US-4.md` · depende de US-1, US-2, US-3 · **arquivos disjuntos de US-5**
 
-- [ ] T401 — `templates/engine/workflow/skills/maker-update/SKILL.md` (Hard rules, linha 23): proibir editar também `.maker/maker.lock`.
-- [ ] T402 — `scripts/package-smoke.mjs`: exigir os dois templates de controle git no tarball.
-- [ ] T403 — `test/state/git-interop.test.ts` (`it.skipIf(!hasGit())` com motivo): AC-20 (autocrlf, nos dois formatos), AC-21, AC-22, AC-40 (entradas não adjacentes, **adjacentes**, campo novo × edição vizinha, unidade `file` nova × edição vizinha — todos sem conflito e doctor verde).
-- [ ] T404 — `test/commands/update.gitcontrol.test.ts`: AC-23 (edição local rastreada preservada/mesclada); FR-029 (update cria os dois em install existente e os registra no manifest com base); FR-030 (`.gitattributes` de raiz inalterado, nenhum `.gitignore` de raiz).
-- [ ] T405 — `test/state/reference-install.test.ts`: SC-001 (Claude + Codex + `saas`, default, sem opt-in: ≤ 16 arquivos versionados em `.maker`, contando só o que não é ignorado), SC-008 (tamanho do lockfile ≤ soma das bases + overhead de cabeçalhos + base64).
-- [ ] T406 — Emenda (Gate 3, Fase C): `src/agents/validate.ts` aceita CRLF no frontmatter e demais parses de texto; teste em `test/agents/validate.test.ts`.
-- [ ] T407 — AC-20 refeito com `git clone -c core.autocrlf=true` (conversão real) nos dois formatos: lockfile/bases em LF, `.claude/**` em CRLF, `doctor` verde.
-- [ ] T408 — Timeout explícito (60 s) no caso de crash de `test/commands/update.rollback.test.ts`; SC-001 com o `.maker/.gitignore` real e asserção de nenhum caminho sob `bases/`.
+- [X] T401 — `templates/engine/workflow/skills/maker-update/SKILL.md` (Hard rules, linha 23): proibir editar também `.maker/maker.lock`.
+- [X] T402 — `scripts/package-smoke.mjs`: exigir os dois templates de controle git no tarball.
+- [X] T403 — `test/state/git-interop.test.ts` (`it.skipIf(!hasGit())` com motivo): AC-20 (autocrlf, nos dois formatos), AC-21, AC-22, AC-40 (entradas não adjacentes, **adjacentes**, campo novo × edição vizinha, unidade `file` nova × edição vizinha — todos sem conflito e doctor verde).
+- [X] T404 — `test/commands/update.gitcontrol.test.ts`: AC-23 (edição local rastreada preservada/mesclada); FR-029 (update cria os dois em install existente e os registra no manifest com base); FR-030 (`.gitattributes` de raiz inalterado, nenhum `.gitignore` de raiz).
+- [X] T405 — `test/state/reference-install.test.ts`: SC-001 (Claude + Codex + `saas`, default, sem opt-in: ≤ 16 arquivos versionados em `.maker`, contando só o que não é ignorado), SC-008 (tamanho do lockfile ≤ soma das bases + overhead de cabeçalhos + base64).
+- [X] T406 — Emenda (Gate 3, Fase C): `src/agents/validate.ts` aceita CRLF no frontmatter e demais parses de texto; teste em `test/agents/validate.test.ts`.
+- [X] T407 — AC-20 refeito com `git clone -c core.autocrlf=true` (conversão real) nos dois formatos: lockfile/bases em LF, `.claude/**` em CRLF, `doctor` verde.
+- [X] T408 — Timeout explícito (60 s) no caso de crash de `test/commands/update.rollback.test.ts`; SC-001 com o `.maker/.gitignore` real e asserção de nenhum caminho sob `bases/`.
 
 ### [US-5 — backend] `agent add`, `add` e `remove` no formato em uso (P1)
 
 Brief: `briefs/US-5.md` · depende de US-1, US-2 · **arquivos disjuntos de US-4**
 
-- [ ] T501 — `src/util/engine-scaffold.ts`: `applyAgentProvider(targetDir, ctx, provider, { includeShared? })` para renderizar em staging sem depender do alvo.
-- [ ] T502 — `src/commands/agent.ts`: `agent add` transacional — `openState({ mode: "mutate" })`, preflight atual, render em staging, `planWrite` por arquivo, entradas com `baseHash = hash`, bases no formato em uso (`planStateWrite({ format: inUse, bases: novas })`, sem consolidar/podar), `basesFormat` preservado, `applyChangePlan`.
-- [ ] T503 — `src/addons/apply.ts`: conferir formato em uso, `basesFormat` preservado e nenhuma poda em `add`/`remove` (ajuste só se o teste T505 exigir).
-- [ ] T504 — `test/commands/agent.state.test.ts`: AC-30 (`agent add` em pack: bases só no lockfile, nenhuma em `.maker/bases`), AC-33 (`agent add` em install não migrado: bases por arquivo, sem `basesFormat`, `update` seguinte migra), AC-19/38/39 (aborta, árvore idêntica), FR-022 (falha injetada restaura tudo).
-- [ ] T505 — `test/commands/add.state.test.ts`: AC-33 (`add`/`remove` não migram, `basesFormat` ausente continua ausente), AC-19/38/39 para `add` e `remove`, FR-011 (órfãs toleradas, sem poda), FR-022 em pack.
-- [ ] T506 — Adaptar `test/agent.integration.test.ts` e `test/addon.integration.test.ts` ao default `"pack"` e ao `agent add` transacional.
+- [X] T501 — `src/util/engine-scaffold.ts`: `applyAgentProvider(targetDir, ctx, provider, { includeShared? })` para renderizar em staging sem depender do alvo.
+- [X] T502 — `src/commands/agent.ts`: `agent add` transacional — `openState({ mode: "mutate" })`, preflight atual, render em staging, `planWrite` por arquivo, entradas com `baseHash = hash`, bases no formato em uso (`planStateWrite({ format: inUse, bases: novas })`, sem consolidar/podar), `basesFormat` preservado, `applyChangePlan`.
+- [X] T503 — `src/addons/apply.ts`: conferir formato em uso, `basesFormat` preservado e nenhuma poda em `add`/`remove` (ajuste só se o teste T505 exigir).
+- [X] T504 — `test/commands/agent.state.test.ts`: AC-30 (`agent add` em pack: bases só no lockfile, nenhuma em `.maker/bases`), AC-33 (`agent add` em install não migrado: bases por arquivo, sem `basesFormat`, `update` seguinte migra), AC-19/38/39 (aborta, árvore idêntica), FR-022 (falha injetada restaura tudo).
+- [X] T505 — `test/commands/add.state.test.ts`: AC-33 (`add`/`remove` não migram, `basesFormat` ausente continua ausente), AC-19/38/39 para `add` e `remove`, FR-011 (órfãs toleradas, sem poda), FR-022 em pack.
+- [X] T506 — Adaptar `test/agent.integration.test.ts` e `test/addon.integration.test.ts` ao default `"pack"` e ao `agent add` transacional.
 
 ---
 
