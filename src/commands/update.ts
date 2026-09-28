@@ -17,6 +17,7 @@ import { applyChangePlan } from "../changes/transaction.js";
 import { openState, planStateWrite, type InstallState } from "../state/store.js";
 import { configuredBasesFormat, effectiveBasesFormat, planFormatTransition, type ConfiguredFormat, type FormatTransition } from "../state/format.js";
 import { GIT_CONTROL_FILES } from "../state/paths.js";
+import type { BaseProblem } from "../state/lockfile.js";
 import { planLegacyAddonAgents, type LegacyAgentReport } from "../agents/migrate.js";
 import { sharedRoleReference } from "../agents/reference.js";
 import { afterBlockRemoval, reinjectBlocks } from "../addons/apply.js";
@@ -56,13 +57,15 @@ export interface UpdatePlanning {
   transition: FormatTransition | null;
   /** `maker.config.json` ilegível: formato mantido sem migrar, aviso para o usuário. */
   configWarning?: string;
+  /** Sem transição, entradas do lockfile em pack que não verificam e somem ao regravá-lo. */
+  invalidEntries: BaseProblem[];
 }
 
 /**
  * Lê `state.bases` de `maker.config.json` do alvo; `state.bases` fora do enum aborta antes de
- * qualquer escrita com a mensagem do contrato (FR-003) — nunca o ZodError cru.
+ * qualquer escrita com uma mensagem legível — nunca o ZodError cru.
  */
-export async function configuredFormatOrAbort(targetDir: string): Promise<ConfiguredFormat> {
+async function configuredFormatOrAbort(targetDir: string): Promise<ConfiguredFormat> {
   try {
     return await configuredBasesFormat(targetDir);
   } catch (error) {
@@ -71,6 +74,11 @@ export async function configuredFormatOrAbort(targetDir: string): Promise<Config
     }
     throw error;
   }
+}
+
+/** `3f9a…(64)` para um hash conhecido, `linha N` para um problema sem hash (ex.: bloco malformado). */
+function problemLabel(problem: BaseProblem): string {
+  return problem.hash ? `${problem.hash.slice(0, 4)}…(${problem.hash.length})` : `linha ${problem.line ?? "?"}`;
 }
 
 /** Anúncio de migração/consolidação de bases (`cli-output.md` §1), impresso antes do plano/resumo. */
@@ -83,13 +91,24 @@ export function announceTransition(transition: FormatTransition, opts: { applied
   console.log(paint(opts.applied ? `✓ ${head}` : head));
   console.log(`  ${transition.migrated} base(s) migrada(s), ${transition.discarded.length} descartada(s).`);
   for (const problem of transition.discarded) {
-    const label = problem.hash ? `${problem.hash.slice(0, 4)}…(${problem.hash.length})` : `linha ${problem.line ?? "?"}`;
     const files = problem.hash ? transition.affected[problem.hash] ?? [] : [];
-    console.log(pc.yellow(`  descartada ${label} [${problem.origin}] ${problem.detail}${files.length ? ` → afeta: ${files.join(", ")}` : ""}`));
+    console.log(pc.yellow(`  descartada ${problemLabel(problem)} [${problem.origin}] ${problem.detail}${files.length ? ` → afeta: ${files.join(", ")}` : ""}`));
   }
   if (transition.reason === "default") {
-    console.log(`  O formato "${transition.to}" é o padrão; para manter as bases por arquivo, declare "state": { "bases": "files" } em maker.config.json.`);
+    console.log(`  O formato "${transition.to}" é o padrão; para manter as bases por arquivo, declare ${optOutSnippet()} em maker.config.json.`);
   }
+}
+
+/** Sem transição de formato, um lockfile em pack ainda pode ser regravado descartando entradas que não verificam — nunca em silêncio. */
+function announceInvalidEntries(problems: readonly BaseProblem[]): void {
+  if (!problems.length) return;
+  const list = problems.map((problem) => `${problemLabel(problem)} (${problem.detail})`).join(", ");
+  console.log(pc.yellow(`${problems.length} entrada(s) inválida(s) do lockfile descartada(s): ${list}`));
+}
+
+/** Trecho de config do opt-out de formato, montado a partir da própria estrutura (nunca um literal de caminho). */
+function optOutSnippet(): string {
+  return JSON.stringify({ state: { bases: "files" } }, null, 1).replace(/\s*\n\s*/g, " ").slice(2, -2);
 }
 
 export async function runUpdate(opts: UpdateOptions): Promise<void> {
@@ -101,7 +120,7 @@ export async function runUpdate(opts: UpdateOptions): Promise<void> {
   // As propostas são validadas contra os candidatos do mesmo modo (--no-merge ou não) da exportação.
   const merge = opts.applyResolutions ? (await exportedMergeMode(targetDir, opts.applyResolutions)) ?? opts.merge : opts.merge;
   const planning = await planUpdate(targetDir, { merge, state });
-  const { plan, reports, mediation, unresolved, defaulted, config, recovered, transition, configWarning } = planning;
+  const { plan, reports, mediation, unresolved, defaulted, config, recovered, transition, configWarning, invalidEntries } = planning;
   if ((opts.export || opts.applyResolutions) && !recovered) {
     throw new Error("Config do projeto não recuperada: crie maker.config.json com os valores usados no init antes de mediar o update.");
   }
@@ -126,6 +145,7 @@ export async function runUpdate(opts: UpdateOptions): Promise<void> {
     hint();
     if (configWarning) console.log(pc.yellow(configWarning));
     if (transition) announceTransition(transition, { applied: false });
+    else announceInvalidEntries(invalidEntries);
     printAgentReports(reports, "planejado");
     console.log(formatPlan(plan));
     if (conflicted) process.exitCode = 1;
@@ -140,6 +160,7 @@ export async function runUpdate(opts: UpdateOptions): Promise<void> {
   hint();
   if (configWarning) console.log(pc.yellow(configWarning));
   if (transition) announceTransition(transition, { applied: true });
+  else announceInvalidEntries(invalidEntries);
   printAgentReports(reports, "aplicado");
   const merged = plan.changes.filter((change) => change.resolution === "merge").length;
   const updated = plan.changes.filter((change) => (change.action === "update" || change.action === "create") && change.source !== "metadata" && change.resolution !== "merge").length;
@@ -165,7 +186,7 @@ export async function planUpdate(targetDir: string, opts: { merge?: boolean; sta
   if (!priorState) throw new Error(`Nenhum install do maker em ${targetDir}.`);
   const prior = priorState.manifest;
   // Fonte do formato é maker.config.json do alvo, não a config renderizada (que vem do manifest ou
-  // do --config recuperado) — o `update` de hoje nem lê maker.config.json para renderizar (D6).
+  // do --config recuperado): o update não lê esse arquivo para renderizar, só para o formato.
   const configured = await configuredFormatOrAbort(targetDir);
   const effective = effectiveBasesFormat(configured, priorState.recorded, priorState.inUse);
   const configWarning = configured.kind === "unreadable"
@@ -255,8 +276,8 @@ export async function planUpdate(targetDir: string, opts: { merge?: boolean; sta
         preserve(CONFIG_UNKNOWN);
         unresolved.push(file.rel);
       } else if (!recorded && (GIT_CONTROL_FILES as readonly string[]).includes(file.rel)) {
-        // B2: arquivo de controle do git pré-existente e ainda não rastreado, com conteúdo diferente
-        // do upstream — nunca sobrescrito; vai para mediação com base nula (não há versão anterior
+        // Arquivo de controle do git pré-existente e ainda não rastreado, com conteúdo diferente do
+        // upstream — nunca sobrescrito; vai para mediação com base nula (não há versão anterior
         // conhecida do maker para essa cópia).
         const reason = "arquivo pré-existente não rastreado pelo maker";
         preserve(reason);
@@ -310,8 +331,13 @@ export async function planUpdate(targetDir: string, opts: { merge?: boolean; sta
     const content = bases.get(hash) ?? priorState.readBase(hash);
     if (content) finalBases.set(hash, content);
   }
-  // O update sempre grava o formato efetivo (AC-35): registrado nunca fica "esquecido" atrás da config.
+  // O update sempre grava o formato efetivo: registrado nunca fica "esquecido" atrás da config.
   const transition = planFormatTransition(priorState, effective, referencedBases);
+  // Sem transição, o lockfile em pack ainda é regravado (planStateWrite/serializeLockfile só
+  // reproduz o que verificou): entradas que não verificaram somem do arquivo — nunca em silêncio.
+  const invalidEntries = !transition && effective.format === "pack"
+    ? priorState.problems.filter((problem) => problem.origin === "pack" && !problem.recovered)
+    : [];
   next.basesFormat = effective.format;
   changes.push(...await planStateWrite(priorState, targetDir, {
     manifest: next, format: effective.format, bases: finalBases, consolidate: true, prune: true, preserve: referencedBases,
@@ -330,7 +356,7 @@ export async function planUpdate(targetDir: string, opts: { merge?: boolean; sta
           : "revise o conteúdo local, leve-o para o papel compartilhado e restaure o adapter gerado (maker update --export e a skill maker-update ajudam)" });
     }
   }
-  return { plan, reports, mediation, unresolved, defaulted, config, recovered, transition, configWarning };
+  return { plan, reports, mediation, unresolved, defaulted, config, recovered, transition, configWarning, invalidEntries };
 }
 
 /**

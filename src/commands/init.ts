@@ -60,7 +60,7 @@ export async function runInit(opts: InitOptions): Promise<void> {
     agent: opts.agent ?? priorManifest?.config?.agent ?? agents[0],
   });
   const ctx = buildContext(config, priorManifest?.installedAt);
-  // init usa a config carregada (--config ou maker.config.json), não relê o arquivo do zero (D6).
+  // Usa a config já carregada/validada (--config ou maker.config.json), sem reler o arquivo do zero.
   const configured = await configuredBasesFormat(targetDir, { loaded: config });
   const effective = effectiveBasesFormat(configured, priorState?.recorded, priorState?.inUse);
 
@@ -146,8 +146,8 @@ export async function runInit(opts: InitOptions): Promise<void> {
   };
   const bases = new Map<string, Buffer>();
   for (const file of applied) bases.set(file.entry.hash, renderedByPath.get(file.rel)!);
-  // Install novo: formato efetivo direto (config carregada ou "pack", AC-06). Sobre um install
-  // existente, mesma transição do update (consolida, nunca poda — só o update poda órfãs, FR-011).
+  // Install novo: formato efetivo direto. Sobre um install existente, mesma transição do update
+  // (consolida, nunca poda — só o update poda órfãs).
   const referencedBases = new Set(Object.values(manifest.files).flatMap((item) => item.baseHash ? [item.baseHash] : []));
   const transition = priorState ? planFormatTransition(priorState, effective, referencedBases) : null;
   changes.push(...await planStateWrite(priorState, targetDir, {
@@ -265,7 +265,7 @@ function formatCollisions(collisions: InitCollision[]): string {
   return collisions.map((collision) => `  - ${collision.path}: ${collision.reason}`).join("\n");
 }
 
-/** `state.bases` fora do enum (FR-003): mensagem do contrato, nunca o ZodError cru. */
+/** `state.bases` fora do enum: mensagem legível para o usuário, nunca o ZodError cru. */
 function stateBasesAbort(error: unknown): unknown {
   if (error instanceof z.ZodError) {
     const issue = error.issues.find((item) => item.path.join(".") === "state.bases");
