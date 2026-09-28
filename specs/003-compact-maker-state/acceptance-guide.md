@@ -453,7 +453,7 @@ direto na seção `[addons]` do lockfile); doctor verde (`íntegro (pack)`); 15 
 | J3 Opt-out e volta | AC-24, 25, 27, 32, 33, 35 | [ ] |
 | J4 Doctor: ausente, CRLF, versão futura | AC-14, 15, 16, 19 | [ ] |
 | J5 Merge: limpo, conflito, formatos misturados | AC-40, 39, 38, 17 | [ ] |
-| J6 Convivência com 1.x | FR-006b, AC-37 (binário real) | [ ] |
+| J6 Convivência com 1.x | FR-006b, AC-37/AC-42 (binário real) | [ ] |
 | J7 Install novo em pack | AC-06, 30, 36 | [ ] |
 | J8 Docs e release notes | AC-28, 29, FR-006a | [ ] |
 | Decisão sobre os achados 1 e 2 | — | [ ] |
