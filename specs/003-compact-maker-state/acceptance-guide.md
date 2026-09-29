@@ -2,7 +2,7 @@
 
 **Feature**: `specs/003-compact-maker-state/` · **Branch**: `003-compact-maker-state`
 **Tipo**: CLI headless (HAS_UI=false). Todas as jornadas são feitas no terminal.
-**Pré-condição global**: Gate 3 verde (364 testes, `package:smoke` ok, `dist/` reconstruído). Este guia
+**Pré-condição global**: Gate 3 verde (474 testes, `package:smoke` ok, `dist/` reconstruído). Este guia
 **não** repete o que a automação já prova (parser do lockfile, rollback por injeção de falha, paridade
 de merge entre formatos, determinismo byte a byte entre SOs, cada código de achado do doctor). O foco
 aqui são as jornadas de negócio e as decisões que só um humano julga: a migração de um install
