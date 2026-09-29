@@ -8,3 +8,4 @@
 - [CI de Pull Request](ci.md) — verificação automática de build/typecheck/testes/acoplamento em todo PR e push na branch default, complementando os gates humanos
 - [Catálogo local de add-ons](addon-catalog.md) — descoberta dos add-ons empacotados e classificação do estado aplicado pelo comando `maker list`
 - [Atualização transacional](transactional-update.md) — `--dry-run`, recuperação e 3-way merge seguro
+- [Estado compacto (lockfile único)](compact-state.md) — manifest, estado de add-ons e bases num lockfile mesclável por padrão; formato por arquivo como opt-out, migração transacional bidirecional e diagnósticos do doctor
