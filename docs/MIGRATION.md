@@ -177,6 +177,46 @@ constitution e dos papéis que tinham bloco de add-on. Se isso aconteceu, recupe
 histórico do git (`git log -p -- <arquivo>`) e reaplique-o à mão ou por mediação; a versão atual não
 repete o problema.
 
+## Bases no formato pack por padrão
+
+A partir desta versão, o formato padrão de armazenamento do manifest, do estado de add-ons e das
+bases é `"pack"`: tudo vive num único arquivo, `.maker/maker.lock`, em vez de `.maker/manifest.json` +
+`.maker/addons/<id>.json` (um por add-on aplicado) + uma base por arquivo em `.maker/bases/`. Detalhes
+completos (taxonomia, trade-offs, diagnóstico e recuperação) em [`docs/maker-state.md`](maker-state.md).
+
+- **Quem é afetado:** qualquer install sem `state.bases` declarado em `maker.config.json` e sem
+  formato já registrado no manifest (a maioria dos installs existentes). O primeiro `maker update`
+  depois de atualizar a CLI migra automaticamente: `.maker/manifest.json`, `.maker/bases/` e
+  `.maker/addons/` deixam de existir e o conteúdo passa a viver em `.maker/maker.lock` (o estado de
+  cada add-on aplicado vai para a seção `[addons]`, na mesma transação). O `--dry-run` mostra o
+  relatório da migração antes de aplicar (contagem de bases migradas/descartadas).
+- **Opt-out:** para manter bases (e estado de add-ons) por arquivo, declare em `maker.config.json`
+  antes de rodar o `update`:
+
+  ```json
+  { "state": { "bases": "files" } }
+  ```
+
+- **Atualize o maker em todo o time e na CI antes de migrar.** Versões anteriores (1.x) identificam um
+  install e um add-on aplicado pelo **primeiro arquivo de estado que leem** — `.maker/manifest.json`
+  para a maioria dos comandos, `.maker/addons/<id>.json` para o `remove` — e nenhum dos dois existe num
+  install já em `pack`. `update`, `add`, `remove`, `agent add` e a mediação de uma versão antiga
+  concluem "nenhum install" (ou, no caso do `remove`, "add-on não está aplicado") e **param sem
+  escrever nada**; o `list` de uma versão antiga mostra os add-ons como não aplicados (disponíveis). Já
+  um `maker init` (sem `--force`) de uma versão antiga recusa por colisão enquanto houver arquivos
+  gerados que diferem do que ela renderizaria e, recusando, **não grava nada**. `maker init --force` de
+  uma versão antiga, por sua vez, **reinstala por cima** independentemente do formato (limitação
+  conhecida) — o resultado é coexistência (`.maker/manifest.json` e/ou `.maker/addons/*.json` ao lado
+  do `maker.lock`) que a versão atual detecta e recusa a resolver sozinha (`maker doctor` falha,
+  comandos mutantes abortam). Depois do update, a seção de estado do `maker doctor` mostra
+  `Estado (.maker): íntegro (pack)` e o doctor termina em `✓ Install íntegro.`
+
+```bash
+maker update --dry-run   # confere o relatório de migração antes de aplicar
+maker update
+maker doctor              # Estado (.maker): íntegro (pack) / ✓ Install íntegro.
+```
+
 ## 4. Verificação final
 
 - [ ] `maker doctor` termina com `✓ Install íntegro.` e sem arquivos aguardando mediação. Arquivos que
@@ -202,6 +242,10 @@ repete o problema.
 - **Manifest:** entradas podem ganhar `baseHash` (base do próximo merge) e `edited` (arquivo com
   customização sem base exata). Não edite esses campos à mão.
 - **Nova skill** `maker-update` instalada para Claude (`.claude/skills/`) e Codex (`.agents/skills/`).
+- **Doctor no Windows:** a validação de integração do frontmatter em `.claude/**` passa a tolerar
+  `\r\n` (CRLF). Corrige um falso-positivo em projetos com `core.autocrlf=true` no Windows, onde o
+  git converte esses arquivos para CRLF no checkout e o `doctor` reportava a integração Claude como
+  quebrada mesmo em installs íntegros — bug presente desde a 1.0.0.
 
 ## 6. Se algo der errado
 

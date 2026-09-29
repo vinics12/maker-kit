@@ -1,18 +1,24 @@
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import pc from "picocolors";
 import { mergeDiff3 } from "node-diff3";
+import { z } from "zod";
 import { parseConfig, type AgentProvider, type MakerConfig } from "../config/schema.js";
 import { buildContext, type RenderContext } from "../render/engine.js";
-import { enabledAgents, readManifest, sha256, type Manifest, type ManifestEntry } from "../render/manifest.js";
+import { enabledAgents, sha256, type Manifest, type ManifestEntry } from "../render/manifest.js";
 import { applyEngine, legacyAgent, legacyBase } from "../util/engine-scaffold.js";
 import type { AppliedFile } from "../util/scaffold.js";
 import { makerVersion } from "../util/version.js";
 import { resolveConfig } from "../util/upstream.js";
 import { createPlan, formatPlan, inspectTarget, planWrite, type ChangePlan, type PlannedChange } from "../changes/plan.js";
-import { applyChangePlan, assertNoPendingTransactions } from "../changes/transaction.js";
+import { applyChangePlan } from "../changes/transaction.js";
+import { openState, planStateWrite, type InstallState } from "../state/store.js";
+import { configuredBasesFormat, effectiveBasesFormat, planFormatTransition, FORMAT_OPT_OUT_SNIPPET, type ConfiguredFormat, type FormatTransition } from "../state/format.js";
+import { GIT_CONTROL_FILES } from "../state/paths.js";
+import type { BaseProblem } from "../state/lockfile.js";
+import type { AddonStateRecord } from "../state/addon-state.js";
 import { planLegacyAddonAgents, type LegacyAgentReport } from "../agents/migrate.js";
 import { sharedRoleReference } from "../agents/reference.js";
 import { afterBlockRemoval, reinjectBlocks } from "../addons/apply.js";
@@ -48,22 +54,75 @@ export interface UpdatePlanning {
   defaulted: string[];
   config: MakerConfig;
   recovered: boolean;
+  /** Transição de formato planejada (migração e/ou consolidação de bases soltas); `null` sem transição. */
+  transition: FormatTransition | null;
+  /** `maker.config.json` ilegível: formato mantido sem migrar, aviso para o usuário. */
+  configWarning?: string;
+  /** Sem transição, entradas do lockfile em pack que não verificam e somem ao regravá-lo. */
+  invalidEntries: BaseProblem[];
+}
+
+/**
+ * Lê `state.bases` de `maker.config.json` do alvo; `state.bases` fora do enum aborta antes de
+ * qualquer escrita com uma mensagem legível — nunca o ZodError cru.
+ */
+async function configuredFormatOrAbort(targetDir: string): Promise<ConfiguredFormat> {
+  try {
+    return await configuredBasesFormat(targetDir);
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      throw new Error(`maker.config.json: ${error.issues[0]?.message ?? "state.bases inválido"}`);
+    }
+    throw error;
+  }
+}
+
+/** `3f9a…(64)` para um hash conhecido, `linha N` para um problema sem hash (ex.: bloco malformado). */
+function problemLabel(problem: BaseProblem): string {
+  return problem.hash ? `${problem.hash.slice(0, 4)}…(${problem.hash.length})` : `linha ${problem.line ?? "?"}`;
+}
+
+/** Anúncio de migração/consolidação de bases (`cli-output.md` §1), impresso antes do plano/resumo. */
+export function announceTransition(transition: FormatTransition, opts: { applied: boolean }): void {
+  const isConsolidationOnly = transition.from === transition.to;
+  const head = isConsolidationOnly
+    ? `Consolidação das bases: bases por arquivo → ${transition.to}`
+    : `Migração do formato das bases: ${transition.from} → ${transition.to}`;
+  const paint = opts.applied ? pc.green : pc.bold;
+  console.log(paint(opts.applied ? `✓ ${head}` : head));
+  console.log(`  ${transition.migrated} base(s) migrada(s), ${transition.discarded.length} descartada(s).`);
+  for (const problem of transition.discarded) {
+    const files = problem.hash ? transition.affected[problem.hash] ?? [] : [];
+    console.log(pc.yellow(`  descartada ${problemLabel(problem)} [${problem.origin}] ${problem.detail}${files.length ? ` → afeta: ${files.join(", ")}` : ""}`));
+  }
+  if (transition.reason === "default") {
+    console.log(`  O formato "${transition.to}" é o padrão; para manter as bases por arquivo, declare ${FORMAT_OPT_OUT_SNIPPET} em maker.config.json.`);
+  }
+}
+
+/** Sem transição de formato, um lockfile em pack ainda pode ser regravado descartando entradas que não verificam — nunca em silêncio. */
+function announceInvalidEntries(problems: readonly BaseProblem[]): void {
+  if (!problems.length) return;
+  const list = problems.map((problem) => `${problemLabel(problem)} (${problem.detail})`).join(", ");
+  console.log(pc.yellow(`${problems.length} entrada(s) inválida(s) do lockfile descartada(s): ${list}`));
 }
 
 export async function runUpdate(opts: UpdateOptions): Promise<void> {
   const targetDir = resolve(opts.target ?? process.cwd());
   if (opts.export && opts.applyResolutions) throw new Error("Use --export ou --apply-resolutions, não os dois juntos.");
-  if (opts.dryRun || opts.export) await assertNoPendingTransactions(targetDir);
+  // dry-run/export não escrevem estado: só verificam que não há transação pendente. Os demais
+  // caminhos (aplicado, --apply-resolutions) recuperam uma transação pendente antes de ler.
+  const state = await openState(targetDir, { mode: opts.dryRun || opts.export ? "dry-run" : "mutate" });
   // As propostas são validadas contra os candidatos do mesmo modo (--no-merge ou não) da exportação.
   const merge = opts.applyResolutions ? (await exportedMergeMode(targetDir, opts.applyResolutions)) ?? opts.merge : opts.merge;
-  const planning = await planUpdate(targetDir, { merge });
-  const { plan, reports, mediation, unresolved, defaulted, config, recovered } = planning;
+  const planning = await planUpdate(targetDir, { merge, state });
+  const { plan, reports, mediation, unresolved, defaulted, config, recovered, transition, configWarning, invalidEntries } = planning;
   if ((opts.export || opts.applyResolutions) && !recovered) {
     throw new Error("Config do projeto não recuperada: crie maker.config.json com os valores usados no init antes de mediar o update.");
   }
   // A mediação usa os candidatos recalculados agora, não o que o índice exportado declara.
   if (opts.applyResolutions) {
-    return applyResolutions(targetDir, opts.applyResolutions, config, mediation, { dryRun: opts.dryRun, acceptDropped: opts.acceptDropped });
+    return applyResolutions(targetDir, opts.applyResolutions, config, mediation, state!, { dryRun: opts.dryRun, acceptDropped: opts.acceptDropped });
   }
   if (opts.export) return exportMediation(targetDir, opts.export, mediation, config, { merge: merge !== false });
 
@@ -80,6 +139,9 @@ export async function runUpdate(opts: UpdateOptions): Promise<void> {
     configKnown: recovered, skillInstalled: skillInstalled(targetDir), updateBlocked: conflicted && !opts.dryRun })));
   if (opts.dryRun) {
     hint();
+    if (configWarning) console.log(pc.yellow(configWarning));
+    if (transition) announceTransition(transition, { applied: false });
+    else announceInvalidEntries(invalidEntries);
     printAgentReports(reports, "planejado");
     console.log(formatPlan(plan));
     if (conflicted) process.exitCode = 1;
@@ -92,6 +154,9 @@ export async function runUpdate(opts: UpdateOptions): Promise<void> {
   await applyChangePlan(plan);
   // Depois de aplicar, a skill maker-update já está instalada.
   hint();
+  if (configWarning) console.log(pc.yellow(configWarning));
+  if (transition) announceTransition(transition, { applied: true });
+  else announceInvalidEntries(invalidEntries);
   printAgentReports(reports, "aplicado");
   const merged = plan.changes.filter((change) => change.resolution === "merge").length;
   const updated = plan.changes.filter((change) => (change.action === "update" || change.action === "create") && change.source !== "metadata" && change.resolution !== "merge").length;
@@ -109,14 +174,27 @@ export async function runUpdate(opts: UpdateOptions): Promise<void> {
   }
 }
 
-export async function planUpdate(targetDir: string, opts: { merge?: boolean } = {}): Promise<UpdatePlanning> {
-  const prior = await readManifest(targetDir);
-  if (!prior) throw new Error(`Nenhum install do maker em ${targetDir}.`);
+export async function planUpdate(targetDir: string, opts: { merge?: boolean; state?: InstallState | null } = {}): Promise<UpdatePlanning> {
+  // `state: null` (o alvo já foi aberto e não há install) é diferente de `state` ausente (abre agora,
+  // em modo mutate): usar `??` aqui reabriria o estado sempre que o chamador já soubesse que não há
+  // install — inclusive em --dry-run, criando .maker/ à toa (regressão de comportamento externo).
+  const priorState = "state" in opts ? opts.state : await openState(targetDir, { mode: "mutate" });
+  if (!priorState) throw new Error(`Nenhum install do maker em ${targetDir}.`);
+  const prior = priorState.manifest;
+  // Fonte do formato é maker.config.json do alvo, não a config renderizada (que vem do manifest ou
+  // do --config recuperado): o update não lê esse arquivo para renderizar, só para o formato.
+  const configured = await configuredFormatOrAbort(targetDir);
+  const effective = effectiveBasesFormat(configured, priorState.recorded, priorState.inUse);
+  const configWarning = configured.kind === "unreadable"
+    ? `maker.config.json ilegível (${configured.message.replace(/^maker\.config\.json ilegível: /, "")}); formato das bases mantido (${effective.format}) — corrija o arquivo para escolher o formato`
+    : undefined;
   const { config, recovered } = await resolveConfig(targetDir, prior.config, prior.project);
   const agents = enabledAgents(prior);
   const staging = await mkdtemp(join(tmpdir(), "maker-update-plan-"));
   const changes: PlannedChange[] = [];
+  const bases = new Map<string, Buffer>();
   let reports: LegacyAgentReport[] = [];
+  let nextAddons: Map<string, AddonStateRecord> = new Map(priorState.addons);
   const unresolved: string[] = [];
   const defaulted: string[] = [];
   const mediation: MediationCandidate[] = [];
@@ -127,9 +205,11 @@ export async function planUpdate(targetDir: string, opts: { merge?: boolean } = 
     const expected = await applyEngine(staging, ctx, agents);
     const configDependent = recovered ? new Set<string>() : await configDependentFiles(expected, config, agents, prior.installedAt);
     const migration = await planLegacyAddonAgents(targetDir, staging, expected, next,
-      { ctx, migrate: opts.merge !== false, configKnown: recovered, configDependent });
+      { ctx, migrate: opts.merge !== false, configKnown: recovered, configDependent, addons: priorState.addons });
     changes.push(...migration.changes);
     reports = migration.reports;
+    nextAddons = migration.addons;
+    for (const [hash, content] of migration.bases) bases.set(hash, content);
     for (const file of expected.sort((a, b) => a.rel.localeCompare(b.rel))) {
       if (migration.handled.has(file.rel)) continue;
       const upstream = await readFile(join(staging, file.rel));
@@ -138,7 +218,7 @@ export async function planUpdate(targetDir: string, opts: { merge?: boolean } = 
       const recorded = prior.files[file.rel];
       const mediate = async (category: MediationCategory, reason: string, baseHash?: string) => {
         mediation.push({ path: file.rel, source: recorded?.source ?? file.entry.source, engineSource: file.entry.source,
-          category, reason, local: current.content ?? null, base: baseHash ? await readBase(targetDir, baseHash) : null, upstream });
+          category, reason, local: current.content ?? null, base: baseHash ? priorState.readBase(baseHash) : null, upstream });
       };
       const preserve = (reason: string, action: "preserve" | "conflict" = "preserve") =>
         changes.push(status(action, file.rel, file.entry.source, current, reason));
@@ -163,7 +243,7 @@ export async function planUpdate(targetDir: string, opts: { merge?: boolean } = 
           } else {
             // Sem base registrada (add-on aplicado pela 0.2.x), o template 0.2.x empacotado é a base exata.
             const legacy = !recorded.baseHash && recovered ? await legacyBase(ctx, file.rel) : undefined;
-            const base = recorded.baseHash ? await readBase(targetDir, recorded.baseHash) : legacy ? Buffer.from(legacy) : null;
+            const base = recorded.baseHash ? priorState.readBase(recorded.baseHash) : legacy ? Buffer.from(legacy) : null;
             // Sem customização além dos blocos: reinjeta-os no template novo. O diff3 acusaria conflito
             // quando o template muda na mesma região onde o bloco foi inserido (ex.: fim do papel).
             const reinjected = base && sameText(reinjectBlocks(file.rel, base.toString("utf-8"), local), local)
@@ -193,6 +273,13 @@ export async function planUpdate(targetDir: string, opts: { merge?: boolean } = 
       } else if (configDependent.has(file.rel) || configDependent.has(sharedRoleOf(file.rel))) {
         preserve(CONFIG_UNKNOWN);
         unresolved.push(file.rel);
+      } else if (!recorded && (GIT_CONTROL_FILES as readonly string[]).includes(file.rel)) {
+        // Arquivo de controle do git pré-existente e ainda não rastreado, com conteúdo diferente do
+        // upstream — nunca sobrescrito; vai para mediação com base nula (não há versão anterior
+        // conhecida do maker para essa cópia).
+        const reason = "arquivo pré-existente não rastreado pelo maker";
+        preserve(reason);
+        await mediate("local-edit", reason);
       } else if (!recorded || (!recorded.edited && current.hash === (recorded.baseHash ?? recorded.hash)) ||
           (recorded.edited && await matchesRemovedTemplate(file.rel, current.content!, upstream, recovered ? ctx : undefined))) {
         changes.push(await planWrite({ targetDir, path: file.rel, content: upstream, source: file.entry.source, reason: "nova versão upstream", force: true }));
@@ -204,7 +291,7 @@ export async function planUpdate(targetDir: string, opts: { merge?: boolean } = 
         preserve("edição local em manifest legado sem base exata");
         await mediate("local-edit", "edição local sem base exata");
       } else {
-        const base = await readBase(targetDir, recorded.baseHash);
+        const base = priorState.readBase(recorded.baseHash);
         const merged = base ? mergeText(current.content!, base, upstream) : null;
         if (!base) {
           preserve("base histórica ausente; preservado por segurança");
@@ -219,13 +306,13 @@ export async function planUpdate(targetDir: string, opts: { merge?: boolean } = 
       }
       // Só grava a base que o manifest passa a referenciar; senão o próximo update a removeria.
       if (next.files[file.rel]?.baseHash === upstreamHash) {
-        changes.push(await planWrite({ targetDir, path: `.maker/bases/${upstreamHash}`, content: upstream, source: "metadata", reason: `base upstream de ${file.rel}` }));
+        bases.set(upstreamHash, upstream);
       }
     }
     // Agentes parados só por falta de config migram sozinhos quando ela existir: não são mediação.
     const degraded = reports.filter((report) => report.status === "degraded" && !report.reason.startsWith(CONFIG_UNKNOWN))
       .map((report) => report.path);
-    await groupLegacyAgents(targetDir, staging, expected, prior, mediation, degraded, recovered ? ctx : undefined);
+    await groupLegacyAgents(targetDir, staging, expected, prior, mediation, degraded, priorState, recovered ? ctx : undefined);
   } finally {
     await rm(staging, { recursive: true, force: true });
   }
@@ -233,14 +320,27 @@ export async function planUpdate(targetDir: string, opts: { merge?: boolean } = 
   next.agents = agents;
   if (next.config || recovered) next.config = config;
   next.makerVersion = makerVersion();
+  // Só as bases ainda referenciadas pelo manifest final entram no armazenamento; o resto é podado. Uma
+  // base referenciada cujo conteúdo não pôde ser lido (corrompida) fica de fora de `finalBases`, mas
+  // continua em `referencedBases`: é achado de diagnóstico do doctor, a poda nunca a remove do disco.
   const referencedBases = new Set(Object.values(next.files).flatMap((item) => item.baseHash ? [item.baseHash] : []));
-  for (const hash of await listBases(targetDir)) {
-    if (referencedBases.has(hash)) continue;
-    const path = `.maker/bases/${hash}`;
-    const current = await inspectTarget(targetDir, path);
-    changes.push({ path, action: "remove", source: "metadata", reason: "base upstream não referenciada", expectedHash: current.hash, expectedKind: current.kind });
+  const finalBases = new Map<string, Buffer>();
+  for (const hash of referencedBases) {
+    const content = bases.get(hash) ?? priorState.readBase(hash);
+    if (content) finalBases.set(hash, content);
   }
-  changes.push(await planWrite({ targetDir, path: ".maker/manifest.json", content: JSON.stringify(next, null, 2) + "\n", source: "metadata", reason: "publicar manifest atualizado", force: true }));
+  // O update sempre grava o formato efetivo: registrado nunca fica "esquecido" atrás da config.
+  const transition = planFormatTransition(priorState, effective, referencedBases);
+  // Sem transição, o lockfile em pack ainda é regravado (planStateWrite/serializeLockfile só
+  // reproduz o que verificou): entradas que não verificaram somem do arquivo — nunca em silêncio.
+  const invalidEntries = !transition && effective.format === "pack"
+    ? priorState.problems.filter((problem) => problem.origin === "pack" && !problem.recovered)
+    : [];
+  next.basesFormat = effective.format;
+  changes.push(...await planStateWrite(priorState, targetDir, {
+    manifest: next, format: effective.format, bases: finalBases, addons: nextAddons,
+    consolidate: true, prune: true, preserve: referencedBases,
+  }));
   const plan = createPlan(targetDir, changes);
   const reported = new Set(reports.map((report) => report.path));
   for (const change of plan.changes) {
@@ -255,7 +355,7 @@ export async function planUpdate(targetDir: string, opts: { merge?: boolean } = 
           : "revise o conteúdo local, leve-o para o papel compartilhado e restaure o adapter gerado (maker update --export e a skill maker-update ajudam)" });
     }
   }
-  return { plan, reports, mediation, unresolved, defaulted, config, recovered };
+  return { plan, reports, mediation, unresolved, defaulted, config, recovered, transition, configWarning, invalidEntries };
 }
 
 /**
@@ -331,7 +431,9 @@ async function configDependentFiles(expected: AppliedFile[], config: MakerConfig
 
 /**
  * Troca toda folha de texto da config por um sentinela, para que campos novos do schema entrem na
- * detecção sem manutenção. `project` (conhecido pelo manifest) e `agent` (enum) ficam como estão.
+ * detecção sem manutenção. `project` (conhecido pelo manifest), `agent` (enum) e `state` (o enum de
+ * `state.bases` rejeitaria o sentinela, e o formato das bases não afeta o conteúdo renderizado) ficam
+ * como estão.
  */
 export function sentinelConfig(config: MakerConfig): MakerConfig {
   const replace = (value: unknown, path: string): unknown => {
@@ -342,8 +444,8 @@ export function sentinelConfig(config: MakerConfig): MakerConfig {
     }
     return value;
   };
-  const { project, agent, ...rest } = config;
-  return parseConfig({ ...(replace(rest, "") as object), project, agent });
+  const { project, agent, state, ...rest } = config;
+  return parseConfig({ ...(replace(rest, "") as object), project, agent, state });
 }
 
 /**
@@ -360,7 +462,7 @@ function sharedRoleOf(path: string): string {
  * para as customizações do corpo legado irem para o papel e o adapter voltar ao formato gerado.
  */
 async function groupLegacyAgents(targetDir: string, staging: string, expected: AppliedFile[], prior: Manifest,
-  mediation: MediationCandidate[], degraded: string[], ctx?: RenderContext): Promise<void> {
+  mediation: MediationCandidate[], degraded: string[], state: InstallState, ctx?: RenderContext): Promise<void> {
   const engineSources = new Map(expected.map((file) => [file.rel, file.entry.source]));
   const adapters = new Set(degraded);
   for (const candidate of mediation) {
@@ -387,7 +489,7 @@ async function groupLegacyAgents(targetDir: string, staging: string, expected: A
         category: "legacy-agent", group: adapter,
         reason: path === adapter ? "agente legado sem referência ao papel compartilhado" : "papel compartilhado do agente legado",
         local: current.content ?? null,
-        base: path === adapter ? (legacy ? Buffer.from(legacy) : null) : recorded?.baseHash ? await readBase(targetDir, recorded.baseHash) : null,
+        base: path === adapter ? (legacy ? Buffer.from(legacy) : null) : recorded?.baseHash ? state.readBase(recorded.baseHash) : null,
         upstream: await readFile(join(staging, path)) });
     }
   }
@@ -401,26 +503,6 @@ function status(action: "preserve" | "conflict", path: string, source: string, c
   return { path, action, source, reason, expectedHash: current.hash, expectedKind: current.kind };
 }
 
-async function readBase(targetDir: string, hash: string): Promise<Buffer | null> {
-  try {
-    const content = await readFile(join(targetDir, ".maker", "bases", hash));
-    return sha256(content) === hash ? content : null;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw error;
-  }
-}
-
-async function listBases(targetDir: string): Promise<string[]> {
-  try {
-    return (await readdir(join(targetDir, ".maker", "bases")))
-      .filter((name) => /^[a-f0-9]{64}$/.test(name))
-      .sort();
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-    throw error;
-  }
-}
 
 export function mergeText(local: Buffer, base: Buffer, upstream: Buffer): Buffer | null {
   const decoder = new TextDecoder("utf-8", { fatal: true });

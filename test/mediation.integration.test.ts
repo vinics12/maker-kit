@@ -9,7 +9,8 @@ import { runDoctor } from "../src/commands/doctor.js";
 import { parseConfig } from "../src/config/schema.js";
 import { upsertBlock } from "../src/addons/inject.js";
 import { DEFAULT_MEDIATION_DIR, mediationHint } from "../src/commands/mediation.js";
-import { readManifest, sha256, writeManifest } from "../src/render/manifest.js";
+import { sha256 } from "../src/render/manifest.js";
+import { readManifest, writeManifest, putBase } from "./helpers/state.js";
 import { applyAddon } from "../src/addons/apply.js";
 import { loadAddon } from "../src/addons/loader.js";
 
@@ -40,7 +41,7 @@ async function conflicted(target: string): Promise<{ upstream: string; local: st
   const base = upstream.replace(first, "BASE");
   const local = upstream.replace(first, "LOCAL") + "\nRegra local do dono.\n";
   const baseHash = sha256(Buffer.from(base));
-  await writeFile(join(target, ".maker", "bases", baseHash), base);
+  await putBase(target, base);
   await writeFile(join(target, path), local);
   const manifest = (await readManifest(target))!;
   manifest.files[path] = { ...manifest.files[path]!, hash: baseHash, baseHash };
@@ -71,7 +72,7 @@ async function upstreamOf(target: string, path: string): Promise<string> {
 /** Registra `template` como base (template da versão anterior) e grava `content` como o arquivo atual. */
 async function simulatePreviousTemplate(target: string, template: string, content: string): Promise<void> {
   const baseHash = sha256(Buffer.from(template));
-  await writeFile(join(target, ".maker", "bases", baseHash), template);
+  await putBase(target, template);
   await writeFile(join(target, constitution), content);
   const manifest = (await readManifest(target))!;
   manifest.files[constitution] = { ...manifest.files[constitution]!, hash: sha256(Buffer.from(content)), baseHash };
@@ -138,10 +139,10 @@ describe("mediação de update", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const { dir, items } = await exported(target);
     await writeFile(join(dir, "items", items[0]!.id, "resolved"), proposal);
-    const manifest = await readFile(join(target, ".maker/manifest.json"));
+    const manifest = await readManifest(target);
     await expect(runUpdate({ target, applyResolutions: true })).rejects.toThrow("Propostas de mediação rejeitadas");
     expect(await readFile(join(target, "AGENTS.md"), "utf-8")).toBe(local);
-    expect(await readFile(join(target, ".maker/manifest.json"))).toEqual(manifest);
+    expect(await readManifest(target)).toEqual(manifest);
   });
 
   it("rejeita proposta quando o arquivo mudou depois da exportação", async () => {
@@ -253,7 +254,7 @@ describe("mediação de update", () => {
     const previous = lines.slice(0, -1).join("\n") + "\n";
     const local = upsertBlock(previous, "saas", block);
     const baseHash = sha256(Buffer.from(previous));
-    await writeFile(join(target, ".maker", "bases", baseHash), previous);
+    await putBase(target, previous);
     await writeFile(join(target, role), local);
     const manifest = (await readManifest(target))!;
     manifest.files[role] = { ...manifest.files[role]!, hash: sha256(Buffer.from(local)), baseHash };

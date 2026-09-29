@@ -1,7 +1,6 @@
 import { resolve } from "node:path";
 import pc from "picocolors";
 import { removeAddon } from "../addons/apply.js";
-import { isAddonApplied } from "../addons/state.js";
 
 export interface RemoveOptions {
   target?: string;
@@ -10,9 +9,8 @@ export interface RemoveOptions {
 
 export async function runRemove(id: string, opts: RemoveOptions): Promise<void> {
   const targetDir = resolve(opts.target ?? process.cwd());
-  if (!isAddonApplied(targetDir, id)) {
-    throw new Error(`Add-on "${id}" não está aplicado em ${targetDir}.`);
-  }
+  // Sem pré-checagem: `removeAddon` abre o estado (StateError de coexistência/ilegibilidade propaga
+  // antes de qualquer resposta "não está aplicado").
   const res = await removeAddon(targetDir, id, { dryRun: opts.dryRun });
   if (opts.dryRun) return;
 

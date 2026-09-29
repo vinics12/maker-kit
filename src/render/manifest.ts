@@ -1,11 +1,10 @@
 import { createHash } from "node:crypto";
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { join, relative } from "node:path";
 import type { AgentProvider, MakerConfig } from "../config/schema.js";
 
-/** Nome do arquivo de manifest gravado na raiz do install. */
-export const MANIFEST_FILE = ".maker/manifest.json";
+export type BasesFormat = "files" | "pack";
 
 export interface ManifestEntry {
   /** sha256 do conteúdo no momento do install. */
@@ -30,6 +29,8 @@ export interface Manifest {
   /** Integrações instaladas. Manifests v1 sem o campo equivalem a ["claude"]. */
   agents?: AgentProvider[];
   installedAt: string;
+  /** Formato registrado do armazenamento de bases. Só init/update gravam/alteram; demais preservam como encontraram. */
+  basesFormat?: BasesFormat;
   files: Record<string, ManifestEntry>;
 }
 
@@ -39,23 +40,6 @@ export function enabledAgents(manifest: Manifest): AgentProvider[] {
 
 export function sha256(content: string | Buffer): string {
   return createHash("sha256").update(content).digest("hex");
-}
-
-export async function writeManifest(
-  targetDir: string,
-  manifest: Manifest,
-): Promise<void> {
-  const path = join(targetDir, MANIFEST_FILE);
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, JSON.stringify(manifest, null, 2) + "\n", "utf-8");
-}
-
-export async function readManifest(
-  targetDir: string,
-): Promise<Manifest | null> {
-  const path = join(targetDir, MANIFEST_FILE);
-  if (!existsSync(path)) return null;
-  return JSON.parse(await readFile(path, "utf-8")) as Manifest;
 }
 
 export interface DoctorResult {

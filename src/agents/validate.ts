@@ -5,7 +5,8 @@ import fg from "fast-glob";
 import { parse as parseToml } from "smol-toml";
 import { z } from "zod";
 import type { AgentProvider } from "../config/schema.js";
-import { readManifest, type Manifest } from "../render/manifest.js";
+import type { Manifest } from "../render/manifest.js";
+import { readManifest } from "../state/store.js";
 import { sharedRoleReference } from "./reference.js";
 
 export interface AgentValidation {
@@ -42,7 +43,7 @@ export async function validateAgentIntegration(
     manifest = await readManifest(targetDir);
   } catch (error) {
     const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
-    issues.push(`.maker/manifest.json ilegível (${message}); adapters ausentes não puderam ser verificados`);
+    issues.push(`estado do maker ilegível (${message}); adapters ausentes não puderam ser verificados`);
   }
   const adapterRoot = relativeRoot(provider, "agents");
   for (const path of Object.keys(manifest?.files ?? {}).sort()) {
@@ -58,7 +59,9 @@ export async function validateAgentIntegration(
 
   for (const rel of skillFiles) {
     const path = join(skillRoot, rel);
-    const content = await readFile(path, "utf-8");
+    // Normaliza antes de validar: git com core.autocrlf=true converte .claude/** para CRLF, e as
+    // âncoras `^`/`$` do frontmatter exigem `\n` puro.
+    const content = (await readFile(path, "utf-8")).replace(/\r\n/g, "\n");
     if (!/^---\n[\s\S]*?^name:\s*.+$[\s\S]*?^description:\s*.+$[\s\S]*?^---$/m.test(content)) {
       issues.push(`${relativeRoot(provider, "skills")}/${rel}: frontmatter name/description inválido`);
     }
@@ -69,7 +72,7 @@ export async function validateAgentIntegration(
 
   for (const rel of agentFiles) {
     const path = join(agentRoot, rel);
-    const content = await readFile(path, "utf-8");
+    const content = (await readFile(path, "utf-8")).replace(/\r\n/g, "\n");
     if (provider === "codex") {
       try {
         codexAgentSchema.parse(parseToml(content));

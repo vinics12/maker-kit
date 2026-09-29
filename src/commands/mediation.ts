@@ -4,13 +4,15 @@ import { join, resolve } from "node:path";
 import pc from "picocolors";
 import { z } from "zod";
 import { diffComm } from "node-diff3";
-import { addonStateSchema, type AddonState } from "../addons/state.js";
+import type { AddonStateRecord } from "../state/addon-state.js";
 import { sharedRoleReference } from "../agents/reference.js";
 import { addonBlocks } from "../addons/inject.js";
 import { moveInjectedBlock } from "../agents/migrate.js";
 import { createPlan, formatPlan, inspectTarget, planWrite, type PlannedChange } from "../changes/plan.js";
-import { applyChangePlan, assertNoPendingTransactions } from "../changes/transaction.js";
-import { readManifest, sha256 } from "../render/manifest.js";
+import { applyChangePlan } from "../changes/transaction.js";
+import { sha256 } from "../render/manifest.js";
+import { planStateWrite, type InstallState } from "../state/store.js";
+import { GIT_CONTROL_FILES } from "../state/paths.js";
 import { makerVersion } from "../util/version.js";
 
 /**
@@ -212,9 +214,9 @@ export async function applyResolutions(
   dirOption: string | true,
   currentConfig: unknown,
   candidates: MediationCandidate[],
+  state: InstallState,
   opts: ApplyResolutionsOptions,
 ): Promise<void> {
-  if (opts.dryRun) await assertNoPendingTransactions(targetDir);
   const byPath = new Map(candidates.map((candidate) => [candidate.path, candidate]));
   const dir = resolve(targetDir, dirOption === true ? DEFAULT_MEDIATION_DIR : dirOption);
   const index = indexSchema.parse(JSON.parse(await readFile(join(dir, INDEX), "utf-8")));
@@ -226,8 +228,7 @@ export async function applyResolutions(
   if (index.configHash !== configHash(currentConfig)) {
     throw new Error("A config do projeto mudou desde a exportação; exporte de novo (maker update --export).");
   }
-  const manifest = await readManifest(targetDir);
-  if (!manifest) throw new Error(`Nenhum install do maker em ${targetDir}.`);
+  const manifest = state.manifest;
 
   const errors: string[] = [];
   const resolved = new Map<string, Buffer>();
@@ -326,7 +327,8 @@ export async function applyResolutions(
   const changes: PlannedChange[] = [];
   const next = structuredClone(manifest);
   next.files = { ...manifest.files };
-  const stateUpdates = new Map<string, { state: AddonState; hash: string }>();
+  const newBases = new Map<string, Buffer>();
+  const stateUpdates = new Map<string, AddonStateRecord>();
   for (const item of selected) {
     const content = resolved.get(item.id)!;
     const candidate = matched.get(item.id)!;
@@ -334,8 +336,7 @@ export async function applyResolutions(
     changes.push({ ...await planWrite({ targetDir, path: item.path, content, source,
       reason: `proposta mediada (${item.category})`, force: true }),
       expectedHash: item.localHash, expectedKind: item.localHash ? "file" : "absent" });
-    changes.push(await planWrite({ targetDir, path: `.maker/bases/${item.upstreamHash}`, content: candidate.upstream,
-      source: "metadata", reason: `base upstream de ${item.path}` }));
+    newBases.set(item.upstreamHash, candidate.upstream);
     const { edited: _edited, ...recorded } = manifest.files[item.path] ?? { hash: "", source };
     next.files[item.path] = { ...recorded, source, hash: sha256(content), baseHash: item.upstreamHash };
   }
@@ -347,27 +348,22 @@ export async function applyResolutions(
     for (const id of moved) {
       let entry = stateUpdates.get(id);
       if (!entry) {
-        const metadata = await inspectTarget(targetDir, `.maker/addons/${id}.json`);
-        if (metadata.kind !== "file") continue;
-        const raw: unknown = JSON.parse(metadata.content!.toString("utf-8"));
-        addonStateSchema.parse(raw);
-        entry = { state: raw as AddonState, hash: metadata.hash! };
+        const record = state.addons.get(id);
+        if (!record) continue;
+        entry = structuredClone(record);
         stateUpdates.set(id, entry);
       }
       const sharedPath = `.maker/workflow/agents/${role}.md`;
-      moveInjectedBlock(entry.state, item.path, sharedPath);
-      entry.state.injectedTargets = entry.state.injectedTargets.map((path) => path === item.path ? sharedPath : path)
+      moveInjectedBlock(entry, item.path, sharedPath);
+      entry.injectedTargets = entry.injectedTargets.map((path) => path === item.path ? sharedPath : path)
         .filter((path, position, paths) => paths.indexOf(path) === position);
     }
   }
-  for (const [id, entry] of stateUpdates) {
-    changes.push({ ...await planWrite({ targetDir, path: `.maker/addons/${id}.json`,
-      content: JSON.stringify(entry.state, null, 2) + "\n", source: "metadata",
-      reason: "alvos de injeção após mediação do agente legado", force: true }),
-      expectedHash: entry.hash, expectedKind: "file" });
-  }
-  changes.push(await planWrite({ targetDir, path: ".maker/manifest.json", content: JSON.stringify(next, null, 2) + "\n",
-    source: "metadata", reason: "registrar propostas mediadas", force: true }));
+  const nextAddons = new Map(state.addons);
+  for (const [id, entry] of stateUpdates) nextAddons.set(id, entry);
+  changes.push(...await planStateWrite(state, targetDir, {
+    manifest: next, format: state.inUse, bases: newBases, addons: nextAddons, prune: false,
+  }));
   const plan = createPlan(targetDir, changes);
   if (opts.dryRun) {
     for (const item of selected) printDiff(item.path, matched.get(item.id)!.local?.toString("utf-8") ?? "", resolved.get(item.id)!.toString("utf-8"));
@@ -393,6 +389,9 @@ export async function applyResolutions(
 function isMediablePath(item: MediationItem, files: Record<string, unknown>): boolean {
   const { path } = item;
   if (path.startsWith("/") || path.split(/[\\/]/).includes("..")) return false;
+  // Arquivos de controle do git dentro de .maker: liberados mesmo sem entrada no manifest (arquivo
+  // pré-existente ainda não rastreado pelo maker).
+  if ((GIT_CONTROL_FILES as readonly string[]).includes(path)) return true;
   if (path.startsWith(".maker/") && !path.startsWith(".maker/workflow/")) return false;
   if (Object.hasOwn(files, path)) return true;
   return item.category === "legacy-agent" && /^\.maker\/workflow\/agents\/[a-z0-9-]+\.md$/.test(path);

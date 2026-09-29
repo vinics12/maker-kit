@@ -1,0 +1,14 @@
+{
+  "id": "alpha",
+  "name": "Add-on sintético Alpha",
+  "description": "Add-on sintético de teste (AC-45): fragmento de agente + arquivo criado, alvos disjuntos de zeta e saas.",
+  "version": "0.1.0",
+  "knobs": [],
+  "principles": [],
+  "agentFragments": [
+    { "agent": "dev", "file": "agents/dev.fragment.md.hbs" }
+  ],
+  "files": [
+    { "from": "memory/alpha-reference.md.hbs", "to": ".specify/memory/alpha-reference.md" }
+  ]
+}

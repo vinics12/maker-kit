@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { listAddonCatalog } from "../src/addons/loader.js";
 import { loadAddon } from "../src/addons/loader.js";
 import { applyAddon } from "../src/addons/apply.js";
-import { addonStatePath, readAddonState } from "../src/addons/state.js";
 import { runInit } from "../src/commands/init.js";
 import { runList } from "../src/commands/list.js";
+import { initInstall, readAddonStates, writeAddonState, writeAddonStateFile } from "./helpers/state.js";
 
 const FIXTURE = join(__dirname, "..", "fixtures", "example.config.json");
 const ANSI_ESCAPE = /\x1B(?:\[[0-?]*[ -/]*[@-~]|[@-_])/g;
@@ -53,11 +53,9 @@ describe("maker list", () => {
     expect(output).toContain("próximo: maker doctor");
   });
 
-  it("continua a listagem quando o state é inválido", async () => {
-    const target = await mkdtemp(join(tmpdir(), "maker-list-degraded-"));
-    await runInit({ target, config: FIXTURE, yes: true });
-    await mkdir(join(target, ".maker", "addons"), { recursive: true });
-    await writeFile(addonStatePath(target, "saas"), "{ json inválido\n", "utf-8");
+  it("continua a listagem quando o state é inválido (files)", async () => {
+    const target = await initInstall("maker-list-degraded-", { format: "files" });
+    await writeAddonStateFile(target, "saas", "{ json inválido\n");
 
     const output = await outputOf(() => runList({ target }));
     expect(output).toContain("saas · Base SaaS · v0.1.0 · degraded");
@@ -73,21 +71,16 @@ describe("maker list", () => {
       brandVarPrefix: "--tema-",
       roles: "owner,staff",
     });
-    const state = (await readAddonState(target, "saas"))!;
-    await writeFile(
-      addonStatePath(target, "saas"),
-      JSON.stringify({ ...state, version: "9.9.9" }),
-      "utf-8",
-    );
+    const state = (await readAddonStates(target)).get("saas")!;
+    await writeAddonState(target, { ...state, version: "9.9.9" });
 
     const output = await outputOf(() => runList({ target }));
     expect(output).toContain("saas · Base SaaS · v0.1.0 · degraded");
     expect(output).toContain("state v9.9.9 difere do catálogo v0.1.0");
   });
 
-  it("continua a listagem quando o diretório de states tem tipo inválido", async () => {
-    const target = await mkdtemp(join(tmpdir(), "maker-list-state-dir-"));
-    await runInit({ target, config: FIXTURE, yes: true });
+  it("continua a listagem quando o diretório de states tem tipo inválido (files)", async () => {
+    const target = await initInstall("maker-list-state-dir-", { format: "files" });
     await writeFile(join(target, ".maker", "addons"), "não é diretório\n", "utf-8");
 
     const output = await outputOf(() => runList({ target }));
@@ -96,9 +89,8 @@ describe("maker list", () => {
     expect(output).toContain("próximo: maker doctor");
   });
 
-  it("classifica symlink quebrado no diretório de states como degradado", async () => {
-    const target = await mkdtemp(join(tmpdir(), "maker-list-state-link-"));
-    await runInit({ target, config: FIXTURE, yes: true });
+  it("classifica symlink quebrado no diretório de states como degradado (files)", async () => {
+    const target = await initInstall("maker-list-state-link-", { format: "files" });
     await symlink(join(target, "diretório-ausente"), join(target, ".maker", "addons"));
 
     const output = await outputOf(() => runList({ target }));

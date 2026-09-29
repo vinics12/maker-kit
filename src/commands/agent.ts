@@ -6,7 +6,10 @@ import { tmpdir } from "node:os";
 import pc from "picocolors";
 import { agentProviderSchema, parseConfig, type AgentProvider, type MakerConfig } from "../config/schema.js";
 import { buildContext } from "../render/engine.js";
-import { enabledAgents, readManifest, writeManifest } from "../render/manifest.js";
+import { enabledAgents } from "../render/manifest.js";
+import { openState, planStateWrite, readManifest } from "../state/store.js";
+import { createPlan, planWrite, type PlannedChange } from "../changes/plan.js";
+import { applyChangePlan } from "../changes/transaction.js";
 import { applyAgentProvider } from "../util/engine-scaffold.js";
 import { validateAgentIntegration } from "../agents/validate.js";
 
@@ -18,8 +21,9 @@ export interface AgentAddOptions {
 export async function runAgentAdd(providerInput: string, opts: AgentAddOptions): Promise<void> {
   const provider = agentProviderSchema.parse(providerInput);
   const targetDir = resolve(opts.target ?? process.cwd());
-  const manifest = await readManifest(targetDir);
-  if (!manifest) throw new Error(`Nenhum install do maker em ${targetDir} — rode 'maker init' antes.`);
+  const state = await openState(targetDir, { mode: "mutate" });
+  if (!state) throw new Error(`Nenhum install do maker em ${targetDir} — rode 'maker init' antes.`);
+  const manifest = state.manifest;
 
   const agents = enabledAgents(manifest);
   if (agents.includes(provider)) {
@@ -28,18 +32,40 @@ export async function runAgentAdd(providerInput: string, opts: AgentAddOptions):
   }
 
   const config = await resolveRenderConfig(targetDir, manifest.config, opts.config);
-  await assertNoUnmanagedProviderFiles(
-    targetDir,
-    provider,
-    manifest.files,
-    buildContext(config, manifest.installedAt),
-  );
-  const applied = await applyAgentProvider(targetDir, buildContext(config, manifest.installedAt), provider);
-  for (const file of applied) manifest.files[file.rel] = file.entry;
+  const ctx = buildContext(config, manifest.installedAt);
+  await assertNoUnmanagedProviderFiles(targetDir, provider, manifest.files, ctx);
+
+  // Renderiza em staging para planejar contra o alvo real numa única transação: nada é escrito
+  // fora do plano, e um crash a meio caminho recupera para o estado anterior.
+  const includeShared = !existsSync(join(targetDir, ".maker/workflow/agents"));
+  const staging = await mkdtemp(join(tmpdir(), "maker-agent-add-"));
+  const changes: PlannedChange[] = [];
+  const bases = new Map<string, Buffer>();
+  let applied: Awaited<ReturnType<typeof applyAgentProvider>>;
+  try {
+    applied = await applyAgentProvider(staging, ctx, provider, { includeShared });
+    for (const file of applied) {
+      const content = await readFile(join(staging, file.rel));
+      bases.set(file.entry.hash, content);
+      changes.push(await planWrite({
+        targetDir,
+        path: file.rel,
+        content,
+        source: file.entry.source,
+        reason: "conteúdo renderizado pelo maker",
+        force: true,
+      }));
+    }
+  } finally {
+    await rm(staging, { recursive: true, force: true });
+  }
+
+  for (const file of applied) manifest.files[file.rel] = { ...file.entry, baseHash: file.entry.hash };
   manifest.schemaVersion = 3;
   manifest.config = config;
   manifest.agents = [...agents, provider];
-  await writeManifest(targetDir, manifest);
+  changes.push(...await planStateWrite(state, targetDir, { manifest, format: state.inUse, bases, prune: false }));
+  await applyChangePlan(createPlan(targetDir, changes));
 
   const sigil = provider === "codex" ? "$" : "/";
   console.log(pc.green(`✓ Integração ${provider} adicionada (${applied.length} arquivos).`));

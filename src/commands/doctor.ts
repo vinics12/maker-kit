@@ -1,8 +1,11 @@
-import { existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 import pc from "picocolors";
-import { readManifest, verifyManifest } from "../render/manifest.js";
+import { verifyManifest } from "../render/manifest.js";
 import { enabledAgents } from "../render/manifest.js";
+import { inspectState, openState } from "../state/store.js";
+import { ADDONS_DIR, LOCKFILE, MANIFEST_FILE } from "../state/paths.js";
+import { configuredBasesFormat } from "../state/format.js";
+import { diagnoseState, type DoctorFinding } from "../state/diagnose.js";
 import { validateAgentIntegration } from "../agents/validate.js";
 import { inspectAddons } from "../addons/doctor.js";
 import { planUpdate, skillInstalled } from "./update.js";
@@ -12,19 +15,48 @@ export interface DoctorOptions {
   target?: string;
 }
 
+function printStateFindings(findings: readonly DoctorFinding[]): void {
+  for (const finding of findings) {
+    const label = finding.severity === "fail" ? pc.red("falha")
+      : finding.severity === "warn" ? pc.yellow("aviso")
+        : pc.dim("info ");
+    console.log(`  ${label}  ${finding.message}`);
+    console.log(`         ${pc.dim("ação:")} ${finding.action}`);
+  }
+}
+
 /** Verifica integridade de um install contra seu manifest. Sai com código 1 se degradado. */
 export async function runDoctor(opts: DoctorOptions): Promise<void> {
   const targetDir = resolve(opts.target ?? process.cwd());
-  const manifest = await readManifest(targetDir);
-  if (!manifest) {
-    throw new Error(`Nenhum install do maker encontrado em ${targetDir} (.maker/manifest.json ausente).`);
+  const snapshot = await inspectState(targetDir);
+  const configured = await configuredBasesFormat(targetDir, { inspect: true });
+  const findings = diagnoseState(snapshot, configured);
+
+  // Transação pendente ou estado ilegível: nada mais a verificar (não há manifest confiável).
+  if (snapshot.pendingTransactions || snapshot.error) {
+    console.log(pc.bold("Estado (.maker):"));
+    printStateFindings(findings);
+    process.exitCode = 1;
+    return;
   }
+
+  if (!snapshot.manifest) {
+    const orphanSuffix = snapshot.orphanAddonStateFiles.length
+      ? `; ${ADDONS_DIR}/${snapshot.orphanAddonStateFiles.join(",")}.json órfão(s) sem install`
+      : "";
+    throw new Error(`Nenhum install do maker encontrado em ${targetDir} (${MANIFEST_FILE} e ${LOCKFILE} ausentes)${orphanSuffix}.`);
+  }
+
+  // Sem error/pendingTransactions, a releitura via openState não lança e não recupera nada (mode "read").
+  const state = (await openState(targetDir, { mode: "read" }))!;
+  const manifest = state.manifest;
+  const hasFailFinding = findings.some((finding) => finding.severity === "fail");
 
   const result = await verifyManifest(targetDir, manifest);
   const integrations = await Promise.all(
     enabledAgents(manifest).map((agent) => validateAgentIntegration(targetDir, agent)),
   );
-  const addons = await inspectAddons(targetDir, manifest);
+  const addons = await inspectAddons(targetDir, state);
   console.log(pc.dim(`Projeto "${manifest.project.name}" · maker ${manifest.makerVersion}`));
   console.log(pc.dim(`${result.checked} arquivos verificados`));
   for (const integration of integrations) {
@@ -33,6 +65,13 @@ export async function runDoctor(opts: DoctorOptions): Promise<void> {
       `  ${integration.provider}: ${status} · ${integration.skills} skills · ${integration.agents} agentes`,
     );
     for (const issue of integration.issues) console.log(pc.red(`    ${issue}`));
+  }
+
+  if (findings.length) {
+    console.log(pc.bold("\nEstado (.maker):"));
+    printStateFindings(findings);
+  } else {
+    console.log(pc.dim(`\nEstado (.maker): íntegro (${state.inUse})`));
   }
 
   if (addons.addons.length) {
@@ -48,7 +87,9 @@ export async function runDoctor(opts: DoctorOptions): Promise<void> {
   }
 
   // Mediação pendente é informativa (não degrada o install); falhar ao planejar o update, não.
-  const pending = await pendingMediation(targetDir);
+  // Reaproveita o `state` já lido em modo "read": abrir de novo em "mutate" recuperaria uma transação
+  // pendente e criaria .maker/ à toa — o doctor só lê, nunca escreve.
+  const pending = await pendingMediation(targetDir, state);
   if ("error" in pending) {
     console.log(pc.red(`  não foi possível planejar o update: ${pending.error}`));
   } else if (pending.count) {
@@ -58,13 +99,13 @@ export async function runDoctor(opts: DoctorOptions): Promise<void> {
   // Arquivo editado com base upstream registrada é customização: o update a preserva e mescla.
   const customized = result.modified.filter((path) => {
     const baseHash = manifest.files[path]?.baseHash;
-    return baseHash && existsSync(join(targetDir, ".maker", "bases", baseHash));
+    return baseHash && state.hasBase(baseHash);
   });
   const modified = result.modified.filter((path) => !customized.includes(path));
   for (const path of customized) console.log(pc.dim(`  personalizado: ${path} (preservado e mesclado pelo update)`));
 
   if (!result.missing.length && !modified.length && integrations.every((integration) => integration.issues.length === 0) &&
-      addons.ok && !("error" in pending)) {
+      addons.ok && !("error" in pending) && !hasFailFinding) {
     console.log(pc.green("✓ Install íntegro."));
     return;
   }
@@ -77,10 +118,10 @@ export async function runDoctor(opts: DoctorOptions): Promise<void> {
   process.exitCode = 1;
 }
 
-async function pendingMediation(targetDir: string): Promise<
+async function pendingMediation(targetDir: string, installState: Awaited<ReturnType<typeof openState>>): Promise<
   { count: number; state: Parameters<typeof mediationHint>[1] } | { error: string }> {
   try {
-    const planning = await planUpdate(targetDir);
+    const planning = await planUpdate(targetDir, { state: installState });
     return {
       count: planning.mediation.length,
       state: {
