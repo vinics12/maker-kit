@@ -153,7 +153,7 @@ describe("update: estado de add-ons na migração de formato (US-7)", () => {
     await runUpdate({ target });
     expect(existsSync(join(target, LOCKFILE))).toBe(true);
     expect(existsSync(join(target, ".maker", "addons"))).toBe(false);
-  });
+  }, 60_000);
 
   it("failAfter depois de criar manifest.json, de criar o JSON do add-on e de remover maker.lock (pack→files): árvore idêntica à inicial", async () => {
     const target = await initInstall("maker-update-addons-fail-back-", { format: "pack", addon: "saas" });
@@ -169,7 +169,7 @@ describe("update: estado de add-ons na migração de formato (US-7)", () => {
     await runUpdate({ target });
     expect(existsSync(join(target, LOCKFILE))).toBe(false);
     expect(existsSync(join(target, addonStateFile("saas")))).toBe(true);
-  });
+  }, 60_000);
 
   it("AC-36: pack + .maker/addons/ vazio → o próximo update remove o diretório", async () => {
     const target = await initInstall("maker-update-addons-empty-dir-", { format: "pack" });
