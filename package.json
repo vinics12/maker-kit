@@ -54,7 +54,7 @@
   },
   "dependencies": {
     "@clack/prompts": "^0.11.0",
-    "commander": "^13.1.0",
+    "commander": "^15.1.0",
     "fast-glob": "^3.3.2",
     "handlebars": "^4.7.8",
     "node-diff3": "3.2.1",
